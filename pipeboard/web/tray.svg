@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Panel icon: just the wire and its two sockets, bold enough for 16-24 px. -->
+  <defs>
+    <linearGradient id="w" x1="12" y1="0" x2="52" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e0a050"/><stop offset="1" stop-color="#4fc1b0"/>
+    </linearGradient>
+  </defs>
+  <path d="M13 20 C38 20 26 44 51 44" fill="none" stroke="url(#w)" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="13" cy="20" r="9" fill="#e0a050"/>
+  <circle cx="51" cy="44" r="9" fill="#4fc1b0"/>
+  <circle cx="13" cy="20" r="3.5" fill="#262626"/>
+  <circle cx="51" cy="44" r="3.5" fill="#262626"/>
+</svg>

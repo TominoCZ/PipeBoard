@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PipeBoard</title>
+<link rel="stylesheet" href="board.css">
+<link rel="icon" href="icon.svg">
+</head>
+<body>
+<main id="board" aria-label="Audio routing board">
+  <div id="grid"></div>
+  <div id="world">
+    <svg id="wires" aria-hidden="true"><defs id="grads"></defs><g id="wire-layer"></g><g id="portal-layer"></g></svg>
+    <div id="cards"></div>
+  </div>
+  <p id="empty" hidden>No audio devices yet.<br><small>Is PipeWire running?</small></p>
+</main>
+<header id="bar">
+  <span class="brand">PipeBoard</span>
+  <span id="status" class="status" title="Connection">connecting…</span>
+  <span id="clock" class="clock" title="The rate and buffer every device in the graph runs at"></span>
+  <button id="profile" type="button" class="profile" hidden title="Profiles: save, load, load at launch">
+    <span id="profile-name">Default</span><small id="profile-note"></small>
+  </button>
+  <button id="add" type="button" title="Add to the board (or right-click the board)">+ Add</button>
+  <button id="live" type="button" class="toggle" aria-pressed="true"
+          title="Animate: each wire shows the sound it carries (only while this window is visible)">
+    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 7h2l1.5-4 2 8 2-6 1.2 2h2.3"/></svg>Animate
+  </button>
+  <button id="fit" type="button" title="Show everything (F)">Fit</button>
+  <!-- Tidy and its Portals switch, one control (owner: visibly linked) -->
+  <span class="split" role="group" aria-label="Tidy">
+    <button id="tidy" type="button" title="Arrange the cards left to right by signal flow">Tidy</button>
+    <label class="split-check" title="Portals: a long board folds into rows, the wires between them hidden behind lettered portals (hover to see)">
+      <input id="tidy-portals" type="checkbox" checked>Portals
+    </label>
+  </span>
+</header>
+<button id="problems-btn" type="button" class="problems-btn" aria-expanded="false"
+        aria-controls="problems" title="Problems in the graph">
+  <span class="sev-dot"></span><span id="problems-count">All good</span>
+</button>
+<section id="problems" class="panel" hidden aria-label="Problems">
+  <h2>Problems</h2>
+  <ol id="problem-list"></ol>
+</section>
+<aside id="changes" class="changes" hidden aria-live="polite">
+  <strong id="changes-title"></strong>
+  <ul id="change-list"></ul>
+  <div class="actions">
+    <button id="revert-changes" type="button">Revert</button>
+    <button id="save-changes" type="button" class="primary">Save</button>
+  </div>
+</aside>
+<div id="unlink" class="chip" hidden>
+  <button id="chip-insert" type="button" title="Put a node in the middle of this wire">＋ Insert</button>
+  <button id="chip-disconnect" type="button" title="Disconnect (Delete)">✕ Disconnect</button>
+</div>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<div id="drag-side" class="drag-side" aria-hidden="true" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
+<pre id="audit" hidden></pre>
+<script src="field.js"></script>
+<script src="eq.js"></script>
+<script src="dynamics.js"></script>
+<script src="board.js"></script>
+</body>
+</html>

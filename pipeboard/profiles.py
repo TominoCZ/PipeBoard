@@ -1,0 +1,243 @@
+"""Profiles: the whole board saved, and how two boards, or a board and the system, differ (PLAN §7).
+
+A profile is {"version", "cards": {key: {x, y, nick, names, hidden, seen}}, "wires": [...], "view"}.
+`seen` is the card's last known shape, so a device that is gone can still be drawn and re-wired.
+The board the user works on is itself a profile (workspace.json), kept in step with the system
+by snapshot(); a named profile is a saved copy of it.
+"""
+
+from __future__ import annotations
+
+import copy
+import re
+
+from pipeboard import dynamics, graph
+
+DEFAULT = "Default"
+# What the user sets on a card; "parked": the wires they made, set aside while it is off the board.
+BOARD = ("x", "y", "nick", "names", "hidden", "parked")
+NAME = re.compile(r"^[\w][\w \-().']{0,39}$")  # also a file name: no slashes, no dots first
+
+
+def valid_name(name: str) -> bool:
+    return bool(NAME.match(name or "")) and not name.endswith(" ")
+
+
+def _shape(card: dict) -> dict:
+    side = lambda socks: [{"id": s["id"], "label": s["label"], "n": len(s["ports"])} for s in socks]  # noqa: E731
+    return {"title": card["title"], "kind": card["kind"], "role": card["role"],
+            "inputs": side(card["inputs"]), "outputs": side(card["outputs"])}
+
+
+def _wire(w: dict) -> dict:
+    return {"from": list(w["from"]), "to": list(w["to"]), "pairs": sorted(map(list, w["pairs"]))}
+
+
+def snapshot(model: dict, board: dict) -> dict:
+    """The board as it is now: live cards and wires, plus what it knew about devices now gone."""
+    live = {c["key"] for c in model["cards"]}
+    old = {k: c for k, c in board.get("cards", {}).items() if k}  # a nameless key was a bug
+    cards = {k: {**{f: v for f, v in c.items() if f in BOARD}} for k, c in old.items()}
+    for c in model["cards"]:
+        cards.setdefault(c["key"], {})["seen"] = _shape(c)
+    for k in set(old) - live:
+        if "seen" in old[k]:
+            cards[k]["seen"] = old[k]["seen"]
+    gone = [w for w in board.get("wires", [])
+            if (w["from"][0] not in live or w["to"][0] not in live) and w["from"][0] and w["to"][0]]
+    wires = [_wire(w) for w in model["wires"]] + copy.deepcopy(gone)
+    ids = {f"{w['from'][0]}:{w['from'][1]}>{w['to'][0]}:{w['to'][1]}" for w in wires}
+    return {"version": 1, "cards": cards, "wires": wires, "view": board.get("view"),
+            "devices": copy.deepcopy(board.get("devices", {})),
+            "made": [i for i in board.get("made", []) if i in ids],  # wires the user made here
+            "cut": [i for i in board.get("cut", []) if i not in ids],  # and unplugged here
+            # wires drawn as portals (board-only: the sound goes straight from A to B)
+            "portals": {i: how for i, how in board.get("portals", {}).items() if i in ids},
+            "tidy_portals": board.get("tidy_portals", True)}
+
+
+def missing(board: dict, model: dict) -> list[dict]:
+    """Devices the board names that are not on the system.
+
+    Not missing: anything on the system (even with nothing to show), apps (they come and go), and
+    cards the user removed from the board.
+    """
+    live = set(model.get("present") or (c["key"] for c in model["cards"]))
+    return [{"key": k, **c["seen"]} for k, c in board.get("cards", {}).items()
+            if k not in live and "seen" in c and c["seen"]["kind"] != "app" and not c.get("hidden")]
+
+
+def _name(board: dict, key: str) -> str:
+    card = board.get("cards", {}).get(key, {})
+    return card.get("nick") or card.get("seen", {}).get("title") or key
+
+
+def _label(board: dict, end: list, side: str) -> str:
+    socks = board.get("cards", {}).get(end[0], {}).get("seen", {}).get(side, [])
+    found = next((s["label"] for s in socks if s["id"] == end[1]), "")
+    return f" {found}" if len(socks) > 1 and found else ""
+
+
+def describe(board: dict, w: dict) -> str:
+    """'Studio Interface OUT 2 → Mic Mix' in the names the user sees."""
+    return (f"{_name(board, w['from'][0])}{_label(board, w['from'], 'outputs')} → "
+            f"{_name(board, w['to'][0])}{_label(board, w['to'], 'inputs')}")
+
+
+def _ports(model: dict, end: list, side: str) -> list[int] | None:
+    card = next((c for c in model["cards"] if c["key"] == end[0]), None)
+    sock = next((s for s in card[side] if s["id"] == end[1]), None) if card else None
+    return sock["ports"] if sock else None
+
+
+def plan(board: dict, model: dict) -> dict:
+    """What making the system match the board takes: links to make and to remove.
+
+    Only links between two cards the board knows are removed; anything new is left alone.
+    """
+    want, make = set(), []
+    for w in board.get("wires", []):
+        outs, ins = _ports(model, w["from"], "outputs"), _ports(model, w["to"], "inputs")
+        if not outs or not ins:
+            continue  # an end is missing: nothing to do until it comes back
+        for i, j in w["pairs"]:
+            if i < len(outs) and j < len(ins) and (outs[i], ins[j]) not in want:
+                want.add((outs[i], ins[j]))
+                make.append({"out": outs[i], "in": ins[j], "text": describe(board, w)})
+    known, remove, live = set(board.get("cards", {})), [], set()
+    for w in model["wires"]:
+        outs, ins = _ports(model, w["from"], "outputs"), _ports(model, w["to"], "inputs")
+        for link, (i, j) in zip(w["links"], w["pairs"], strict=True):
+            live.add((outs[i], ins[j]))
+            if (outs[i], ins[j]) not in want and w["from"][0] in known and w["to"][0] in known:
+                remove.append({"link": link, "text": describe(board, w)})
+    make = [m for m in make if (m["out"], m["in"]) not in live]
+    return {"make": make, "remove": remove,
+            "missing": [m["title"] for m in missing(board, model)]}
+
+
+def texts(items: list[dict]) -> list[str]:
+    return list(dict.fromkeys(i["text"] for i in items))
+
+
+def routed(board: dict, w: dict) -> bool:
+    """A wire to an app the user did not make here: the system's (WirePlumber links an app to the
+    default device as it appears), so no change of theirs to save or revert (user)."""
+    cards = board["cards"]
+    kinds = {cards.get(k, {}).get("seen", {}).get("kind") for k in (w["from"][0], w["to"][0])}
+    # Never into an effect or plugin of PipeBoard's: WirePlumber cannot route an app to those.
+    return ("app" in kinds and not kinds & {"effect", "plugin"}
+            and _wid(w) not in board.get("made", []))
+
+
+def _wid(w: dict) -> str:
+    return f"{w['from'][0]}:{w['from'][1]}>{w['to'][0]}:{w['to'][1]}"
+
+
+def changes(saved: dict, now: dict) -> list[str]:
+    """What changed between a saved profile and the board now, one line each, for the user."""
+    key = lambda w: (tuple(w["from"]), tuple(w["to"]), tuple(map(tuple, w["pairs"])))  # noqa: E731
+    before, after = {key(w): w for w in saved.get("wires", [])}, {key(w): w for w in now["wires"]}
+    lines = [f"+ {describe(now, after[k])}" for k in after
+             if k not in before and not routed(now, after[k])]
+    # An app closing (or WirePlumber moving it) takes the system's wire with it: no change either,
+    # unless the user unplugged it.
+    cut = set(now.get("cut", []))
+    lines += [f"− {describe(saved, before[k])}" for k in before if k not in after
+              and (not routed(saved, before[k]) or _wid(before[k]) in cut)]
+    lines = list(dict.fromkeys(lines))
+    moved = 0
+    for k in set(saved.get("cards", {})) | set(now["cards"]):
+        a, b = saved.get("cards", {}).get(k, {}), now["cards"].get(k, {})
+        if a.get("nick") != b.get("nick"):
+            old = a.get("nick") or a.get("seen", {}).get("title", k)
+            lines.append(f"Renamed {old} to {_name(now, k)}" if b.get("nick")
+                         else f"{old} has its original name again")
+        if bool(a.get("hidden")) != bool(b.get("hidden")):
+            lines.append(f"{'Removed' if b.get('hidden') else 'Put back'} {_name(now, k)}"
+                         f" {'from' if b.get('hidden') else 'on'} the board")
+        moved += _moved(a, b)
+    if moved:
+        lines.append(f"Moved {moved} card{'s' if moved > 1 else ''}")
+    before, after = saved.get("devices", {}), now.get("devices", {})
+    lines += [f"Made {WHAT.get(after[k]['type'], 'the')} {after[k]['name']}" for k in after
+              if k not in before]
+    lines += [f"Deleted {WHAT.get(before[k]['type'], 'the')} {before[k]['name']}" for k in before
+              if k not in after]
+    lines += [f"Changed the settings of {after[k]['name']}" for k in after
+              if k in before and _settings(before[k]) != _settings(after[k])]
+    return lines
+
+
+WHAT = {"mic": "the virtual microphone", "speaker": "the virtual speaker", "gain": "the gain",
+        "plugin": "the plugin", "eq": "the EQ", "limiter": "the limiter",
+        "compressor": "the compressor", "gate": "the noise gate",
+        "denoise": "the noise suppression", "deesser": "the de-esser"}
+
+
+def _settings(dev: dict) -> tuple:
+    """What a gain, EQ, limiter, compressor or plugin is set to: its level, its bands, its
+    dynamics settings, its controls' values, bypass. (EQ bands were left out: an EQ edit never
+    showed as a change, so nothing could revert it.)"""
+    return (dev.get("gain_db"), dev.get("bands"), [dev.get(k) for k in dynamics.SETTINGS],
+            bool(dev.get("smooth")),
+            [(p["i"], p.get("value")) for p in dev.get("params", [])], bool(dev.get("bypass")))
+
+
+def _moved(a: dict, b: dict) -> bool:
+    return "x" in a and "x" in b and (abs(a["x"] - b["x"]) > 2 or abs(a["y"] - b["y"]) > 2)
+
+
+def _new_socket(old: dict, new: dict, side: str, sock: str) -> dict | None:
+    """The new card's socket for an old one: same id, else same place in the list, else none."""
+    socks = new[side]
+    same = next((s for s in socks if s["id"] == sock), None)
+    if same:
+        return same
+    old_ids = [s["id"] for s in old.get(side, [])]
+    i = old_ids.index(sock) if sock in old_ids else -1
+    return socks[i] if 0 <= i < len(socks) else None
+
+
+def _repair(w: dict, n_out: int, n_in: int) -> None:
+    """Keep the pairs that still fit; if a socket changed size, pair it the default way."""
+    if all(i < n_out and j < n_in for i, j in w["pairs"]):
+        return
+    w["pairs"] = [list(p) for p in graph.pair(list(range(n_out)), list(range(n_in)))]
+
+
+def _size(cards: dict, end: list, side: str, pairs: list) -> int:
+    socks = cards.get(end[0], {}).get("seen", {}).get(side, [])
+    found = next((s["n"] for s in socks if s["id"] == end[1]), 0)
+    return found or 1 + max((p[0 if side == "outputs" else 1] for p in pairs), default=0)
+
+
+def retarget(board: dict, old: str, card: dict) -> list[str]:
+    """Point a missing device's place on the board at an existing card; return what was dropped.
+
+    Never fails on a socket count mismatch: what fits is kept, the rest is listed and dropped.
+    """
+    cards, new = board["cards"], _shape(card)
+    before = cards.pop(old, {})
+    shape = before.get("seen", {"inputs": [], "outputs": []})
+    mine = lambda c: {f: v for f, v in c.items() if f in BOARD}  # noqa: E731
+    # The chosen device takes the missing one's place, name and history on the board.
+    cards[card["key"]] = {**mine(cards.get(card["key"], {})), **mine(before), "seen": new}
+    kept, dropped = [], []
+    for w in board.get("wires", []):
+        if old not in (w["from"][0], w["to"][0]):
+            kept.append(w)
+            continue
+        text = describe({**board, "cards": {**cards, old: before}}, w)
+        ends = [(end, side, _new_socket(shape, new, side, w[end][1]))
+                for end, side in (("from", "outputs"), ("to", "inputs")) if w[end][0] == old]
+        if any(sock is None for _, _, sock in ends):
+            dropped.append(text)
+            continue
+        for end, _, sock in ends:
+            w[end] = [card["key"], sock["id"]]
+        _repair(w, _size(cards, w["from"], "outputs", w["pairs"]),
+                _size(cards, w["to"], "inputs", w["pairs"]))
+        kept.append(w)
+    board["wires"] = kept
+    return dropped

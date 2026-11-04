@@ -1,0 +1,4973 @@
+[
+ {
+  "id": 30,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "clock.id": "monotonic",
+    "clock.name": "clock.system.monotonic",
+    "clock.quantum-limit": 8192,
+    "factory.id": 11,
+    "factory.name": "support.node.driver",
+    "node.driver": true,
+    "node.group": "pipewire.dummy",
+    "node.loop.name": "data-loop.0",
+    "node.name": "Dummy-Driver",
+    "node.sync-group": "sync.dummy",
+    "object.id": 30,
+    "object.serial": 30,
+    "priority.driver": 200000
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 31,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "clock.id": "monotonic",
+    "clock.name": "clock.system.monotonic",
+    "clock.quantum-limit": 8192,
+    "factory.id": 11,
+    "factory.name": "support.node.driver",
+    "node.driver": true,
+    "node.freewheel": true,
+    "node.group": "pipewire.freewheel",
+    "node.loop.name": "data-loop.0",
+    "node.name": "Freewheel-Driver",
+    "node.sync-group": "sync.dummy",
+    "object.id": 31,
+    "object.serial": 31,
+    "priority.driver": 190000
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 32,
+  "type": "PipeWire:Interface:Metadata",
+  "props": {
+   "metadata.name": "settings",
+   "object.serial": 32
+  },
+  "metadata": [
+   {
+    "subject": 0,
+    "key": "log.level",
+    "type": "",
+    "value": 2
+   },
+   {
+    "subject": 0,
+    "key": "clock.rate",
+    "type": "",
+    "value": 192000
+   },
+   {
+    "subject": 0,
+    "key": "clock.allowed-rates",
+    "type": "",
+    "value": "[ 192000 ]"
+   },
+   {
+    "subject": 0,
+    "key": "clock.quantum",
+    "type": "",
+    "value": 1024
+   },
+   {
+    "subject": 0,
+    "key": "clock.min-quantum",
+    "type": "",
+    "value": 1024
+   },
+   {
+    "subject": 0,
+    "key": "clock.max-quantum",
+    "type": "",
+    "value": 8192
+   },
+   {
+    "subject": 0,
+    "key": "clock.force-quantum",
+    "type": "",
+    "value": 0
+   },
+   {
+    "subject": 0,
+    "key": "clock.force-rate",
+    "type": "",
+    "value": 0
+   }
+  ]
+ },
+ {
+  "id": 49,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "alsa.card": 0,
+    "alsa.card_name": "HDMI Audio",
+    "alsa.components": "HDA:10de009a,38423967,00100100",
+    "alsa.driver_name": "snd_hda_intel",
+    "alsa.id": "HDMI",
+    "alsa.long_card_name": "HDMI Audio at 0xdf080000 irq 111",
+    "alsa.mixer_name": "HDMI/DP",
+    "api.acp.auto-port": false,
+    "api.acp.auto-profile": false,
+    "api.alsa.card": 0,
+    "api.alsa.card.longname": "HDMI Audio at 0xdf080000 irq 111",
+    "api.alsa.card.name": "HDMI Audio",
+    "api.alsa.path": "hw:0",
+    "api.alsa.split-enable": true,
+    "api.alsa.use-acp": true,
+    "api.dbus.ReserveDevice1": "Audio0",
+    "api.dbus.ReserveDevice1.Priority": -20,
+    "client.id": 40,
+    "device.api": "alsa",
+    "device.bus": "pci",
+    "device.bus-path": "pci-0000:01:00.1",
+    "device.description": "GPU HDMI Audio Controller",
+    "device.enum.api": "udev",
+    "device.icon-name": "audio-card-analog-pci",
+    "device.name": "alsa_card.pci-0000_01_00.1",
+    "device.nick": "HDMI Audio",
+    "device.plugged.usec": 6182690,
+    "device.product.id": "0x1aef",
+    "device.product.name": "GPU HDMI Audio Controller",
+    "device.string": 0,
+    "device.subsystem": "sound",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:01.1/0000:01:00.1/sound/card0",
+    "device.vendor.id": "0x10de",
+    "device.vendor.name": "GPU Vendor",
+    "factory.id": 15,
+    "media.class": "Audio/Device",
+    "object.id": 49,
+    "object.path": "alsa:acp:HDMI",
+    "object.serial": 54,
+    "spa.object.id": 2
+   }
+  }
+ },
+ {
+  "id": 50,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "client.id": 40,
+    "clock.quantum-limit": 8192,
+    "device.api": "alsa",
+    "factory.id": 11,
+    "factory.name": "api.alsa.seq.bridge",
+    "media.class": "Midi/Bridge",
+    "node.driver": true,
+    "node.loop.name": "data-loop.0",
+    "node.name": "Midi-Bridge",
+    "object.id": 50,
+    "object.serial": 55,
+    "priority.driver": 1,
+    "priority.session": 100
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 51,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 51,
+    "object.path": "alsa:seq:default:client_14:playback_0",
+    "object.serial": 56,
+    "port.alias": "Midi Through:Midi Through Port-0",
+    "port.direction": "in",
+    "port.group": "client_14",
+    "port.id": 0,
+    "port.name": "Midi Through: Port-0 (playback)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 52,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "api.alsa.card": 1,
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 52,
+    "object.path": "alsa:seq:default:client_20:playback_0",
+    "object.serial": 57,
+    "port.alias": "Studio Interface:Studio Interface MIDI 1",
+    "port.direction": "in",
+    "port.group": "client_20",
+    "port.id": 1,
+    "port.name": "Studio Interface: MIDI 1 (playback)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 53,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "api.alsa.card": 1,
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 53,
+    "object.path": "alsa:seq:default:client_20:playback_1",
+    "object.serial": 58,
+    "port.alias": "Studio Interface:Studio Interface MIDI 2",
+    "port.direction": "in",
+    "port.group": "client_20",
+    "port.id": 2,
+    "port.name": "Studio Interface: MIDI 2 (playback)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 54,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 54,
+    "object.path": "alsa:seq:default:client_14:capture_0",
+    "object.serial": 59,
+    "port.alias": "Midi Through:Midi Through Port-0",
+    "port.direction": "out",
+    "port.group": "client_14",
+    "port.id": 0,
+    "port.name": "Midi Through: Port-0 (capture)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 55,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "api.alsa.card": 1,
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 55,
+    "object.path": "alsa:seq:default:client_20:capture_0",
+    "object.serial": 60,
+    "port.alias": "Studio Interface:Studio Interface MIDI 1",
+    "port.direction": "out",
+    "port.group": "client_20",
+    "port.id": 1,
+    "port.name": "Studio Interface: MIDI 1 (capture)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 56,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "api.alsa.card": 1,
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 56,
+    "object.path": "alsa:seq:default:client_20:capture_1",
+    "object.serial": 61,
+    "port.alias": "Studio Interface:Studio Interface MIDI 2",
+    "port.direction": "out",
+    "port.group": "client_20",
+    "port.id": 2,
+    "port.name": "Studio Interface: MIDI 2 (capture)",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 57,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "alsa.card": 2,
+    "alsa.card_name": "HD-Audio Generic",
+    "alsa.components": "HDA:10ec1168,1043886d,00100101",
+    "alsa.driver_name": "snd_hda_intel",
+    "alsa.id": "Generic",
+    "alsa.long_card_name": "HD-Audio Generic at 0xdfa00000 irq 112",
+    "alsa.mixer_name": "Onboard Codec",
+    "api.acp.auto-port": false,
+    "api.acp.auto-profile": false,
+    "api.alsa.card": 2,
+    "api.alsa.card.longname": "HD-Audio Generic at 0xdfa00000 irq 112",
+    "api.alsa.card.name": "HD-Audio Generic",
+    "api.alsa.path": "hw:2",
+    "api.alsa.split-enable": true,
+    "api.alsa.use-acp": true,
+    "api.dbus.ReserveDevice1": "Audio2",
+    "api.dbus.ReserveDevice1.Priority": -20,
+    "client.id": 40,
+    "device.api": "alsa",
+    "device.bus": "pci",
+    "device.bus-path": "pci-0000:0c:00.6",
+    "device.description": "Onboard Audio Controller",
+    "device.enum.api": "udev",
+    "device.icon-name": "audio-card-analog-pci",
+    "device.name": "alsa_card.pci-0000_0c_00.6",
+    "device.nick": "HD-Audio Generic",
+    "device.plugged.usec": 6193340,
+    "device.product.id": "0x15e3",
+    "device.product.name": "Onboard Audio Controller",
+    "device.string": 2,
+    "device.subsystem": "sound",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:08.1/0000:0c:00.6/sound/card2",
+    "device.vendor.id": "0x1022",
+    "device.vendor.name": "Chipset Vendor",
+    "factory.id": 15,
+    "media.class": "Audio/Device",
+    "object.id": 57,
+    "object.path": "alsa:acp:Generic",
+    "object.serial": 62,
+    "spa.object.id": 6
+   }
+  }
+ },
+ {
+  "id": 58,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "alsa.card": 3,
+    "alsa.card_name": "Webcam",
+    "alsa.components": "USB046d:08e5",
+    "alsa.driver_name": "snd_usb_audio",
+    "alsa.id": "Webcam",
+    "alsa.long_card_name": "Webcam at usb-0000:0a:00.0-4.2, high speed",
+    "alsa.mixer_name": "USB Mixer",
+    "api.acp.auto-port": false,
+    "api.acp.auto-profile": false,
+    "api.alsa.card": 3,
+    "api.alsa.card.longname": "Webcam at usb-0000:0a:00.0-4.2, high speed",
+    "api.alsa.card.name": "Webcam",
+    "api.alsa.path": "hw:3",
+    "api.alsa.split-enable": true,
+    "api.alsa.use-acp": true,
+    "api.dbus.ReserveDevice1": "Audio3",
+    "api.dbus.ReserveDevice1.Priority": -20,
+    "client.id": 40,
+    "device.api": "alsa",
+    "device.bus": "usb",
+    "device.bus-id": "usb-Example_Webcam_0001-02",
+    "device.bus-path": "pci-0000:0a:00.0-usb-0:4.2:1.2",
+    "device.description": "Webcam",
+    "device.enum.api": "udev",
+    "device.form-factor": "webcam",
+    "device.icon-name": "camera-web-analog-usb",
+    "device.name": "alsa_card.usb-Example_Webcam_0001-02",
+    "device.nick": "Webcam",
+    "device.plugged.usec": 6464087,
+    "device.product.id": "0x08e5",
+    "device.product.name": "Webcam",
+    "device.serial": "Example_Webcam_0001",
+    "device.string": 3,
+    "device.subsystem": "sound",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:02.1/0000:03:00.0/0000:04:0c.0/0000:0a:00.0/usb1/1-4/1-4.2/1-4.2:1.2/sound/card3",
+    "device.vendor.id": "0x046d",
+    "device.vendor.name": "Webcam Vendor",
+    "factory.id": 15,
+    "media.class": "Audio/Device",
+    "object.id": 58,
+    "object.path": "alsa:acp:Webcam",
+    "object.serial": 63,
+    "spa.object.id": 8
+   }
+  }
+ },
+ {
+  "id": 59,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "alsa.card": 1,
+    "alsa.card_name": "Studio Interface",
+    "alsa.components": "USB0499:1730",
+    "alsa.driver_name": "snd_usb_audio",
+    "alsa.id": "Studio Interface",
+    "alsa.long_card_name": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "alsa.mixer_name": "USB Mixer",
+    "api.acp.auto-port": false,
+    "api.acp.auto-profile": false,
+    "api.alsa.card": 1,
+    "api.alsa.card.longname": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "api.alsa.card.name": "Studio Interface",
+    "api.alsa.path": "hw:1",
+    "api.alsa.split-enable": true,
+    "api.alsa.use-acp": true,
+    "api.alsa.use-ucm": false,
+    "api.dbus.ReserveDevice1": "Audio1",
+    "api.dbus.ReserveDevice1.Priority": -20,
+    "client.id": 40,
+    "device.api": "alsa",
+    "device.bus": "usb",
+    "device.bus-id": "usb-Example_Studio_Interface-00",
+    "device.bus-path": "pci-0000:0c:00.4-usb-0:2:1.0",
+    "device.description": "Studio Interface",
+    "device.enum.api": "udev",
+    "device.icon-name": "audio-card-analog-usb",
+    "device.name": "alsa_card.usb-Example_Studio_Interface-00",
+    "device.nick": "Studio Interface",
+    "device.plugged.usec": 6093263,
+    "device.product.id": "0x0001",
+    "device.product.name": "Studio Interface",
+    "device.serial": "Example_Studio_Interface",
+    "device.string": 1,
+    "device.subsystem": "sound",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:08.1/0000:0c:00.4/usb6/6-2/6-2:1.0/sound/card1",
+    "device.vendor.id": "0x1209",
+    "device.vendor.name": "Example Audio",
+    "factory.id": 15,
+    "media.class": "Audio/Device",
+    "object.id": 59,
+    "object.path": "alsa:acp:Studio Interface",
+    "object.serial": 64,
+    "spa.object.id": 4
+   }
+  }
+ },
+ {
+  "id": 60,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "api.v4l2.cap.bus_info": "usb-0000:0a:00.0-4.2",
+    "api.v4l2.cap.capabilities": "0x84a00001",
+    "api.v4l2.cap.card": "Webcam",
+    "api.v4l2.cap.device-caps": "0x04a00000",
+    "api.v4l2.cap.driver": "uvcvideo",
+    "api.v4l2.cap.version": "7.0.14",
+    "api.v4l2.path": "/dev/video1",
+    "client.id": 40,
+    "device.api": "v4l2",
+    "device.bus": "usb",
+    "device.bus-path": "pci-0000:0a:00.0-usb-0:4.2:1.0",
+    "device.capabilities": ":",
+    "device.description": "Webcam",
+    "device.devids": "[ 20737 ]",
+    "device.enum.api": "udev",
+    "device.name": "v4l2_device.pci-0000_0a_00.0-usb-0_4.2_1.0",
+    "device.plugged.usec": 6145884,
+    "device.product.id": "0x08e5",
+    "device.product.name": "Webcam",
+    "device.serial": "Example_Webcam_0001",
+    "device.subsystem": "video4linux",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:02.1/0000:03:00.0/0000:04:0c.0/0000:0a:00.0/usb1/1-4/1-4.2/1-4.2:1.0/video4linux/video1",
+    "device.vendor.id": "0x046d",
+    "device.vendor.name": "046d",
+    "factory.id": 15,
+    "media.class": "Video/Device",
+    "object.id": 60,
+    "object.path": "v4l2:/dev/video1",
+    "object.serial": 65
+   }
+  }
+ },
+ {
+  "id": 61,
+  "type": "PipeWire:Interface:Device",
+  "info": {
+   "props": {
+    "api.v4l2.cap.bus_info": "usb-0000:0a:00.0-4.2",
+    "api.v4l2.cap.capabilities": "0x84a00001",
+    "api.v4l2.cap.card": "Webcam",
+    "api.v4l2.cap.device-caps": "0x04200001",
+    "api.v4l2.cap.driver": "uvcvideo",
+    "api.v4l2.cap.version": "7.0.14",
+    "api.v4l2.path": "/dev/video0",
+    "client.id": 40,
+    "device.api": "v4l2",
+    "device.bus": "usb",
+    "device.bus-path": "pci-0000:0a:00.0-usb-0:4.2:1.0",
+    "device.capabilities": ":capture:",
+    "device.description": "Webcam",
+    "device.devids": "[ 20736 ]",
+    "device.enum.api": "udev",
+    "device.name": "v4l2_device.pci-0000_0a_00.0-usb-0_4.2_1.0",
+    "device.plugged.usec": 6145855,
+    "device.product.id": "0x08e5",
+    "device.product.name": "Webcam",
+    "device.serial": "Example_Webcam_0001",
+    "device.subsystem": "video4linux",
+    "device.sysfs.path": "/devices/pci0000:00/0000:00:02.1/0000:03:00.0/0000:04:0c.0/0000:0a:00.0/usb1/1-4/1-4.2/1-4.2:1.0/video4linux/video0",
+    "device.vendor.id": "0x046d",
+    "device.vendor.name": "046d",
+    "factory.id": 15,
+    "media.class": "Video/Device",
+    "object.id": 61,
+    "object.path": "v4l2:/dev/video0",
+    "object.serial": 66
+   }
+  }
+ },
+ {
+  "id": 62,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "api.bluez5.role": "server",
+    "api.glib.mainloop": true,
+    "client.id": 40,
+    "clock.quantum-limit": 8192,
+    "device.api": "bluez5",
+    "factory.id": 14,
+    "factory.name": "api.bluez5.midi.node",
+    "media.class": "Midi/Bridge",
+    "node.description": "BLE MIDI 1",
+    "node.loop.name": "data-loop.0",
+    "node.name": "bluez_midi.server",
+    "object.id": 62,
+    "object.serial": 67
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 63,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "format.dsp": "8 bit raw midi",
+    "node.id": 62,
+    "object.id": 63,
+    "object.path": "bluez_midi.server:input_0",
+    "object.serial": 68,
+    "port.alias": "in",
+    "port.direction": "in",
+    "port.group": "group.0",
+    "port.id": 0,
+    "port.name": "in",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 64,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "format.dsp": "8 bit raw midi",
+    "node.id": 62,
+    "object.id": 64,
+    "object.path": "bluez_midi.server:output_0",
+    "object.serial": 69,
+    "port.alias": "out",
+    "port.direction": "out",
+    "port.group": "group.0",
+    "port.id": 0,
+    "port.name": "out",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 65,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "alsa.card": 1,
+    "alsa.card_name": "Studio Interface",
+    "alsa.class": "generic",
+    "alsa.components": "USB0499:1730",
+    "alsa.device": 0,
+    "alsa.driver_name": "snd_usb_audio",
+    "alsa.id": "Studio Interface",
+    "alsa.long_card_name": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "alsa.mixer_name": "USB Mixer",
+    "alsa.name": "USB Audio",
+    "alsa.resolution_bits": 32,
+    "alsa.subclass": "generic-mix",
+    "alsa.subdevice": 0,
+    "alsa.subdevice_name": "subdevice #0",
+    "alsa.sync.id": "00000000:00000000:00000000:00000000",
+    "api.alsa.auto-link": true,
+    "api.alsa.card.longname": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "api.alsa.card.name": "Studio Interface",
+    "api.alsa.disable-tsched": true,
+    "api.alsa.headroom": 1024,
+    "api.alsa.path": "hw:1,0",
+    "api.alsa.pcm.card": 1,
+    "api.alsa.pcm.stream": "playback",
+    "api.alsa.period-num": 3,
+    "api.alsa.period-size": 1024,
+    "audio.channels": 6,
+    "audio.position": "[ AUX0, AUX1, AUX2, AUX3, AUX4, AUX5 ]",
+    "card.profile.device": 0,
+    "client.id": 40,
+    "clock.name": "api.alsa.1",
+    "clock.quantum-limit": 8192,
+    "device.api": "alsa",
+    "device.bus": "usb",
+    "device.class": "sound",
+    "device.icon-name": "audio-card-analog",
+    "device.id": 59,
+    "device.profile.description": "Pro",
+    "device.profile.name": "pro-output-0",
+    "device.profile.pro": true,
+    "device.routes": 0,
+    "factory.id": 19,
+    "factory.name": "api.alsa.pcm.sink",
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Sink",
+    "node.description": "Studio Interface Pro",
+    "node.driver": true,
+    "node.driver-id": 66,
+    "node.group": "pro-audio-1",
+    "node.loop.name": "data-loop.0",
+    "node.name": "alsa_output.usb-Example_Studio_Interface-00.pro-output-0",
+    "node.nick": "Studio Interface",
+    "node.pause-on-idle": false,
+    "object.id": 65,
+    "object.path": "alsa:acp:Studio Interface:0:playback",
+    "object.serial": 70,
+    "port.group": "playback",
+    "priority.driver": 1600,
+    "priority.session": 1600
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 192000
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 66,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "alsa.card": 1,
+    "alsa.card_name": "Studio Interface",
+    "alsa.class": "generic",
+    "alsa.components": "USB0499:1730",
+    "alsa.device": 0,
+    "alsa.driver_name": "snd_usb_audio",
+    "alsa.id": "Studio Interface",
+    "alsa.long_card_name": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "alsa.mixer_name": "USB Mixer",
+    "alsa.name": "USB Audio",
+    "alsa.resolution_bits": 32,
+    "alsa.subclass": "generic-mix",
+    "alsa.subdevice": 0,
+    "alsa.subdevice_name": "subdevice #0",
+    "alsa.sync.id": "00000000:00000000:00000000:00000000",
+    "api.alsa.auto-link": true,
+    "api.alsa.card.longname": "Example Studio Interface at usb-0000:0c:00.4-2, super speed",
+    "api.alsa.card.name": "Studio Interface",
+    "api.alsa.disable-tsched": true,
+    "api.alsa.headroom": 1024,
+    "api.alsa.path": "hw:1,0",
+    "api.alsa.pcm.card": 1,
+    "api.alsa.pcm.stream": "capture",
+    "api.alsa.period-num": 3,
+    "api.alsa.period-size": 1024,
+    "audio.channels": 8,
+    "audio.position": "[ FL, FR, RL, RR, FC, LFE, SL, SR ]",
+    "card.profile.device": 1,
+    "client.id": 40,
+    "clock.name": "api.alsa.1",
+    "clock.quantum-limit": 8192,
+    "device.api": "alsa",
+    "device.bus": "usb",
+    "device.class": "sound",
+    "device.icon-name": "audio-card-analog",
+    "device.id": 59,
+    "device.profile.description": "Pro",
+    "device.profile.name": "pro-input-0",
+    "device.profile.pro": true,
+    "device.routes": 0,
+    "factory.id": 19,
+    "factory.name": "api.alsa.pcm.source",
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "node.description": "Studio Interface Pro",
+    "node.driver": true,
+    "node.group": "pro-audio-1",
+    "node.loop.name": "data-loop.0",
+    "node.name": "alsa_input.usb-Example_Studio_Interface-00.pro-input-0",
+    "node.nick": "Studio Interface",
+    "node.pause-on-idle": false,
+    "object.id": 66,
+    "object.path": "alsa:acp:Studio Interface:1:capture",
+    "object.serial": 71,
+    "port.group": "capture",
+    "priority.driver": 2600,
+    "priority.session": 2600
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 192000
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 37,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX0",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 37,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_0",
+    "object.serial": 72,
+    "port.alias": "Studio Interface:playback_AUX0",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 0,
+    "port.name": "playback_AUX0",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 47,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX1",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 47,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_1",
+    "object.serial": 73,
+    "port.alias": "Studio Interface:playback_AUX1",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 1,
+    "port.name": "playback_AUX1",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 46,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX2",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 46,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_2",
+    "object.serial": 74,
+    "port.alias": "Studio Interface:playback_AUX2",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 2,
+    "port.name": "playback_AUX2",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 45,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX3",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 45,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_3",
+    "object.serial": 75,
+    "port.alias": "Studio Interface:playback_AUX3",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 3,
+    "port.name": "playback_AUX3",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 44,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX4",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 44,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_4",
+    "object.serial": 76,
+    "port.alias": "Studio Interface:playback_AUX4",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 4,
+    "port.name": "playback_AUX4",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 67,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX5",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 67,
+    "object.path": "alsa:acp:Studio Interface:0:playback:playback_5",
+    "object.serial": 77,
+    "port.alias": "Studio Interface:playback_AUX5",
+    "port.direction": "in",
+    "port.group": "playback",
+    "port.id": 5,
+    "port.name": "playback_AUX5",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 68,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX0",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 68,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_0",
+    "object.serial": 78,
+    "port.alias": "Studio Interface:monitor_AUX0",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_AUX0"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 69,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX1",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 69,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_1",
+    "object.serial": 79,
+    "port.alias": "Studio Interface:monitor_AUX1",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_AUX1"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 70,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX2",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 70,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_2",
+    "object.serial": 80,
+    "port.alias": "Studio Interface:monitor_AUX2",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 2,
+    "port.monitor": true,
+    "port.name": "monitor_AUX2"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 71,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX3",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 71,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_3",
+    "object.serial": 81,
+    "port.alias": "Studio Interface:monitor_AUX3",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 3,
+    "port.monitor": true,
+    "port.name": "monitor_AUX3"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 72,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX4",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 72,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_4",
+    "object.serial": 82,
+    "port.alias": "Studio Interface:monitor_AUX4",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 4,
+    "port.monitor": true,
+    "port.name": "monitor_AUX4"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 73,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX5",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 65,
+    "object.id": 73,
+    "object.path": "alsa:acp:Studio Interface:0:playback:monitor_5",
+    "object.serial": 83,
+    "port.alias": "Studio Interface:monitor_AUX5",
+    "port.direction": "out",
+    "port.group": "playback",
+    "port.id": 5,
+    "port.monitor": true,
+    "port.name": "monitor_AUX5"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 74,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 74,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_0",
+    "object.serial": 84,
+    "port.alias": "Studio Interface:capture_FL",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 0,
+    "port.name": "capture_FL",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 75,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 75,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_1",
+    "object.serial": 85,
+    "port.alias": "Studio Interface:capture_FR",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 1,
+    "port.name": "capture_FR",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 76,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "RL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 76,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_2",
+    "object.serial": 86,
+    "port.alias": "Studio Interface:capture_RL",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 2,
+    "port.name": "capture_RL",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 77,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "RR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 77,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_3",
+    "object.serial": 87,
+    "port.alias": "Studio Interface:capture_RR",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 3,
+    "port.name": "capture_RR",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 78,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FC",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 78,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_4",
+    "object.serial": 88,
+    "port.alias": "Studio Interface:capture_FC",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 4,
+    "port.name": "capture_FC",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 79,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "LFE",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 79,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_5",
+    "object.serial": 89,
+    "port.alias": "Studio Interface:capture_LFE",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 5,
+    "port.name": "capture_LFE",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 80,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "SL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 80,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_6",
+    "object.serial": 90,
+    "port.alias": "Studio Interface:capture_SL",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 6,
+    "port.name": "capture_SL",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 81,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "SR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 66,
+    "object.id": 81,
+    "object.path": "alsa:acp:Studio Interface:1:capture:capture_7",
+    "object.serial": 91,
+    "port.alias": "Studio Interface:capture_SR",
+    "port.direction": "out",
+    "port.group": "capture",
+    "port.id": 7,
+    "port.name": "capture_SR",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 82,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "format.dsp": "8 bit raw midi",
+    "node.id": 50,
+    "object.id": 82,
+    "object.path": "alsa:seq:default:client_128:playback_0",
+    "object.serial": 94,
+    "port.alias": "FLUID Synth (3924):Synth input port (3924:0)",
+    "port.direction": "in",
+    "port.group": "client_128",
+    "port.id": 3,
+    "port.name": "FLUID Synth (3924):Synth input port (3924:0) (playback)"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 84,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "application.name": "PipeWire ALSA [fluidsynth]",
+    "client.id": 83,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.category": "Playback",
+    "media.class": "Stream/Output/Audio",
+    "media.name": "ALSA Playback",
+    "media.type": "Audio",
+    "node.autoconnect": true,
+    "node.description": "ALSA Playback [fluidsynth]",
+    "node.driver-id": 66,
+    "node.latency": "512/48000",
+    "node.loop.name": "data-loop.0",
+    "node.name": "alsa_playback.fluidsynth",
+    "node.rate": "1/48000",
+    "node.want-driver": true,
+    "object.id": 84,
+    "object.register": false,
+    "object.serial": 96,
+    "port.group": "stream.0",
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 48000
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 85,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 84,
+    "object.id": 85,
+    "object.path": "alsa_playback.fluidsynth:output_0",
+    "object.serial": 97,
+    "port.alias": "ALSA Playback [fluidsynth]:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 86,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 84,
+    "object.id": 86,
+    "object.path": "alsa_playback.fluidsynth:output_1",
+    "object.serial": 98,
+    "port.alias": "ALSA Playback [fluidsynth]:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 92,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "api.v4l2.cap.bus_info": "usb-0000:0a:00.0-4.2",
+    "api.v4l2.cap.capabilities": "0x84a00001",
+    "api.v4l2.cap.card": "Webcam",
+    "api.v4l2.cap.device-caps": "0x04200001",
+    "api.v4l2.cap.driver": "uvcvideo",
+    "api.v4l2.cap.version": "7.0.14",
+    "api.v4l2.path": "/dev/video0",
+    "client.id": 40,
+    "clock.quantum-limit": 8192,
+    "device.api": "v4l2",
+    "device.devids": "[ 20736 ]",
+    "device.id": 61,
+    "device.product.id": "0x08e5",
+    "device.vendor.id": "0x046d",
+    "factory.id": 11,
+    "factory.name": "api.v4l2.source",
+    "media.class": "Video/Source",
+    "media.role": "Camera",
+    "node.description": "Webcam (V4L2)",
+    "node.driver": true,
+    "node.loop.name": "data-loop.0",
+    "node.name": "v4l2_input.pci-0000_0a_00.0-usb-0_4.2_1.0",
+    "node.nick": "Webcam",
+    "node.pause-on-idle": false,
+    "object.id": 92,
+    "object.path": "v4l2:/dev/video0",
+    "object.serial": 104,
+    "priority.session": 1000
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 93,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "node.id": 92,
+    "object.id": 93,
+    "object.path": "v4l2:/dev/video0:capture_0",
+    "object.serial": 105,
+    "port.alias": "Webcam:capture_1",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_1",
+    "port.physical": true,
+    "port.terminal": true
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 96,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "audio.position": "FL,FR",
+    "client.id": 94,
+    "clock.quantum-limit": 8192,
+    "factory.id": 19,
+    "factory.name": "support.null-audio-sink",
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Sink",
+    "monitor.channel-volumes": false,
+    "monitor.passthrough": true,
+    "node.description": "Easy Effects Sink",
+    "node.driver": true,
+    "node.driver-id": 66,
+    "node.loop.name": "data-loop.0",
+    "node.name": "easyeffects_sink",
+    "node.virtual": true,
+    "object.id": 96,
+    "object.serial": 108,
+    "port.group": "stream.0",
+    "priority.session": 0
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 192000
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 97,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "audio.position": "FL,FR",
+    "client.id": 94,
+    "clock.quantum-limit": 8192,
+    "factory.id": 19,
+    "factory.name": "support.null-audio-sink",
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source/Virtual",
+    "monitor.channel-volumes": false,
+    "monitor.passthrough": true,
+    "node.description": "Easy Effects Source",
+    "node.driver": true,
+    "node.driver-id": 97,
+    "node.loop.name": "data-loop.0",
+    "node.name": "easyeffects_source",
+    "node.virtual": true,
+    "object.id": 97,
+    "object.serial": 109,
+    "port.group": "stream.0",
+    "priority.session": 0
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 98,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 96,
+    "object.id": 98,
+    "object.path": "easyeffects_sink:playback_0",
+    "object.serial": 112,
+    "port.alias": "Easy Effects Sink:playback_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "playback_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 100,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 96,
+    "object.id": 100,
+    "object.path": "easyeffects_sink:playback_1",
+    "object.serial": 113,
+    "port.alias": "Easy Effects Sink:playback_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "playback_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 101,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 96,
+    "object.id": 101,
+    "object.path": "easyeffects_sink:monitor_0",
+    "object.serial": 114,
+    "port.alias": "Easy Effects Sink:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 102,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 96,
+    "object.id": 102,
+    "object.path": "easyeffects_sink:monitor_1",
+    "object.serial": 115,
+    "port.alias": "Easy Effects Sink:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 103,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 97,
+    "object.id": 103,
+    "object.path": "easyeffects_source:input_0",
+    "object.serial": 116,
+    "port.alias": "Easy Effects Source:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 104,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 97,
+    "object.id": 104,
+    "object.path": "easyeffects_source:input_1",
+    "object.serial": 117,
+    "port.alias": "Easy Effects Source:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 105,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 97,
+    "object.id": 105,
+    "object.path": "easyeffects_source:capture_0",
+    "object.serial": 118,
+    "port.alias": "Easy Effects Source:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 106,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 97,
+    "object.id": 106,
+    "object.path": "easyeffects_source:capture_1",
+    "object.serial": 119,
+    "port.alias": "Easy Effects Source:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 88,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 98,
+    "link.output.node": 84,
+    "link.output.port": 85,
+    "object.id": 88,
+    "object.serial": 120
+   },
+   "output-node-id": 84,
+   "output-port-id": 85,
+   "input-node-id": 96,
+   "input-port-id": 98,
+   "state": "active"
+  }
+ },
+ {
+  "id": 87,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 100,
+    "link.output.node": 84,
+    "link.output.port": 86,
+    "object.id": 87,
+    "object.serial": 121
+   },
+   "output-node-id": 84,
+   "output-port-id": 86,
+   "input-node-id": 96,
+   "input-port-id": 100,
+   "state": "active"
+  }
+ },
+ {
+  "id": 109,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ AUX0 AUX1 ]",
+    "client.id": 107,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Output/Audio",
+    "media.name": "pw-loopback-4790 output",
+    "node.autoconnect": true,
+    "node.description": "pw-loopback-4790",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4790",
+    "node.link-group": "loopback-4790-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "desktop_mix_playback",
+    "node.passive": true,
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 109,
+    "object.register": false,
+    "object.serial": 125,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.dont-remix": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 110,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 107,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Sink",
+    "media.name": "Desktop Mix input",
+    "node.autoconnect": true,
+    "node.description": "Desktop Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4790",
+    "node.link-group": "loopback-4790-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "desktop_mix",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 110,
+    "object.register": false,
+    "object.serial": 126,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 111,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ AUX0 AUX1 ]",
+    "client.id": 108,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Output/Audio",
+    "media.name": "pw-loopback-4795 output",
+    "node.autoconnect": true,
+    "node.description": "pw-loopback-4795",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4795",
+    "node.link-group": "loopback-4795-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "music_mix_playback",
+    "node.passive": true,
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 111,
+    "object.register": false,
+    "object.serial": 127,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.dont-remix": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 112,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 108,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Sink",
+    "media.name": "Music Mix input",
+    "node.autoconnect": true,
+    "node.description": "Music Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4795",
+    "node.link-group": "loopback-4795-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "music_mix",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 112,
+    "object.register": false,
+    "object.serial": 128,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 114,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 113,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "media.name": "Mic Mix output",
+    "node.autoconnect": true,
+    "node.description": "Mic Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4800",
+    "node.link-group": "loopback-4800-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "mic_mix",
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 114,
+    "object.register": false,
+    "object.serial": 130,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 115,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 113,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Input/Audio",
+    "media.name": "pw-loopback-4800 input",
+    "node.autoconnect": false,
+    "node.description": "pw-loopback-4800",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4800",
+    "node.link-group": "loopback-4800-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "mic_mix_capture",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 115,
+    "object.register": false,
+    "object.serial": 131,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 117,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 116,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "media.name": "Instrument Mix output",
+    "node.autoconnect": true,
+    "node.description": "Instrument Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4807",
+    "node.link-group": "loopback-4807-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "instrument_mix",
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 117,
+    "object.register": false,
+    "object.serial": 133,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 118,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 116,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Input/Audio",
+    "media.name": "pw-loopback-4807 input",
+    "node.autoconnect": false,
+    "node.description": "pw-loopback-4807",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4807",
+    "node.link-group": "loopback-4807-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "instrument_mix_capture",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 118,
+    "object.register": false,
+    "object.serial": 134,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 119,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX0",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 109,
+    "object.id": 119,
+    "object.path": "desktop_mix_playback:output_0",
+    "object.serial": 135,
+    "port.alias": "pw-loopback-4790:output_AUX0",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_AUX0"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 120,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX1",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 109,
+    "object.id": 120,
+    "object.path": "desktop_mix_playback:output_1",
+    "object.serial": 136,
+    "port.alias": "pw-loopback-4790:output_AUX1",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "output_AUX1"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 122,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 121,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "media.name": "Mic Instrument Mix output",
+    "node.autoconnect": true,
+    "node.description": "Mic Instrument Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4813",
+    "node.link-group": "loopback-4813-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "mic_instrument_mix",
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 122,
+    "object.register": false,
+    "object.serial": 138,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 123,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 121,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Input/Audio",
+    "media.name": "pw-loopback-4813 input",
+    "node.autoconnect": false,
+    "node.description": "pw-loopback-4813",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4813",
+    "node.link-group": "loopback-4813-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "mic_instrument_mix_capture",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 123,
+    "object.register": false,
+    "object.serial": 139,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 125,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX0",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 111,
+    "object.id": 125,
+    "object.path": "music_mix_playback:output_0",
+    "object.serial": 141,
+    "port.alias": "pw-loopback-4795:output_AUX0",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_AUX0"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 126,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "AUX1",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 111,
+    "object.id": 126,
+    "object.path": "music_mix_playback:output_1",
+    "object.serial": 142,
+    "port.alias": "pw-loopback-4795:output_AUX1",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "output_AUX1"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 127,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 124,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "media.name": "Stream Mix output",
+    "node.autoconnect": true,
+    "node.description": "Stream Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4821",
+    "node.link-group": "loopback-4821-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "stream_mix",
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 127,
+    "object.register": false,
+    "object.serial": 143,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 128,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 124,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Input/Audio",
+    "media.name": "pw-loopback-4821 input",
+    "node.autoconnect": false,
+    "node.description": "pw-loopback-4821",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4821",
+    "node.link-group": "loopback-4821-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "stream_mix_capture",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 128,
+    "object.register": false,
+    "object.serial": 144,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 130,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_sie_output_level",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Output Level Meter",
+    "node.name": "ee_sie_output_level",
+    "node.nick": "output_level",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 130,
+    "object.serial": 146
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 131,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 130,
+    "object.id": 131,
+    "object.path": "ee_sie_output_level:input_0",
+    "object.serial": 147,
+    "port.alias": "output_level:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 132,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 130,
+    "object.id": 132,
+    "object.path": "ee_sie_output_level:input_1",
+    "object.serial": 148,
+    "port.alias": "output_level:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 133,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 130,
+    "object.id": 133,
+    "object.path": "ee_sie_output_level:output_0",
+    "object.serial": 149,
+    "port.alias": "output_level:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 134,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 130,
+    "object.id": 134,
+    "object.path": "ee_sie_output_level:output_1",
+    "object.serial": 150,
+    "port.alias": "output_level:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 135,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 129,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Audio/Source",
+    "media.name": "Input1 Mix output",
+    "node.autoconnect": true,
+    "node.description": "Input1 Mix",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4831",
+    "node.link-group": "loopback-4831-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "input1_mix",
+    "node.trigger": true,
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 135,
+    "object.register": false,
+    "object.serial": 151,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 136,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "audio.channels": 2,
+    "audio.position": "[ FL FR ]",
+    "client.id": 129,
+    "clock.quantum-limit": 8192,
+    "factory.id": 9,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Input/Audio",
+    "media.name": "pw-loopback-4831 input",
+    "node.autoconnect": false,
+    "node.description": "pw-loopback-4831",
+    "node.driver-id": 66,
+    "node.group": "pw-loopback-4831",
+    "node.link-group": "loopback-4831-20",
+    "node.loop.name": "data-loop.0",
+    "node.name": "input1_mix_capture",
+    "node.virtual": true,
+    "node.want-driver": true,
+    "object.id": 136,
+    "object.register": false,
+    "object.serial": 152,
+    "port.group": "stream.0",
+    "resample.disable": true,
+    "resample.prefill": true,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": null
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 137,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_sie_spectrum",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Spectrum",
+    "node.name": "ee_sie_spectrum",
+    "node.nick": "spectrum",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 137,
+    "object.serial": 153
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 138,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 137,
+    "object.id": 138,
+    "object.path": "ee_sie_spectrum:input_0",
+    "object.serial": 154,
+    "port.alias": "spectrum:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 139,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 137,
+    "object.id": 139,
+    "object.path": "ee_sie_spectrum:input_1",
+    "object.serial": 155,
+    "port.alias": "spectrum:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 140,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 137,
+    "object.id": 140,
+    "object.path": "ee_sie_spectrum:output_0",
+    "object.serial": 156,
+    "port.alias": "spectrum:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 141,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 137,
+    "object.id": 141,
+    "object.path": "ee_sie_spectrum:output_1",
+    "object.serial": 157,
+    "port.alias": "spectrum:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 142,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 110,
+    "object.id": 142,
+    "object.path": "desktop_mix:playback_0",
+    "object.serial": 158,
+    "port.alias": "Desktop Mix:playback_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "playback_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 143,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 110,
+    "object.id": 143,
+    "object.path": "desktop_mix:playback_1",
+    "object.serial": 159,
+    "port.alias": "Desktop Mix:playback_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "playback_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 144,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 110,
+    "object.id": 144,
+    "object.path": "desktop_mix:monitor_0",
+    "object.serial": 160,
+    "port.alias": "Desktop Mix:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 145,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 110,
+    "object.id": 145,
+    "object.path": "desktop_mix:monitor_1",
+    "object.serial": 161,
+    "port.alias": "Desktop Mix:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 146,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 112,
+    "object.id": 146,
+    "object.path": "music_mix:playback_0",
+    "object.serial": 162,
+    "port.alias": "Music Mix:playback_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "playback_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 147,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 112,
+    "object.id": 147,
+    "object.path": "music_mix:playback_1",
+    "object.serial": 163,
+    "port.alias": "Music Mix:playback_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "playback_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 148,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 112,
+    "object.id": 148,
+    "object.path": "music_mix:monitor_0",
+    "object.serial": 164,
+    "port.alias": "Music Mix:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 149,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 112,
+    "object.id": 149,
+    "object.path": "music_mix:monitor_1",
+    "object.serial": 165,
+    "port.alias": "Music Mix:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 151,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 115,
+    "object.id": 151,
+    "object.path": "mic_mix_capture:input_0",
+    "object.serial": 167,
+    "port.alias": "pw-loopback-4800:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 152,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 115,
+    "object.id": 152,
+    "object.path": "mic_mix_capture:input_1",
+    "object.serial": 168,
+    "port.alias": "pw-loopback-4800:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 153,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 115,
+    "object.id": 153,
+    "object.path": "mic_mix_capture:monitor_0",
+    "object.serial": 169,
+    "port.alias": "pw-loopback-4800:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 154,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 115,
+    "object.id": 154,
+    "object.path": "mic_mix_capture:monitor_1",
+    "object.serial": 170,
+    "port.alias": "pw-loopback-4800:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 155,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 114,
+    "object.id": 155,
+    "object.path": "mic_mix:capture_0",
+    "object.serial": 171,
+    "port.alias": "Mic Mix:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 156,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 114,
+    "object.id": 156,
+    "object.path": "mic_mix:capture_1",
+    "object.serial": 172,
+    "port.alias": "Mic Mix:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 157,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 118,
+    "object.id": 157,
+    "object.path": "instrument_mix_capture:input_0",
+    "object.serial": 173,
+    "port.alias": "pw-loopback-4807:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 158,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 118,
+    "object.id": 158,
+    "object.path": "instrument_mix_capture:input_1",
+    "object.serial": 174,
+    "port.alias": "pw-loopback-4807:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 159,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 118,
+    "object.id": 159,
+    "object.path": "instrument_mix_capture:monitor_0",
+    "object.serial": 175,
+    "port.alias": "pw-loopback-4807:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 160,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 118,
+    "object.id": 160,
+    "object.path": "instrument_mix_capture:monitor_1",
+    "object.serial": 176,
+    "port.alias": "pw-loopback-4807:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 161,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 117,
+    "object.id": 161,
+    "object.path": "instrument_mix:capture_0",
+    "object.serial": 177,
+    "port.alias": "Instrument Mix:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 162,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 117,
+    "object.id": 162,
+    "object.path": "instrument_mix:capture_1",
+    "object.serial": 178,
+    "port.alias": "Instrument Mix:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 163,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 123,
+    "object.id": 163,
+    "object.path": "mic_instrument_mix_capture:input_0",
+    "object.serial": 179,
+    "port.alias": "pw-loopback-4813:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 164,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 123,
+    "object.id": 164,
+    "object.path": "mic_instrument_mix_capture:input_1",
+    "object.serial": 180,
+    "port.alias": "pw-loopback-4813:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 165,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 123,
+    "object.id": 165,
+    "object.path": "mic_instrument_mix_capture:monitor_0",
+    "object.serial": 181,
+    "port.alias": "pw-loopback-4813:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 166,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 123,
+    "object.id": 166,
+    "object.path": "mic_instrument_mix_capture:monitor_1",
+    "object.serial": 182,
+    "port.alias": "pw-loopback-4813:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 167,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 122,
+    "object.id": 167,
+    "object.path": "mic_instrument_mix:capture_0",
+    "object.serial": 183,
+    "port.alias": "Mic Instrument Mix:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 168,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 122,
+    "object.id": 168,
+    "object.path": "mic_instrument_mix:capture_1",
+    "object.serial": 184,
+    "port.alias": "Mic Instrument Mix:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 169,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 128,
+    "object.id": 169,
+    "object.path": "stream_mix_capture:input_0",
+    "object.serial": 185,
+    "port.alias": "pw-loopback-4821:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 170,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 128,
+    "object.id": 170,
+    "object.path": "stream_mix_capture:input_1",
+    "object.serial": 186,
+    "port.alias": "pw-loopback-4821:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 171,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 128,
+    "object.id": 171,
+    "object.path": "stream_mix_capture:monitor_0",
+    "object.serial": 187,
+    "port.alias": "pw-loopback-4821:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 172,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 128,
+    "object.id": 172,
+    "object.path": "stream_mix_capture:monitor_1",
+    "object.serial": 188,
+    "port.alias": "pw-loopback-4821:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 173,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 127,
+    "object.id": 173,
+    "object.path": "stream_mix:capture_0",
+    "object.serial": 189,
+    "port.alias": "Stream Mix:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 174,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 127,
+    "object.id": 174,
+    "object.path": "stream_mix:capture_1",
+    "object.serial": 190,
+    "port.alias": "Stream Mix:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 175,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 136,
+    "object.id": 175,
+    "object.path": "input1_mix_capture:input_0",
+    "object.serial": 191,
+    "port.alias": "pw-loopback-4831:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 176,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 136,
+    "object.id": 176,
+    "object.path": "input1_mix_capture:input_1",
+    "object.serial": 192,
+    "port.alias": "pw-loopback-4831:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 177,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 136,
+    "object.id": 177,
+    "object.path": "input1_mix_capture:monitor_0",
+    "object.serial": 193,
+    "port.alias": "pw-loopback-4831:monitor_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.monitor": true,
+    "port.name": "monitor_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 178,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 136,
+    "object.id": 178,
+    "object.path": "input1_mix_capture:monitor_1",
+    "object.serial": 194,
+    "port.alias": "pw-loopback-4831:monitor_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.monitor": true,
+    "port.name": "monitor_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 179,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 135,
+    "object.id": 179,
+    "object.path": "input1_mix:capture_0",
+    "object.serial": 195,
+    "port.alias": "Input1 Mix:capture_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "capture_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 180,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 135,
+    "object.id": 180,
+    "object.path": "input1_mix:capture_1",
+    "object.serial": 196,
+    "port.alias": "Input1 Mix:capture_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "capture_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 181,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 98,
+    "link.output.node": 109,
+    "link.output.port": 119,
+    "link.passive": true,
+    "object.id": 181,
+    "object.serial": 197
+   },
+   "output-node-id": 109,
+   "output-port-id": 119,
+   "input-node-id": 96,
+   "input-port-id": 98,
+   "state": "active"
+  }
+ },
+ {
+  "id": 182,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 100,
+    "link.output.node": 109,
+    "link.output.port": 120,
+    "link.passive": true,
+    "object.id": 182,
+    "object.serial": 198
+   },
+   "output-node-id": 109,
+   "output-port-id": 120,
+   "input-node-id": 96,
+   "input-port-id": 100,
+   "state": "active"
+  }
+ },
+ {
+  "id": 183,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 98,
+    "link.output.node": 111,
+    "link.output.port": 125,
+    "link.passive": true,
+    "object.id": 183,
+    "object.serial": 199
+   },
+   "output-node-id": 111,
+   "output-port-id": 125,
+   "input-node-id": 96,
+   "input-port-id": 98,
+   "state": "active"
+  }
+ },
+ {
+  "id": 184,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 96,
+    "link.input.port": 100,
+    "link.output.node": 111,
+    "link.output.port": 126,
+    "link.passive": true,
+    "object.id": 184,
+    "object.serial": 200
+   },
+   "output-node-id": 111,
+   "output-port-id": 126,
+   "input-node-id": 96,
+   "input-port-id": 100,
+   "state": "active"
+  }
+ },
+ {
+  "id": 198,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_output_level",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Output Level Meter",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_output_level",
+    "node.nick": "output_level",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 198,
+    "object.serial": 214
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 199,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 198,
+    "object.id": 199,
+    "object.path": "ee_soe_output_level:input_0",
+    "object.serial": 215,
+    "port.alias": "output_level:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 200,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 198,
+    "object.id": 200,
+    "object.path": "ee_soe_output_level:input_1",
+    "object.serial": 216,
+    "port.alias": "output_level:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 201,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 198,
+    "object.id": 201,
+    "object.path": "ee_soe_output_level:output_0",
+    "object.serial": 217,
+    "port.alias": "output_level:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 202,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 198,
+    "object.id": 202,
+    "object.path": "ee_soe_output_level:output_1",
+    "object.serial": 218,
+    "port.alias": "output_level:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 203,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_spectrum",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Spectrum",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_spectrum",
+    "node.nick": "spectrum",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 203,
+    "object.serial": 219
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 204,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 203,
+    "object.id": 204,
+    "object.path": "ee_soe_spectrum:input_0",
+    "object.serial": 220,
+    "port.alias": "spectrum:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 205,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 203,
+    "object.id": 205,
+    "object.path": "ee_soe_spectrum:input_1",
+    "object.serial": 221,
+    "port.alias": "spectrum:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 206,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 203,
+    "object.id": 206,
+    "object.path": "ee_soe_spectrum:output_0",
+    "object.serial": 222,
+    "port.alias": "spectrum:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 207,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 203,
+    "object.id": 207,
+    "object.path": "ee_soe_spectrum:output_1",
+    "object.serial": 223,
+    "port.alias": "spectrum:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 244,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Source",
+    "media.name": "ee_test_signals",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Easy Effects Filter",
+    "node.driver": true,
+    "node.name": "ee_test_signals",
+    "node.want-driver": true,
+    "object.id": 244,
+    "object.serial": 260
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 245,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 244,
+    "object.id": 245,
+    "object.path": "ee_test_signals:output_0",
+    "object.serial": 261,
+    "port.alias": "Easy Effects Filter:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 246,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 244,
+    "object.id": 246,
+    "object.path": "ee_test_signals:output_1",
+    "object.serial": 262,
+    "port.alias": "Easy Effects Filter:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 211,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 65,
+    "link.input.port": 37,
+    "link.output.node": 198,
+    "link.output.port": 201,
+    "link.passive": true,
+    "object.id": 211,
+    "object.linger": false,
+    "object.serial": 263
+   },
+   "output-node-id": 198,
+   "output-port-id": 201,
+   "input-node-id": 65,
+   "input-port-id": 37,
+   "state": "active"
+  }
+ },
+ {
+  "id": 210,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 65,
+    "link.input.port": 47,
+    "link.output.node": 198,
+    "link.output.port": 202,
+    "link.passive": true,
+    "object.id": 210,
+    "object.linger": false,
+    "object.serial": 264
+   },
+   "output-node-id": 198,
+   "output-port-id": 202,
+   "input-node-id": 65,
+   "input-port-id": 47,
+   "state": "active"
+  }
+ },
+ {
+  "id": 209,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 198,
+    "link.input.port": 199,
+    "link.output.node": 203,
+    "link.output.port": 206,
+    "link.passive": true,
+    "object.id": 209,
+    "object.linger": false,
+    "object.serial": 265
+   },
+   "output-node-id": 203,
+   "output-port-id": 206,
+   "input-node-id": 198,
+   "input-port-id": 199,
+   "state": "active"
+  }
+ },
+ {
+  "id": 208,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 198,
+    "link.input.port": 200,
+    "link.output.node": 203,
+    "link.output.port": 207,
+    "link.passive": true,
+    "object.id": 208,
+    "object.linger": false,
+    "object.serial": 266
+   },
+   "output-node-id": 203,
+   "output-port-id": 207,
+   "input-node-id": 198,
+   "input-port-id": 200,
+   "state": "active"
+  }
+ },
+ {
+  "id": 212,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_equalizer",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Equalizer (Speakers)",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_equalizer",
+    "node.nick": "equalizer",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 212,
+    "object.serial": 267
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 216,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 212,
+    "object.id": 216,
+    "object.path": "ee_soe_equalizer:input_0",
+    "object.serial": 268,
+    "port.alias": "equalizer:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 218,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 212,
+    "object.id": 218,
+    "object.path": "ee_soe_equalizer:input_1",
+    "object.serial": 269,
+    "port.alias": "equalizer:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 215,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 212,
+    "object.id": 215,
+    "object.path": "ee_soe_equalizer:output_0",
+    "object.serial": 270,
+    "port.alias": "equalizer:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 217,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 212,
+    "object.id": 217,
+    "object.path": "ee_soe_equalizer:output_1",
+    "object.serial": 271,
+    "port.alias": "equalizer:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 214,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 203,
+    "link.input.port": 204,
+    "link.output.node": 212,
+    "link.output.port": 215,
+    "link.passive": true,
+    "object.id": 214,
+    "object.linger": false,
+    "object.serial": 272
+   },
+   "output-node-id": 212,
+   "output-port-id": 215,
+   "input-node-id": 203,
+   "input-port-id": 204,
+   "state": "active"
+  }
+ },
+ {
+  "id": 213,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 203,
+    "link.input.port": 205,
+    "link.output.node": 212,
+    "link.output.port": 217,
+    "link.passive": true,
+    "object.id": 213,
+    "object.linger": false,
+    "object.serial": 273
+   },
+   "output-node-id": 212,
+   "output-port-id": 217,
+   "input-node-id": 203,
+   "input-port-id": 205,
+   "state": "active"
+  }
+ },
+ {
+  "id": 219,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_equalizer",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Equalizer (Speakers)",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_equalizer",
+    "node.nick": "equalizer",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 219,
+    "object.serial": 274
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 223,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 219,
+    "object.id": 223,
+    "object.path": "ee_soe_equalizer:input_0",
+    "object.serial": 275,
+    "port.alias": "equalizer:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 225,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 219,
+    "object.id": 225,
+    "object.path": "ee_soe_equalizer:input_1",
+    "object.serial": 276,
+    "port.alias": "equalizer:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 222,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 219,
+    "object.id": 222,
+    "object.path": "ee_soe_equalizer:output_0",
+    "object.serial": 277,
+    "port.alias": "equalizer:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 224,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 219,
+    "object.id": 224,
+    "object.path": "ee_soe_equalizer:output_1",
+    "object.serial": 278,
+    "port.alias": "equalizer:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 221,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 212,
+    "link.input.port": 216,
+    "link.output.node": 219,
+    "link.output.port": 222,
+    "link.passive": true,
+    "object.id": 221,
+    "object.linger": false,
+    "object.serial": 279
+   },
+   "output-node-id": 219,
+   "output-port-id": 222,
+   "input-node-id": 212,
+   "input-port-id": 216,
+   "state": "active"
+  }
+ },
+ {
+  "id": 220,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 212,
+    "link.input.port": 218,
+    "link.output.node": 219,
+    "link.output.port": 224,
+    "link.passive": true,
+    "object.id": 220,
+    "object.linger": false,
+    "object.serial": 280
+   },
+   "output-node-id": 219,
+   "output-port-id": 224,
+   "input-node-id": 212,
+   "input-port-id": 218,
+   "state": "active"
+  }
+ },
+ {
+  "id": 235,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_compressor",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Compressor (Speakers)",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_compressor",
+    "node.nick": "compressor",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 235,
+    "object.serial": 281
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 239,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 239,
+    "object.path": "ee_soe_compressor:input_0",
+    "object.serial": 282,
+    "port.alias": "compressor:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 238,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 238,
+    "object.path": "ee_soe_compressor:input_1",
+    "object.serial": 283,
+    "port.alias": "compressor:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 237,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "PROBE_FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 237,
+    "object.path": "ee_soe_compressor:input_2",
+    "object.serial": 284,
+    "port.alias": "compressor:probe_FL",
+    "port.direction": "in",
+    "port.group": "stream.2",
+    "port.id": 2,
+    "port.name": "probe_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 243,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "PROBE_FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 243,
+    "object.path": "ee_soe_compressor:input_3",
+    "object.serial": 285,
+    "port.alias": "compressor:probe_FR",
+    "port.direction": "in",
+    "port.group": "stream.3",
+    "port.id": 3,
+    "port.name": "probe_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 236,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 236,
+    "object.path": "ee_soe_compressor:output_0",
+    "object.serial": 286,
+    "port.alias": "compressor:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 242,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 235,
+    "object.id": 242,
+    "object.path": "ee_soe_compressor:output_1",
+    "object.serial": 287,
+    "port.alias": "compressor:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 226,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 219,
+    "link.input.port": 223,
+    "link.output.node": 235,
+    "link.output.port": 236,
+    "link.passive": true,
+    "object.id": 226,
+    "object.linger": false,
+    "object.serial": 288
+   },
+   "output-node-id": 235,
+   "output-port-id": 236,
+   "input-node-id": 219,
+   "input-port-id": 223,
+   "state": "active"
+  }
+ },
+ {
+  "id": 232,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 219,
+    "link.input.port": 225,
+    "link.output.node": 235,
+    "link.output.port": 242,
+    "link.passive": true,
+    "object.id": 232,
+    "object.linger": false,
+    "object.serial": 289
+   },
+   "output-node-id": 235,
+   "output-port-id": 242,
+   "input-node-id": 219,
+   "input-port-id": 225,
+   "state": "active"
+  }
+ },
+ {
+  "id": 234,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "application.id": "com.github.wwmm.easyeffects",
+    "client.id": 94,
+    "media.category": "Filter",
+    "media.name": "ee_soe_equalizer",
+    "media.role": "DSP",
+    "media.type": "Audio",
+    "node.description": "Equalizer (Speakers)",
+    "node.driver-id": 66,
+    "node.name": "ee_soe_equalizer",
+    "node.nick": "equalizer",
+    "node.passive": true,
+    "node.want-driver": true,
+    "object.id": 234,
+    "object.serial": 290
+   },
+   "params": {
+    "Format": []
+   }
+  }
+ },
+ {
+  "id": 231,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 234,
+    "object.id": 231,
+    "object.path": "ee_soe_equalizer:input_0",
+    "object.serial": 291,
+    "port.alias": "equalizer:input_FL",
+    "port.direction": "in",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "input_FL"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 233,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 234,
+    "object.id": 233,
+    "object.path": "ee_soe_equalizer:input_1",
+    "object.serial": 292,
+    "port.alias": "equalizer:input_FR",
+    "port.direction": "in",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "input_FR"
+   },
+   "direction": "input"
+  }
+ },
+ {
+  "id": 230,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 234,
+    "object.id": 230,
+    "object.path": "ee_soe_equalizer:output_0",
+    "object.serial": 293,
+    "port.alias": "equalizer:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 229,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 234,
+    "object.id": 229,
+    "object.path": "ee_soe_equalizer:output_1",
+    "object.serial": 294,
+    "port.alias": "equalizer:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.1",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 228,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 235,
+    "link.input.port": 239,
+    "link.output.node": 234,
+    "link.output.port": 230,
+    "link.passive": true,
+    "object.id": 228,
+    "object.linger": false,
+    "object.serial": 295
+   },
+   "output-node-id": 234,
+   "output-port-id": 230,
+   "input-node-id": 235,
+   "input-port-id": 239,
+   "state": "active"
+  }
+ },
+ {
+  "id": 241,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 235,
+    "link.input.port": 238,
+    "link.output.node": 234,
+    "link.output.port": 229,
+    "link.passive": true,
+    "object.id": 241,
+    "object.linger": false,
+    "object.serial": 296
+   },
+   "output-node-id": 234,
+   "output-port-id": 229,
+   "input-node-id": 235,
+   "input-port-id": 238,
+   "state": "active"
+  }
+ },
+ {
+  "id": 227,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 234,
+    "link.input.port": 231,
+    "link.output.node": 96,
+    "link.output.port": 101,
+    "link.passive": true,
+    "object.id": 227,
+    "object.linger": false,
+    "object.serial": 297
+   },
+   "output-node-id": 96,
+   "output-port-id": 101,
+   "input-node-id": 234,
+   "input-port-id": 231,
+   "state": "active"
+  }
+ },
+ {
+  "id": 240,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 94,
+    "factory.id": 21,
+    "link.input.node": 234,
+    "link.input.port": 233,
+    "link.output.node": 96,
+    "link.output.port": 102,
+    "link.passive": true,
+    "object.id": 240,
+    "object.linger": false,
+    "object.serial": 298
+   },
+   "output-node-id": 96,
+   "output-port-id": 102,
+   "input-node-id": 234,
+   "input-port-id": 233,
+   "state": "active"
+  }
+ },
+ {
+  "id": 249,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 115,
+    "link.input.port": 151,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 249,
+    "object.linger": true,
+    "object.serial": 320
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 115,
+   "input-port-id": 151,
+   "state": "active"
+  }
+ },
+ {
+  "id": 250,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 115,
+    "link.input.port": 152,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 250,
+    "object.linger": true,
+    "object.serial": 322
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 115,
+   "input-port-id": 152,
+   "state": "active"
+  }
+ },
+ {
+  "id": 251,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 118,
+    "link.input.port": 157,
+    "link.output.node": 66,
+    "link.output.port": 76,
+    "object.id": 251,
+    "object.linger": true,
+    "object.serial": 324
+   },
+   "output-node-id": 66,
+   "output-port-id": 76,
+   "input-node-id": 118,
+   "input-port-id": 157,
+   "state": "active"
+  }
+ },
+ {
+  "id": 252,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 118,
+    "link.input.port": 158,
+    "link.output.node": 66,
+    "link.output.port": 77,
+    "object.id": 252,
+    "object.linger": true,
+    "object.serial": 326
+   },
+   "output-node-id": 66,
+   "output-port-id": 77,
+   "input-node-id": 118,
+   "input-port-id": 158,
+   "state": "active"
+  }
+ },
+ {
+  "id": 253,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 123,
+    "link.input.port": 163,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 253,
+    "object.linger": true,
+    "object.serial": 328
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 123,
+   "input-port-id": 163,
+   "state": "active"
+  }
+ },
+ {
+  "id": 254,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 123,
+    "link.input.port": 164,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 254,
+    "object.linger": true,
+    "object.serial": 330
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 123,
+   "input-port-id": 164,
+   "state": "active"
+  }
+ },
+ {
+  "id": 255,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 123,
+    "link.input.port": 163,
+    "link.output.node": 66,
+    "link.output.port": 76,
+    "object.id": 255,
+    "object.linger": true,
+    "object.serial": 332
+   },
+   "output-node-id": 66,
+   "output-port-id": 76,
+   "input-node-id": 123,
+   "input-port-id": 163,
+   "state": "active"
+  }
+ },
+ {
+  "id": 256,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 123,
+    "link.input.port": 164,
+    "link.output.node": 66,
+    "link.output.port": 77,
+    "object.id": 256,
+    "object.linger": true,
+    "object.serial": 334
+   },
+   "output-node-id": 66,
+   "output-port-id": 77,
+   "input-node-id": 123,
+   "input-port-id": 164,
+   "state": "active"
+  }
+ },
+ {
+  "id": 257,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 169,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 257,
+    "object.linger": true,
+    "object.serial": 336
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 128,
+   "input-port-id": 169,
+   "state": "active"
+  }
+ },
+ {
+  "id": 258,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 170,
+    "link.output.node": 66,
+    "link.output.port": 75,
+    "object.id": 258,
+    "object.linger": true,
+    "object.serial": 338
+   },
+   "output-node-id": 66,
+   "output-port-id": 75,
+   "input-node-id": 128,
+   "input-port-id": 170,
+   "state": "active"
+  }
+ },
+ {
+  "id": 259,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 169,
+    "link.output.node": 66,
+    "link.output.port": 76,
+    "object.id": 259,
+    "object.linger": true,
+    "object.serial": 340
+   },
+   "output-node-id": 66,
+   "output-port-id": 76,
+   "input-node-id": 128,
+   "input-port-id": 169,
+   "state": "active"
+  }
+ },
+ {
+  "id": 260,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 170,
+    "link.output.node": 66,
+    "link.output.port": 77,
+    "object.id": 260,
+    "object.linger": true,
+    "object.serial": 342
+   },
+   "output-node-id": 66,
+   "output-port-id": 77,
+   "input-node-id": 128,
+   "input-port-id": 170,
+   "state": "active"
+  }
+ },
+ {
+  "id": 261,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 169,
+    "link.output.node": 111,
+    "link.output.port": 125,
+    "object.id": 261,
+    "object.linger": true,
+    "object.serial": 344
+   },
+   "output-node-id": 111,
+   "output-port-id": 125,
+   "input-node-id": 128,
+   "input-port-id": 169,
+   "state": "active"
+  }
+ },
+ {
+  "id": 262,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 128,
+    "link.input.port": 170,
+    "link.output.node": 111,
+    "link.output.port": 126,
+    "object.id": 262,
+    "object.linger": true,
+    "object.serial": 346
+   },
+   "output-node-id": 111,
+   "output-port-id": 126,
+   "input-node-id": 128,
+   "input-port-id": 170,
+   "state": "active"
+  }
+ },
+ {
+  "id": 263,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 136,
+    "link.input.port": 175,
+    "link.output.node": 66,
+    "link.output.port": 74,
+    "object.id": 263,
+    "object.linger": true,
+    "object.serial": 348
+   },
+   "output-node-id": 66,
+   "output-port-id": 74,
+   "input-node-id": 136,
+   "input-port-id": 175,
+   "state": "active"
+  }
+ },
+ {
+  "id": 264,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "factory.id": 21,
+    "link.input.node": 136,
+    "link.input.port": 176,
+    "link.output.node": 66,
+    "link.output.port": 74,
+    "object.id": 264,
+    "object.linger": true,
+    "object.serial": 350
+   },
+   "output-node-id": 66,
+   "output-port-id": 74,
+   "input-node-id": 136,
+   "input-port-id": 176,
+   "state": "active"
+  }
+ },
+ {
+  "id": 267,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "application.icon-name": "applications-games",
+    "application.language": "en_US.UTF-8",
+    "application.name": "Browser",
+    "application.process.binary": "browser",
+    "application.process.host": "studio-pc",
+    "application.process.id": 5754,
+    "application.process.machine-id": "00000000000000000000000000000000",
+    "application.process.session-id": 3,
+    "application.process.user": "user",
+    "client.api": "pipewire-pulse",
+    "client.id": 266,
+    "clock.quantum-limit": 8192,
+    "factory.id": 7,
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.class": "Stream/Output/Audio",
+    "media.name": "Audio Stream",
+    "node.autoconnect": true,
+    "node.driver-id": 66,
+    "node.latency": "256/48000",
+    "node.loop.name": "data-loop.0",
+    "node.name": "Browser",
+    "node.rate": "1/48000",
+    "node.want-driver": true,
+    "object.id": 267,
+    "object.register": false,
+    "object.serial": 392,
+    "pipewire.snap.audio.playback": true,
+    "pipewire.snap.audio.record": false,
+    "pipewire.snap.id": "browser",
+    "port.group": "stream.0",
+    "pulse.attr.maxlength": 4194304,
+    "pulse.attr.minreq": 2048,
+    "pulse.attr.prebuf": 2888,
+    "pulse.attr.tlength": 4928,
+    "pulse.corked": false,
+    "pulse.server.type": "unix",
+    "stream.is-live": true,
+    "target.object": "desktop_mix",
+    "window.x11.display": ":0"
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 48000
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 269,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 267,
+    "object.id": 269,
+    "object.path": "Browser:output_0",
+    "object.serial": 393,
+    "port.alias": "Browser:output_FL",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 271,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 267,
+    "object.id": 271,
+    "object.path": "Browser:output_1",
+    "object.serial": 394,
+    "port.alias": "Browser:output_FR",
+    "port.direction": "out",
+    "port.group": "stream.0",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 268,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 110,
+    "link.input.port": 142,
+    "link.output.node": 267,
+    "link.output.port": 269,
+    "object.id": 268,
+    "object.serial": 395
+   },
+   "output-node-id": 267,
+   "output-port-id": 269,
+   "input-node-id": 110,
+   "input-port-id": 142,
+   "state": "active"
+  }
+ },
+ {
+  "id": 270,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 110,
+    "link.input.port": 143,
+    "link.output.node": 267,
+    "link.output.port": 271,
+    "object.id": 270,
+    "object.serial": 396
+   },
+   "output-node-id": 267,
+   "output-port-id": 271,
+   "input-node-id": 110,
+   "input-port-id": 143,
+   "state": "active"
+  }
+ },
+ {
+  "id": 186,
+  "type": "PipeWire:Interface:Node",
+  "info": {
+   "props": {
+    "adapt.follower.spa-node": "",
+    "application.name": "Music Player",
+    "audio.adapt.follower": "",
+    "client.id": 188,
+    "clock.quantum-limit": 8192,
+    "factory.id": 7,
+    "factory.mode": "split",
+    "library.name": "audioconvert/libspa-audioconvert",
+    "media.category": "Playback",
+    "media.class": "Stream/Output/Audio",
+    "media.name": "Music Player",
+    "media.role": "Music",
+    "media.type": "Audio",
+    "node.autoconnect": true,
+    "node.name": "music_player",
+    "node.rate": "1/44100",
+    "node.want-driver": true,
+    "object.id": 186,
+    "object.register": false,
+    "object.serial": 415,
+    "stream.is-live": true
+   },
+   "params": {
+    "Format": [
+     {
+      "rate": 44100
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": 196,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FL",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 186,
+    "object.id": 196,
+    "object.path": "music_player:output_0",
+    "object.serial": 416,
+    "port.alias": "music_player:output_FL",
+    "port.direction": "out",
+    "port.id": 0,
+    "port.name": "output_FL"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 265,
+  "type": "PipeWire:Interface:Port",
+  "info": {
+   "props": {
+    "audio.channel": "FR",
+    "format.dsp": "32 bit float mono audio",
+    "node.id": 186,
+    "object.id": 265,
+    "object.path": "music_player:output_1",
+    "object.serial": 417,
+    "port.alias": "music_player:output_FR",
+    "port.direction": "out",
+    "port.id": 1,
+    "port.name": "output_FR"
+   },
+   "direction": "output"
+  }
+ },
+ {
+  "id": 197,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 110,
+    "link.input.port": 142,
+    "link.output.node": 186,
+    "link.output.port": 196,
+    "object.id": 197,
+    "object.serial": 418
+   },
+   "output-node-id": 186,
+   "output-port-id": 196,
+   "input-node-id": 110,
+   "input-port-id": 142,
+   "state": "paused"
+  }
+ },
+ {
+  "id": 248,
+  "type": "PipeWire:Interface:Link",
+  "info": {
+   "props": {
+    "client.id": 33,
+    "factory.id": 21,
+    "link.input.node": 110,
+    "link.input.port": 143,
+    "link.output.node": 186,
+    "link.output.port": 265,
+    "object.id": 248,
+    "object.serial": 419
+   },
+   "output-node-id": 186,
+   "output-port-id": 265,
+   "input-node-id": 110,
+   "input-port-id": 143,
+   "state": "paused"
+  }
+ }
+]

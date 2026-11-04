@@ -1,0 +1,2470 @@
+"use strict";
+// The board: draws the model the server sends, and sends back what the user does (PLAN §2-4).
+// Messages in:  {type: "state", model, problems, workspace, mode} · {type: "toast", text, level}
+// Messages out: {op: "connect", from, to} · {op: "disconnect", wire} · {op: "place", cards}
+//               {op: "rename", key, title} · {op: "forget-name", key, name} · {op: "hide", key, hidden}
+//               {op: "view", view}
+
+const PB = (() => {
+  const $ = (id) => document.getElementById(id);
+  const board = $("board"), grid = $("grid"), world = $("world"), cardsEl = $("cards"), layer = $("wire-layer");
+  const SVG = "http://www.w3.org/2000/svg";
+  const KIND = { hardware: "Hardware", virtual: "Virtual device", app: "App", effect: "Effect",
+                 plugin: "Plugin" };
+  const ROLE = { interface: "audio interface", mic: "microphone", speaker: "speaker",
+                 playback: "playing sound", recording: "recording" };
+  const ICON = {
+    mic: '<rect x="5" y="1.5" width="4" height="7" rx="2"/><path d="M3 7a4 4 0 0 0 8 0M7 11v2"/>',
+    speaker: '<path d="M2 5h2.5L8 2v10L4.5 9H2z"/><path d="M10.5 4.5a3.5 3.5 0 0 1 0 5"/>',
+    interface: '<rect x="1.5" y="3.5" width="11" height="7" rx="1.5"/><circle cx="5" cy="7" r="1.3"/><circle cx="9" cy="7" r="1.3"/>',
+    app: '<rect x="1.5" y="2.5" width="11" height="9" rx="1.5"/><path d="M1.5 5h11"/>',
+    effect: '<path d="M3 2v10M7 2v10M11 2v10"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="4.5" r="1.4"/><circle cx="11" cy="9" r="1.4"/>',
+    plugin: '<rect x="2" y="4" width="10" height="8" rx="1.5"/><path d="M5 4V2.2h4V4"/>',
+  };
+  const S = {
+    model: { cards: [], wires: [], clock: null }, problems: [], ws: { cards: {} }, mode: "connecting",
+    view: { x: 0, y: 0, z: 1 }, pos: {}, offsets: {}, sizes: {}, els: {}, wireEls: {},
+    selected: null, drag: null, queued: null, socket: null, errors: [], moved: false, hovered: [null, null],
+  };
+  const colors = {};
+
+  // ---- small helpers ------------------------------------------------------------------------
+  function h(tag, attrs = {}, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "text") el.textContent = v; else if (v !== false && v != null) el.setAttribute(k, v);
+    }
+    el.append(...kids.filter((k) => k != null));
+    return el;
+  }
+  function s(tag, attrs = {}) {
+    const el = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  }
+  const byKey = () => Object.fromEntries(S.model.cards.map((c) => [c.key, c]));
+  const saved = (key) => S.ws.cards?.[key] || {};
+  const isHidden = (c) => saved(c.key).hidden ?? c.hidden;
+  const visible = () => S.model.cards.filter((c) => !isHidden(c));
+  const titleOf = (c) => saved(c.key).nick || c.title;
+  // Cards sit on the board's grid: every 14 px, so corners land on the dots or halfway between.
+  const GRID = 14, snap = (v) => Math.round(v / GRID) * GRID;
+  // The view as drawn: its offset in whole pixels (applyView).
+  const toWorld = (sx, sy) => ({ x: (sx - Math.round(S.view.x)) / S.view.z, y: (sy - Math.round(S.view.y)) / S.view.z });
+  const toScreen = (p) => ({ x: p.x * S.view.z + Math.round(S.view.x), y: p.y * S.view.z + Math.round(S.view.y) });
+
+  function visibleWires() {
+    const shown = new Set(visible().map((c) => c.key));
+    return S.model.wires.filter((w) => shown.has(w.from[0]) && shown.has(w.to[0]));
+  }
+
+  // ---- talking to the server ----------------------------------------------------------------
+  let socket = null, retry = 500;
+  function connect() {
+    if (!location.protocol.startsWith("http")) return;
+    socket = new WebSocket(`ws://${location.host}/ws`);
+    socket.binaryType = "arraybuffer";
+    socket.onopen = () => { retry = 500; sayVisible(); };
+    socket.onmessage = (e) => (e.data instanceof ArrayBuffer ? liveFrame(e.data) : receive(JSON.parse(e.data)));
+    socket.onclose = () => {
+      if (S.bye) return setStatus("down", "PipeBoard has quit");
+      setStatus("down", "reconnecting…");
+      setTimeout(connect, retry = Math.min(retry * 2, 5000));
+    };
+  }
+  function send(msg) {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    else if (S.mode !== "preview") toast("Not connected to PipeBoard; try again in a moment.");
+  }
+  function receive(msg) {
+    if (msg.type === "toast") return toast(msg.text, msg.level);
+    if (msg.type === "bye") { S.bye = true; window.close(); return; }  // PipeBoard is quitting
+    if (msg.type === "plan") return showPlan(msg);
+    if (msg.type === "scope") { newSources(msg.sources, msg.fresh); return; }
+    if (msg.type === "plugins") { S.pluginList = msg.list; S.picker?.(); return; }
+    if (msg.type === "eq-pcm") { EQ.pcm(msg.key, msg.pcm); return; }
+    if (msg.type === "dyn-peaks") { DYN.peaks(msg.key, msg.peaks); return; }
+    if (msg.type !== "state") return;
+    if (S.drag || S.editing) { S.queued = msg; return; }
+    load(msg);
+  }
+
+  // ---- loading and drawing the model --------------------------------------------------------
+  function load(msg) {
+    S.lastState = msg;
+    const first = !S.model.cards.length && !S.ws.view;
+    S.problems = msg.problems || []; S.ws = msg.workspace || { cards: {} };
+    $("tidy-portals").checked = S.ws.tidy_portals !== false;
+    S.profile = msg.profile || null;
+    S.liveOn = msg.live ? msg.live.on : S.liveOn;
+    S.autostart = !!msg.autostart;
+    S.takeover = msg.takeover || {};
+    S.editors = msg.editors || [];
+    if (msg.live?.sources?.length) S.liveSources = msg.live.sources;
+    $("live").setAttribute("aria-pressed", String(!!S.liveOn));
+    S.model = withMissing(msg.model, S.profile);
+    S.ws.cards = S.ws.cards || {};
+    S.mode = msg.mode || S.mode;
+    setStatus(S.mode === "live" ? "live" : "fixture",
+              { live: "live", fixture: "fixture graph", preview: "preview" }[S.mode] || S.mode);
+    showClock(S.model.clock);
+    // Saved places, except just after a Tidy: a state the server sent before it saved them would
+    // put cards back for a moment (owner: they jittered); the layout applied here stands until the
+    // board shows it saved (or 3 s).
+    const placing = S.placing && performance.now() - S.placing.at < 3000 ? S.placing.cards : null;
+    for (const c of S.model.cards) {
+      const p = saved(c.key), mine = placing?.[c.key];
+      if (p.x == null || (mine && (mine.x !== p.x || mine.y !== p.y))) continue;
+      S.pos[c.key] = { x: p.x, y: p.y };
+    }
+    if (placing && Object.entries(placing).every(([k, q]) => saved(k).x === q.x && saved(k).y === q.y)) S.placing = null;
+    render();
+    if (S.ws.view && first) { S.view = { ...S.ws.view }; applyView(); }
+    else if (first) fit(false);
+    const eqKey = Object.keys(S.ws.devices || {}).find((k) => EQ.isOpen(k));
+    if (eqKey) EQ.sync(eqKey, S.ws.devices[eqKey]);
+    else if (S.eqOpen && !S.ws.devices?.[S.eqOpen]) EQ.close();  // it was deleted
+    const dynKey = Object.keys(S.ws.devices || {}).find((k) => DYN.isOpen(k));
+    if (dynKey) DYN.sync(dynKey, S.ws.devices[dynKey]);
+    else if (S.dynOpen && !S.ws.devices?.[S.dynOpen]) DYN.close();
+  }
+
+  // Devices a profile names that are not on the system: drawn from their saved shape, dimmed,
+  // with the wires that wait for them drawn as ghosts.
+  function withMissing(model, profile) {
+    const socks = (list) => list.map((x) => ({ ...x, ports: Array(x.n).fill(0), names: [] }));
+    const gone = (profile?.missing || []).map((m) => ({
+      key: m.key, title: m.title, kind: m.kind, role: m.role, missing: true, hidden: false,
+      names: [], owned: false, rate: null, clock: null, detail: "not on the system",
+      inputs: socks(m.inputs), outputs: socks(m.outputs) }));
+    const uniq = (a) => [...new Set(a)];
+    const ghosts = (profile?.ghosts || []).map((w) => ({
+      ...w, id: `ghost:${w.from.join(":")}>${w.to.join(":")}`, ghost: true, links: [],
+      fromPorts: uniq(w.pairs.map((p) => p[0])), toPorts: uniq(w.pairs.map((p) => p[1])),
+      partial: false, failed: false, ch: "", chEnd: "" }));
+    return { ...model, cards: [...model.cards, ...gone], wires: [...model.wires, ...ghosts] };
+  }
+
+  function render() {
+    cardsEl.textContent = "";
+    cardsEl.append(h("div", { id: "landing", class: "landing", hidden: "" }));
+    S.els = {};
+    const wired = new Set();
+    for (const w of S.model.wires) { wired.add(w.from.join("|")); wired.add(w.to.join("|")); }
+    const flagged = problemCards();
+    for (const c of visible()) cardsEl.append(S.els[c.key] = cardEl(c, wired, flagged[c.key]));
+    // Widths round up to the grid too (heights already are, by the CSS's 28/14 px rhythm).
+    for (const el of Object.values(S.els)) el.style.width = `${Math.ceil(el.offsetWidth / GRID) * GRID}px`;
+    // An EQ's curve fills its box: the card snapped to the grid can be wider than the curve was
+    // drawn (owner: a gap on the right).
+    for (const wrap of cardsEl.querySelectorAll(".eq-mini-wrap")) eqMini(wrap, wrap.closest(".card").dataset.key);
+    measure();
+    const missing = visible().filter((c) => !S.pos[c.key]).map((c) => c.key);
+    if (missing.length) placeNew(missing);
+    for (const c of visible()) placeCard(c.key);
+    drawWires();
+    renderProblems();
+    renderProfile();
+    $("empty").hidden = S.model.cards.length > 0;
+  }
+
+  function cardEl(c, wired, flags) {
+    const role = c.role || (c.kind === "effect" ? "effect" : c.kind === "app" ? "app" : "");
+    const icon = ICON[role] || ICON[c.kind] || "";
+    const title = h("span", { class: "title", text: titleOf(c) });
+    const head = h("header", {},
+      h("span", { class: "pin" }),
+      title);
+    if (icon) head.insertAdjacentHTML("beforeend", `<svg class="icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`);
+    head.dataset.tip = cardTip(c);
+    const col = (side, socks) => h("div", { class: `col ${side}` },
+      ...socks.map((sk) => sockEl(c, sk, side, wired.has(`${c.key}|${sk.id}`))));
+    const body = h("div", { class: "body" }, col("in", c.inputs), col("out", c.outputs));
+    const dev = S.ws.devices?.[c.key];
+    const editing = EQ.isOpen(c.key) || DYN.isOpen(c.key);  // its panel is open: the card glows
+    const el = h("div", { class: `card k-${c.kind}${c.missing ? " missing" : ""}${editing ? " editing" : ""}`, "data-key": c.key }, head, body,
+                 dev?.type === "gain" && !c.missing ? gainRow(c.key, dev) : null,
+                 DYN.KINDS[dev?.type] && !c.missing ? dynRow(c.key, dev) : null,
+                 dev?.type === "plugin" && !c.missing ? pluginFoot(c.key, dev) : null,
+                 dev?.type === "eq" && !c.missing ? eqRow(c.key, dev) : null);
+    if (flags && !c.missing) {
+      // Above the card, never inside it: a problem must not resize what it points at.
+      el.append(h("div", { class: `badge sev-${flags.severity}`, "data-tip": flags.tip },
+                  h("span", { class: "sev-dot" }),
+                  h("span", { class: "label", text: `${flags.label}${flags.more ? ` +${flags.more}` : ""}` })));
+    }
+    if (c.missing) {
+      el.append(h("span", { class: "warn", "data-tip": "Not on the system. Its connections wait for it.\nRight-click to use another device.", text: "!" }));
+    }
+    title.addEventListener("dblclick", (e) => { e.stopPropagation(); startRename(c.key); });
+    return el;
+  }
+
+  // A gain card's level (and a limiter's ceiling, a compressor's or gate's threshold): a dB box
+  // (field.js: scroll or ↑/↓ edit the number, Enter applies, Esc or clicking away cancels).
+  // Levels: −144 (silence in practice) … +24 dB, one decimal at most, clamped on Enter; "-inf" is
+  // a way to type −144 (the lowest).
+  const GAIN_BOX = { prop: "gain_db", lo: -144, hi: 24, dflt: 0, label: "Level", aria: "Gain in dB",
+                     op: (key, db) => ({ op: "set-gain", key, db }),
+                     tip: "Gain in dB (−144 … +24) · Scroll or ↑/↓ to change (Shift: finer) · Enter to apply · Esc or click away to cancel" };
+  const showDb = (db) => {
+    const one = (v) => (Number.isInteger(v) ? String(Math.abs(v)) : Math.abs(v).toFixed(1));
+    return db > 0 ? `+${one(db)}` : db < 0 ? `−${one(db)}` : "0";
+  };
+  function dbRow(key, dev, o) {
+    const level = () => (typeof dev[o.prop] === "number" ? dev[o.prop] : dev[o.prop] === null ? o.lo : o.dflt);
+    const field = numField({
+      value: level, show: showDb, parse: parseNum, step: STEPS.add, lo: o.lo, hi: o.hi,
+      fit: (db) => Math.max(o.lo, Math.min(o.hi, Math.round(db * 10) / 10)),
+      apply: (db) => { dev[o.prop] = db; send(o.op(key, db)); if (DYN.isOpen(key)) DYN.sync(key, dev, true); },
+      cls: "gain-field", aria: o.aria,
+      // While the box has the focus, board updates wait: a redraw would replace it mid-edit.
+      focus: () => { S.editing = true; },
+      done: () => {
+        S.editing = false;
+        if (S.queued && !S.drag) { const q = S.queued; S.queued = null; load(q); }
+      },
+    });
+    const row = h("div", { class: "gain-row", "data-tip": o.tip },
+                  h("span", { class: "gain-label", text: o.label }), field, h("span", { class: "gain-unit", text: "dB" }));
+    row.addEventListener("mousedown", (e) => e.stopPropagation());  // working the box never drags the card
+    return row;
+  }
+
+  // ---- a card's buttons: Bypass and the gear (its panel or window) are icons (owner), with a
+  // tooltip and a name for screen readers; a word otherwise (Soft) ---------------------------
+  const BTN_ICON = {
+    // The power symbol (owner's pick): lit in the card's colour while the effect is on, dim when
+    // bypassed, as a DAW's device switch.
+    bypass: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">'
+      + '<path d="M8 2.2v5.2"/><path d="M4.4 4.4a5.4 5.4 0 1 0 7.2 0"/></svg>',  // ink centred in 16 × 16
+    gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+      + '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  };
+  function cardBtn({ icon, text, label, tip, pressed, action, cls = "" }) {
+    const b = h("button", { type: "button", class: `card-btn ${cls}${icon ? " glyph" : ""}`, text: icon ? null : text,
+                            "aria-label": label || text, "data-tip": tip, "aria-pressed": String(!!pressed) });
+    if (icon) b.innerHTML = BTN_ICON[icon];
+    b.addEventListener("click", action);
+    return b;
+  }
+  const bypassBtn = (on, action) => cardBtn({ icon: "bypass", cls: "bypass", label: "Bypass", pressed: on, action,
+    tip: on ? "Off (bypassed): the sound passes through untouched · click to turn it on" : "On · click to bypass it (the sound passes through untouched)" });
+  const gearBtn = (open, what, action) => cardBtn({ icon: "gear", label: open ? `Close ${what}` : `Open ${what}`,
+    tip: open ? `Close ${what}` : `Open ${what}`, pressed: open, action });
+
+  // ---- the EQ (M11): a small curve on the card; the gear opens the panel (eq.js) -------------
+  const rateNow = () => S.model.clock?.rate || 48000;
+  const eqMini = (wrap, key) => wrap?.replaceChildren(EQ.mini(S.ws.devices[key], rateNow(), wrap.clientWidth || undefined));
+  function eqRow(key, dev) {
+    const curve = h("div", { class: "eq-mini-wrap", "data-tip": "Click to edit the EQ" }, EQ.mini(dev, rateNow()));
+    curve.addEventListener("click", () => openEq(key));
+    const open = EQ.isOpen(key);
+    const box = h("div", { class: "eq-row" }, curve, h("div", { class: "card-foot" },
+      bypassBtn(!!dev.bypass, () => eqBypass(key)),
+      gearBtn(open, "the EQ", () => (open ? EQ.close() : openEq(key)))));
+    box.addEventListener("mousedown", (e) => e.stopPropagation());  // working it never drags the card
+    return box;
+  }
+  function eqBypass(key) {
+    const dev = S.ws.devices[key];
+    dev.bypass = !dev.bypass;
+    send({ op: "eq-set", key, bands: dev.bands || [], bypass: dev.bypass });
+    if (EQ.isOpen(key)) EQ.sync(key, dev, true);  // the card's own change: never an echo
+    render();
+  }
+  function openEq(key) {
+    const dev = S.ws.devices?.[key], c = byKey()[key];
+    if (!dev) return;
+    closeMenu(); hideTip(); DYN.close(false); S.dynOpen = null;
+    EQ.open(key, { dev, title: titleOf(c || { key, title: dev.name }), rate: rateNow(), send, menu: openMenu,
+                   changed: (k) => eqMini(S.els[k]?.querySelector(".eq-mini-wrap"), k),
+                   done: () => { S.eqOpen = null; render(); } });
+    S.eqOpen = key;
+    movable(document.querySelector(".eq-panel"), key);
+    render();
+  }
+
+  // A docked panel (EQ, limiter, compressor) moves when its header is dragged (owner); it is a
+  // new element each time one opens, so it always opens docked at the bottom again. A click on
+  // its title (no drag) shows its card on the board, flashed.
+  // ponytail: a panel moved and then the window shrunk can sit partly outside it until moved.
+  function movable(panel, key) {
+    const head = panel?.querySelector(".eq-head"), title = head?.querySelector(".eq-title");
+    if (title) title.dataset.tip = "Show it on the board";
+    head?.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button, input")) return;
+      e.preventDefault();  // no text selection while dragging; that also keeps the focus, so:
+      document.activeElement?.blur();  // a box being edited counts this as a click away (cancels)
+      const r = panel.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+      try { head.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer (shots) */ }
+      panel.classList.add("moving");
+      const move = (ev) => Object.assign(panel.style, {
+        left: `${Math.max(0, Math.min(innerWidth - r.width, ev.clientX - dx))}px`,
+        top: `${Math.max(0, Math.min(innerHeight - r.height, ev.clientY - dy))}px`,
+        bottom: "auto", transform: "none", animation: "none" });
+      const up = (ev) => {
+        panel.classList.remove("moving");
+        if (ev.type === "pointerup" && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 4 && e.target.closest(".eq-title")) showCard(key);
+        for (const [type, fn] of [["pointermove", move], ["pointerup", up], ["pointercancel", up]]) head.removeEventListener(type, fn);
+      };
+      head.addEventListener("pointermove", move);
+      head.addEventListener("pointerup", up);
+      head.addEventListener("pointercancel", up);
+    });
+  }
+
+  // ---- the limiter and compressor: the line's setting on the card; Live opens the panel ------
+  const DYN_TIP = { limiter: "The loudest the sound may be", compressor: "Above this it turns the sound down",
+                   gate: "Under this it turns the sound down",
+                   deesser: "When the \"s\" band gets louder than this, it is turned down",
+                   denoise: "How far steady noise is turned down" };
+  function dynBox(type) {
+    const L = DYN.KINDS[type].line;
+    return { prop: L.prop, lo: L.lo, hi: L.hi, dflt: L.dflt, label: L.label, aria: `${L.label} in dB`,
+             op: (key, db) => ({ op: "dyn-set", key, [L.prop]: db }),
+             tip: `${DYN_TIP[type]}, in dB (${showDb(L.lo)} … ${showDb(L.hi)}) · Scroll or ↑/↓ to change (Shift: finer) · Enter to apply · Esc or click away to cancel` };
+  }
+  function dynRow(key, dev) {
+    const open = DYN.isOpen(key);
+    const k = DYN.KINDS[dev.type];
+    const box = h("div", { class: "dyn-row" }, k.line ? dbRow(key, dev, dynBox(dev.type)) : null, h("div", { class: "card-foot" },
+      k.bypass === false ? null : bypassBtn(!!dev.bypass, () => dynFlag(key, "bypass")),
+      k.smooth ? cardBtn({ text: "Soft", cls: "smooth", tip: DYN.SMOOTH_TIP, pressed: dev.smooth, action: () => dynFlag(key, "smooth") }) : null,
+      gearBtn(open, `the ${k.word}'s live view`, () => (open ? DYN.close() : openDyn(key)))));
+    box.addEventListener("mousedown", (e) => e.stopPropagation());
+    return box;
+  }
+  // A gain: its level box, and its power button below (bypassed: 0 dB, its level kept).
+  function gainRow(key, dev) {
+    const box = h("div", { class: "dyn-row" }, dbRow(key, dev, GAIN_BOX),
+                  h("div", { class: "card-foot" }, bypassBtn(!!dev.bypass, () => gainBypass(key))));
+    box.addEventListener("mousedown", (e) => e.stopPropagation());
+    return box;
+  }
+  function gainBypass(key) {
+    const dev = S.ws.devices[key];
+    dev.bypass = !dev.bypass;
+    send({ op: "gain-bypass", key, on: dev.bypass });
+    render();
+  }
+  function dynFlag(key, flag) {
+    const dev = S.ws.devices[key];
+    dev[flag] = !dev[flag];
+    send({ op: "dyn-set", key, [flag]: dev[flag] });
+    if (DYN.isOpen(key)) DYN.sync(key, dev, true);  // the card's own change: never an echo
+    render();
+  }
+  function openDyn(key) {
+    const dev = S.ws.devices?.[key], c = byKey()[key];
+    if (!dev) return;
+    closeMenu(); hideTip(); EQ.close(false); S.eqOpen = null;
+    DYN.open(key, { dev, title: titleOf(c || { key, title: dev.name }), send,
+                    changed: (k) => {
+                      const el = S.els[k], f = el?.querySelector(".gain-field"), d = S.ws.devices[k];
+                      if (f && document.activeElement !== f) f.value = showDb(d[DYN.KINDS[d.type].line.prop]);
+                      el?.querySelector(".card-btn.smooth")?.setAttribute("aria-pressed", String(!!d.smooth));
+                    },
+                    done: () => { S.dynOpen = null; render(); } });
+    S.dynOpen = key;
+    movable(document.querySelector(".eq-panel"), key);
+    render();
+  }
+
+  // ---- plugins (M8): Bypass and the plugin's own window; its controls live in that window ----
+  function pluginFoot(key, dev) {
+    const open = (S.editors || []).includes(key);
+    const foot = h("div", { class: "card-foot" }, ...(dev.params ? [
+      dev.bypassable ? bypassBtn(!!dev.bypass, () => send({ op: "plugin-bypass", key, on: !dev.bypass })) : null,
+      dev.editor ? gearBtn(open, "the plugin's own window", () => send({ op: "plugin-editor", key, on: !open })) : null,
+    ] : [h("span", { class: "card-note", text: "Starting…" })]));
+    foot.addEventListener("mousedown", (e) => e.stopPropagation());  // pressing a button never drags the card
+    return foot;
+  }
+
+  // A list with a search box, to pick one plugin. items() → [{value, label, sub}], or null while
+  // the list is still coming (the "plugins" message redraws an open picker). Resolves with the
+  // value, or null.
+  function picker({ title, items, placeholder, loading, ok = "Add" }) {
+    return new Promise((done) => {
+      closeMenu(); hideTip();
+      const search = h("input", { type: "text", placeholder, "aria-label": placeholder, spellcheck: "false" });
+      const list = h("div", { class: "pick-list", role: "listbox", "aria-label": title });
+      const count = h("span", { class: "pick-count" });
+      const no = h("button", { type: "button", text: "Cancel" });
+      const yes = h("button", { type: "button", class: "primary", text: ok });
+      const box = h("div", { class: "dialog picker", role: "dialog", "aria-modal": "true", "aria-label": title },
+                    h("h2", { text: title }), search, list, h("div", { class: "actions" }, count, no, yes));
+      let shown = [], active = 0;
+      const draw = () => {
+        const all = items(), words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+        list.textContent = "";
+        if (!all) { list.append(h("div", { class: "pick-note", text: loading })); shown = []; return; }
+        shown = all.filter((it) => words.every((w) => `${it.label} ${it.sub}`.toLowerCase().includes(w)));
+        active = Math.max(0, Math.min(active, shown.length - 1));
+        if (!shown.length) list.append(h("div", { class: "pick-note", text: "Nothing matches" }));
+        shown.forEach((it, i) => {
+          const row = h("div", { class: `pick${i === active ? " active" : ""}`, role: "option", "aria-selected": String(i === active) },
+                        h("span", { class: "pick-label", text: it.label }), h("span", { class: "pick-sub", text: it.sub }));
+          row.addEventListener("mousedown", (e) => e.preventDefault());  // the search box keeps the focus
+          row.addEventListener("click", () => { active = i; draw(); });
+          row.addEventListener("dblclick", () => finish(it.value));
+          list.append(row);
+        });
+        count.textContent = `${shown.length} plugin${shown.length === 1 ? "" : "s"}`;
+        list.querySelector(".pick.active")?.scrollIntoView({ block: "nearest" });
+      };
+      const veil = h("div", { class: "veil" }, box);
+      const finish = (v) => { veil.remove(); removeEventListener("keydown", keys, true); S.picker = null; done(v); };
+      const confirm = () => shown[active] && finish(shown[active].value);
+      const keys = (e) => {
+        if (e.key === "Escape") finish(null);
+        else if (e.key === "ArrowDown" || e.key === "ArrowUp") { active += e.key === "ArrowDown" ? 1 : -1; draw(); }
+        else if (e.key === "Enter") (document.activeElement === no ? finish(null) : confirm());
+        else return;
+        e.preventDefault(); e.stopPropagation();
+      };
+      addEventListener("keydown", keys, true);
+      search.addEventListener("input", () => { active = 0; draw(); });
+      no.addEventListener("click", () => finish(null));
+      yes.addEventListener("click", confirm);
+      veil.addEventListener("mousedown", (e) => { if (e.target === veil) finish(null); });
+      S.picker = draw;
+      document.body.append(veil);
+      draw();
+      search.focus();
+    });
+  }
+
+  const shapeOf = (p) => (p.ins === 2 && p.outs === 2 ? "stereo" : p.ins === 1 && p.outs === 1 ? "mono" : `${p.ins} in, ${p.outs} out`);
+
+  async function pickPlugin(ctx) {
+    send({ op: "plugin-list" });  // the answer redraws the picker
+    const ref = await picker({
+      title: "Add a plugin", placeholder: "Search by name or maker",
+      loading: "Looking for your plugins… The first look can take a minute.",
+      items: () => S.pluginList && S.pluginList.map((p) => ({
+        value: p.ref, label: p.name, sub: `${p.maker} · ${p.format.toUpperCase()} · ${shapeOf(p)}` })) });
+    if (ref) makeDevice({ type: "plugin", plugin: ref }, ctx);
+  }
+
+  // ctx: {} plain · {connect: {from|to: [key, sock]}} a wire dropped on empty board ·
+  // {insert: wireId} put the new device in the middle of that wire.
+  function makeDevice(fields, ctx = {}) {
+    const at = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
+    const where = { x: snap(at.x), y: snap(at.y) };
+    if (ctx.insert) send({ op: "insert-device", wire: ctx.insert, ...fields, ...where });
+    else send({ op: "create-device", ...fields, ...where, connect: ctx.connect });
+  }
+
+  function addGain(ctx) { makeDevice({ type: "gain", name: "Gain", channels: 2 }, ctx); }
+
+  function sockEl(c, sk, side, isWired) {
+    const dot = h("i", { class: `dot${sk.ports.length === 2 ? " stereo" : ""}` });
+    const label = h("span", { text: sk.label });
+    const el = h("div", { class: `sock${isWired ? " wired" : ""}`, "data-key": c.key,
+                          "data-sock": sk.id, "data-side": side },
+                 ...(side === "in" ? [dot, label] : [label, dot]));
+    const what = sk.ports.length === 2 ? "Stereo" : "Mono";
+    el.dataset.tip = JSON.stringify({
+      title: `${titleOf(c)} · ${sk.label}`, sub: `${what} ${side === "in" ? "input" : "output"}`, kind: c.kind,
+      rows: sk.names.length ? [["Ports", sk.names.join(", "), true]] : [],
+      hint: side === "in" ? (isWired ? "Drag to move its wire · Shift-drag for a new one" : "Connect to it by dragging from an output")
+                          : "Drag to another socket to connect" });
+    return el;
+  }
+
+  function cardTip(c) {
+    const rows = [];
+    if (saved(c.key).nick) rows.push(["Real name", c.title]);
+    if (c.rate) rows.push(["Rate", `${c.rate / 1000} kHz`]);
+    const dev = S.ws.devices?.[c.key];
+    if (dev?.type === "plugin") rows.push(["Plugin", `${dev.plugin || dev.name} · ${(dev.format || "").toUpperCase()}`]);
+    else if (dev) rows.push(["Made by", "PipeBoard"]);
+    // Hardware: the device's one identity, not its two long node names.
+    // A plugin: its own node, not Carla's empty engine node beside it.
+    if (!c.missing) rows.push(["PipeWire", c.key.startsWith("device:") ? c.key.slice(7) : dev?.type === "plugin" ? c.names.at(-1) : c.detail, true]);
+    return JSON.stringify({
+      title: titleOf(c), sub: [KIND[c.kind], ROLE[c.role]].filter(Boolean).join(" · "), kind: c.kind, rows,
+      warn: c.missing ? "Not on the system: its connections wait for it" : "",
+      hint: "Double-click the name to rename · right-click for more" });
+  }
+
+  const q4 = (v) => Math.round(v * 4) / 4;  // a socket's spot to a quarter pixel: the same at any zoom
+  function measure() {
+    const z = S.view.z;
+    for (const [key, el] of Object.entries(S.els)) {
+      const box = el.getBoundingClientRect(), offs = {};
+      for (const sk of el.querySelectorAll(".sock")) {
+        const d = sk.querySelector(".dot").getBoundingClientRect();
+        offs[sk.dataset.sock] = { x: q4((d.left + d.width / 2 - box.left) / z), y: q4((d.top + d.height / 2 - box.top) / z) };
+      }
+      S.offsets[key] = offs;
+      // The card's own layout size, whole CSS pixels whatever the zoom. Read off the screen and
+      // divided by the zoom it carried float noise that changed with the zoom (154.0000088 here,
+      // 153.9999952 there), and Tidy's centring sat exactly half a grid step: it rounded one way
+      // and, after its Fit changed the zoom, the other (owner: a card moved back and forth).
+      S.sizes[key] = { w: el.offsetWidth, h: el.offsetHeight };
+    }
+  }
+
+  function placeCard(key) {
+    const p = S.pos[key], el = S.els[key];
+    if (p && el) el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  }
+
+  // ---- layout: columns by signal flow -------------------------------------------------------
+  function depths(cards, wires) {
+    // Longest path from the sources, after dropping the edges that close a loop: so apps sit
+    // left, then speaker mixes, effects, the interface, and the mics it feeds.
+    const adj = {}, d = {}, state = {}, keep = [];
+    for (const c of cards) { adj[c.key] = new Set(); d[c.key] = 0; }
+    for (const w of wires) if (w.from[0] !== w.to[0] && adj[w.from[0]] && adj[w.to[0]]) adj[w.from[0]].add(w.to[0]);
+    const fed = new Set(Object.values(adj).flatMap((n) => [...n]));
+    const visit = (k) => {
+      state[k] = 1;
+      for (const n of adj[k]) {
+        if (state[n] === 1) continue;  // closes a loop: not a direction to lay out
+        keep.push([k, n]);
+        if (!state[n]) visit(n);
+      }
+      state[k] = 2;
+    };
+    for (const c of [...cards].sort((a, b) => fed.has(a.key) - fed.has(b.key))) if (!state[c.key]) visit(c.key);
+    for (let i = 0; i < cards.length; i++) for (const [a, b] of keep) d[b] = Math.max(d[b], d[a] + 1);
+    return d;
+  }
+
+  // The second pass (owner): a card that is the only one of its category (its colour: app,
+  // speaker or mic, effect…) in its column, among others, joins the next or the previous column
+  // when cards of its category are there, stacking below them, as long as the flow still reads
+  // left to right: everything it feeds stays right of it, everything feeding it left. A speaker
+  // mix next to another one, both feeding the same gain, sits under it, not among the apps. A card
+  // alone in its column, or with company of its own kind, stays.
+  // The right side mirrors the left (owner): as the apps that only send sit in the first column,
+  // a card that only receives (a mix apps record from) stacks with its own kind in the last
+  // column: the guitar mix beside the voice mixes, not back among the effects. Only it moves;
+  // what feeds it stays put.
+  function regroup(cards, wires, d) {
+    const last = Math.max(0, ...Object.values(d));
+    for (const c of cards) {
+      const here = cards.filter((o) => o !== c && d[o.key] === d[c.key]);
+      if (!here.length || here.some((o) => o.kind === c.kind)) continue;
+      const feeds = wires.filter((w) => w.from[0] === c.key && w.to[0] !== c.key).map((w) => d[w.to[0]]);
+      const fedBy = wires.filter((w) => w.to[0] === c.key && w.from[0] !== c.key).map((w) => d[w.from[0]]);
+      const fits = (col) => feeds.every((x) => x > col) && fedBy.every((x) => x < col);
+      if (!feeds.length && fedBy.length && cards.some((o) => d[o.key] === last && o.kind === c.kind)) { d[c.key] = last; continue; }
+      const kin = (col) => cards.filter((o) => o !== c && d[o.key] === col && o.kind === c.kind).length;
+      const to = [d[c.key] + 1, d[c.key] - 1].filter((col) => col >= 0 && kin(col) && fits(col))
+        .sort((a, b2) => kin(b2) - kin(a))[0];
+      if (to !== undefined) d[c.key] = to;
+    }
+    return d;
+  }
+
+  function layout(keys) {
+    const cards = visible(), wires = visibleWires(), d = regroup(cards, wires, depths(cards, wires));
+    const cols = [];
+    for (const c of cards) (cols[d[c.key]] = cols[d[c.key]] || []).push(c);
+    const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4 };
+    // Gaps of whole grid steps from a start on the grid: every card lands exactly, so a column's
+    // rows are evenly spaced (owner; 26 px snapped card by card gave gaps of 14 or 28).
+    const ROW_GAP = 2 * GRID, COL_GAP = 9 * GRID;
+    const list = cols.filter(Boolean), at = {};
+    list.forEach((col, i) => col.forEach((c) => { at[c.key] = i; }));
+    const wide = list.map((col) => Math.max(...col.map((c) => S.sizes[c.key].w)));
+    const high = list.map((col) => col.reduce((t, c) => t + S.sizes[c.key].h + ROW_GAP, 0));
+    const bands = fold(wide, high, wires.map((w) => [at[w.from[0]], at[w.to[0]]]).filter(([a, b]) => a !== undefined && b !== undefined));
+    const placed = {}, rows = [], rowOf = {}, edge = {};
+    let top = 80;
+    bands.forEach(([from, to], r) => {
+      let x = snap(60 + (r ? PORTAL_COL : 0));  // a later row leaves room for its column of entry portals
+      const tallest = Math.max(...high.slice(from, to)), left = x;
+      for (const col of list.slice(from, to)) {
+        const bary = (c) => {
+          const ys = wires.filter((w) => w.to[0] === c.key && placed[w.from[0]]).map((w) => placed[w.from[0]].y);
+          return ys.length ? ys.reduce((a, b) => a + b) / ys.length : 1e6 + order[c.kind] * 1e3;
+        };
+        col.sort((a, b) => bary(a) - bary(b) || order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
+        let y = snap(top + (tallest - high[list.indexOf(col)]) / 2);
+        for (const c of col) {
+          placed[c.key] = { x: snap(x), y: snap(y) };  // (sizes are measured: float noise)
+          rowOf[c.key] = r;
+          edge[c.key] = (col === list[from] ? "first" : "") + (col === list[to - 1] ? "last" : "");
+          y += S.sizes[c.key].h + ROW_GAP;
+        }
+        x += Math.max(...col.map((c) => S.sizes[c.key].w)) + COL_GAP;
+      }
+      rows.push({ left, right: x - COL_GAP });
+      top = snap(top + tallest + ROW_BAND_GAP);
+    });
+    S.fold = { rows, rowOf, edge };
+    for (const k of keys) S.pos[k] = placed[k];
+    return keys;
+  }
+
+  // Tidy's rows (owner: the board only grew wider): the columns, in order, cut into rows when one
+  // row would be far wider than the window, at the cuts the fewest wires cross; the rows stacked.
+  // Each candidate count of rows is scored by how near its shape is to the window's and by how many
+  // wires become portals. wide/high: each column's size; links: [column from, column to] per wire.
+  const PORTAL_COL = 8 * GRID, ROW_BAND_GAP = 7 * GRID;  // (a portal column: room for its badges off the cards)
+  function fold(wide, high, links) {
+    const n = wide.length, aspect = innerWidth / Math.max(1, innerHeight - 120);
+    const span = (a, b) => wide.slice(a, b).reduce((t, w) => t + w + 9 * GRID, 0);
+    const crossing = (cuts) => links.filter(([a, b]) => cuts.some((c) => (a < c) !== (b < c))).length;
+    const shape = (cuts) => {
+      const edges = [0, ...cuts, n], bands = edges.slice(1).map((e, i) => [edges[i], e]);
+      const w = Math.max(...bands.map(([a, b], i) => span(a, b) + (i ? PORTAL_COL : 0)));
+      const h = bands.reduce((t, [a, b]) => t + Math.max(...high.slice(a, b)) + ROW_BAND_GAP, 0);
+      return { bands, score: Math.abs(Math.log(w / h / aspect)) + 0.04 * crossing(cuts) };  // (a wire between rows: a portal, a small cost)
+    };
+    if (S.forceCuts) { S.foldInfo = { n, ...shape(S.forceCuts), crossings: crossing(S.forceCuts) }; return S.foldInfo.bands; }  // (renders comparing splits)
+    if (S.ws.tidy_portals === false) return [[0, n]];  // Portals off (the bar's switch): one row, as before
+    let best = shape([]);
+    for (let r = 2; r <= Math.min(6, n); r++) {
+      const total = span(0, n), cuts = [];
+      for (let k = 1; k < r; k++) {  // near equal widths, then the neighbour cut fewest wires cross
+        let c = 1;
+        while (c < n - 1 && span(0, c + 1) <= (total * k) / r) c++;
+        c = [c - 1, c, c + 1].filter((v) => v > (cuts.at(-1) ?? 0) && v < n)
+          .sort((u, v) => crossing([u]) - crossing([v]) || Math.abs(span(0, u) - (total * k) / r) - Math.abs(span(0, v) - (total * k) / r))[0];
+        if (c !== undefined) cuts.push(c);
+      }
+      const s = shape([...new Set(cuts)]);
+      if (s.score < best.score) best = s;
+    }
+    return best.bands;
+  }
+
+  // Tidy's portals: every wire between rows. Its exit badge in one column past its row's right
+  // edge, its entry badge in one column before the next row's left (owner), each at its socket's
+  // height, nudged apart where two would touch; but from a card not at the row's edge, beside its
+  // socket instead (null): a column there drew a stub across the whole row.
+  function foldPortals() {
+    const { rows, rowOf, edge } = S.fold, cols = {}, set = {};
+    for (const w of visibleWires()) {
+      const rf = rowOf[w.from[0]], rt = rowOf[w.to[0]];
+      if (rf === undefined || rt === undefined || rf === rt || w.ghost) continue;
+      const a = anchor(...w.from), b = anchor(...w.to);
+      if (!a || !b) continue;
+      const out = edge[w.from[0]]?.includes("last") ? [snap(rows[rf].right + PORTAL_COL / 2), a.y] : null;
+      const into = edge[w.to[0]]?.includes("first") ? [snap(rows[rt].left - PORTAL_COL / 2), b.y] : null;
+      set[w.id] = { how: "tidy", out, in: into };
+      if (out) (cols[`o${rf}`] ||= []).push([out, b.y]);  // (with the other end's height: from one
+      if (into) (cols[`i${rt}`] ||= []).push([into, a.y]);  //  socket, in the order they arrive: no crossing)
+    }
+    for (const col of Object.values(cols)) {
+      col.sort(([p, py], [q, qy]) => p[1] - q[1] || py - qy);
+      for (let i = 1; i < col.length; i++) col[i][0][1] = Math.max(col[i][0][1], col[i - 1][0][1] + 28);
+    }
+    return set;
+  }
+
+  // New cards (an app that starts playing, a device plugged in): their spot in a fresh layout if
+  // it is free, else the nearest free grid spot, a grid step clear of every card; then saved, so
+  // they stay put. A fresh layout alone ignored where cards had been moved to since, and a new
+  // app's card landed right on top of one (owner).
+  function placeNew(keys) {
+    layout(keys);
+    const want = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
+    for (const k of keys) delete S.pos[k];
+    const boxes = Object.keys(S.pos).filter((k) => S.sizes[k]).map((k) => ({ ...S.pos[k], ...S.sizes[k] }));
+    const hits = (p, s) => boxes.some((b) => p.x < b.x + b.w + GRID && b.x < p.x + s.w + GRID
+                                          && p.y < b.y + b.h + GRID && b.y < p.y + s.h + GRID);
+    const step = 2 * GRID, left = Math.min(Infinity, ...boxes.map((b) => b.x));
+    for (const k of keys) {
+      const s = S.sizes[k], w = want[k];
+      let at = w;
+      ring: for (let r = 1; hits(at, s) && r < 80; r++) {  // rings of grid steps, nearest first
+        const ring = [];
+        for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) if (Math.max(Math.abs(i), Math.abs(j)) === r) ring.push([i, j]);
+        // Its own column first (a sideways step counts double), never left of the board's cards.
+        ring.sort(([ai, aj], [bi, bj]) => Math.hypot(2 * ai, aj) - Math.hypot(2 * bi, bj));
+        for (const [i, j] of ring) {
+          const p = { x: w.x + i * step, y: w.y + j * step };
+          if (p.x >= Math.min(left, w.x) && !hits(p, s)) { at = p; break ring; }
+        }
+      }
+      S.pos[k] = at;
+      boxes.push({ ...at, ...s });
+    }
+    send({ op: "place", cards: Object.fromEntries(keys.map((k) => [k, S.pos[k]])) });
+  }
+
+  // Tidy: everything worked out first, then shown in one go and sent as one message, so no
+  // half-done step ever shows (owner).
+  function tidy() {
+    const keys = layout(visible().map((c) => c.key)), cards = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
+    const portals = foldPortals();
+    S.placing = { cards, at: performance.now() };
+    keys.forEach(placeCard);
+    setPortals(portals, true, false);  // (redraws the wires)
+    send({ op: "tidy", cards, set: portals });
+    fit(true);
+  }
+
+  // ---- wires --------------------------------------------------------------------------------
+  function anchor(key, sock) {
+    const p = S.pos[key], o = S.offsets[key]?.[sock];
+    return p && o ? { x: p.x + o.x, y: p.y + o.y } : null;
+  }
+
+  function curve(a, b) {
+    const back = b.x < a.x + 40;
+    const dx = back ? Math.max(120, Math.abs(b.x - a.x) * 0.35 + 80) : Math.max(50, (b.x - a.x) * 0.5);
+    return [a, { x: a.x + dx, y: a.y }, { x: b.x - dx, y: b.y }, b];
+  }
+  const pathD = ([a, c1, c2, b]) => `M${a.x},${a.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${b.x},${b.y}`;
+  function at([a, c1, c2, b], t) {
+    const u = 1 - t, k = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    return { x: k[0] * a.x + k[1] * c1.x + k[2] * c2.x + k[3] * b.x,
+             y: k[0] * a.y + k[1] * c1.y + k[2] * c2.y + k[3] * b.y };
+  }
+
+  // Portals (owner): a wire drawn as a short stub out of its output into a lettered badge, and the
+  // same badge leading into its input; the whole wire shows while a badge, either card or the
+  // wire is hovered, or it is selected. Board-only: the sound still goes straight from A to B.
+  // Letters by wire id, so a pair keeps its letter while others come and go.
+  function portalLetters(wires) {
+    const ids = wires.map((w) => w.id).filter((id) => S.ws.portals?.[id]).sort();
+    return Object.fromEntries(ids.map((id, i) => [id, String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) + 1 : "")]));
+  }
+  // The owner's pick (D of five drawn): a tunnel, a dark hole with rings fading inward and a lit
+  // rim, the pair's letter in it, and an arrowhead on its edge for the way the sound goes: on the
+  // right pointing away where the wire leaves, on the left pointing in where it arrives (owner).
+  function portalEnd(w, letter, color, by, out) {
+    const end = s("g", { class: "portal-end", style: `--pc:${color}`, "data-wire": w.id });
+    const R = 11, arrow = out ? `M${R - 1},-4 L${R + 4.5},0 L${R - 1},4 Z` : `M${-R - 4.5},-4 L${-R + 1},0 L${-R - 4.5},4 Z`;
+    end.append(s("circle", { class: "portal-disc", r: R }), s("circle", { class: "portal-ring", r: 8 }),
+               s("circle", { class: "portal-ring deep", r: 5.5 }), s("path", { class: "portal-arrow", d: arrow }),
+               Object.assign(s("text", { class: "portal-letter", "text-anchor": "middle", dy: "3.2" }), { textContent: letter }));
+    end.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id); });
+    end.addEventListener("mouseenter", () => hover(w.id));
+    end.addEventListener("mouseleave", () => hover(null));
+    end.dataset.tip = wireTip(w, by);
+    return end;
+  }
+
+  function drawWires() {
+    layer.textContent = "";
+    $("portal-layer").textContent = "";
+    $("grads").textContent = "";
+    S.wireEls = {};
+    const by = byKey(), letters = portalLetters(visibleWires());
+    const flagged = new Set(S.problems.filter((p) => p.severity !== "info").flatMap((p) => p.wires));
+    visibleWires().forEach((w, i) => {
+      const grad = s("linearGradient", { id: `g${i}`, gradientUnits: "userSpaceOnUse" });
+      grad.append(s("stop", { offset: "0", "stop-color": colors[by[w.from[0]].kind] }),
+                  s("stop", { offset: "1", "stop-color": colors[by[w.to[0]].kind] }));
+      $("grads").append(grad);
+      const g = s("g", { class: "wire-g", "data-wire": w.id });
+      const cls = ["wire", w.partial && "partial", w.failed && "failed", w.ghost && "ghost", flagged.has(w.id) && "flagged",
+                   S.selected === w.id && "selected"].filter(Boolean).join(" ");
+      const parts = { g, grad, shadow: s("path", { class: "wire-shadow" }),
+                      line: s("path", { class: cls, stroke: `url(#g${i})` }),
+                      hit: s("path", { class: "wire-hit" }) };
+      g.append(parts.shadow, parts.line);
+      if (w.ch) {
+        parts.tag = s("g", { class: "wire-tag" });
+        parts.tag.append(s("circle", { r: 7, class: "wire-tag-bg", stroke: colors[by[w.to[0]].kind] }),  // (it sits at the input end)
+                         Object.assign(s("text", { "text-anchor": "middle", dy: "3" }), { textContent: w.ch }));
+        g.append(parts.tag);
+      }
+      g.append(parts.hit);
+      if (letters[w.id]) {  // a portal: its stubs and two badges in the source's colour
+        const color = colors[by[w.from[0]].kind];
+        g.classList.add("portal");
+        parts.stubs = s("path", { class: "portal-stub", stroke: `url(#g${i})` });
+        parts.ends = [portalEnd(w, letters[w.id], color, by, true), portalEnd(w, letters[w.id], color, by, false)];
+        g.append(parts.stubs);
+        $("portal-layer").append(...parts.ends);  // above every wire: none can cover a badge (owner)
+      }
+      parts.hit.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id); });
+      parts.hit.addEventListener("mouseenter", () => hover(w.id));
+      parts.hit.addEventListener("mouseleave", () => hover(null));
+      parts.hit.dataset.tip = wireTip(w, by);
+      layer.append(g);
+      S.wireEls[w.id] = { ...parts, w };
+    });
+    hover(...S.hovered);  // the wires were rebuilt: a hovered card's stay lit (owner: a button press dimmed them)
+    placeWires();
+  }
+
+  function wireTip(w, by) {
+    const sock = (end, side) => by[end[0]][side].find((x) => x.id === end[1]) || { label: "", names: [] };
+    const a = sock(w.from, "outputs"), b = sock(w.to, "inputs");
+    const end = (k, sk) => ({ text: `${titleOf(by[k])} ${sk.label}`, kind: by[k].kind });
+    const tip = { wire: [end(w.from[0], a), end(w.to[0], b)], rows: [] };
+    if (w.ghost) {
+      const away = [w.from[0], w.to[0]].map((k) => by[k]).filter((c) => c.missing).map(titleOf);
+      return JSON.stringify({ ...tip, warn: `Waiting for ${away.join(" and ")}`, hint: "Delete forgets this connection" });
+    }
+    const ports = (sk, used) => used.map((i) => sk.names[i]).join(" + ");
+    tip.rows.push(["Ports", `${ports(a, w.fromPorts)} → ${ports(b, w.toPorts)}`, true]);
+    if (w.ch) tip.rows.push(["Channel", w.ch === "L" ? "left only" : "right only"]);
+    if (w.failed) tip.warn = "PipeWire could not start this connection";
+    return JSON.stringify({ ...tip, hint: "Click to select · right-click to insert a node · Delete disconnects" });
+  }
+
+  const PORTAL_OUT = 52;  // a portal's badge: this far out from its socket (owner: wires covered them closer)
+  function placeWires(only) {
+    for (const { g, grad, shadow, line, hit, tag, w } of Object.values(S.wireEls)) {
+      if (only && !only.has(w.from[0]) && !only.has(w.to[0])) continue;
+      const a = anchor(...w.from), b = anchor(...w.to);
+      const ends = S.wireEls[w.id].ends || [];
+      if (!a || !b) { g.style.display = "none"; ends.forEach((e) => { e.style.display = "none"; }); continue; }
+      g.style.display = "";
+      ends.forEach((e) => { e.style.display = ""; });
+      const lr = w.ch === "L" ? -1 : w.ch === "R" ? 1 : 0;  // L and R meet a stereo socket apart
+      if (lr) (w.chEnd === "from" ? a : b).y += 3 * lr;
+      const c = curve(a, b), d = pathD(c);
+      for (const p of [shadow, line, hit]) p.setAttribute("d", d);
+      S.wireEls[w.id].arc = null;
+      S.wireEls[w.id].c = c;
+      S.wireEls[w.id].plain = d;
+      Object.entries({ x1: a.x, y1: a.y, x2: b.x, y2: b.y }).forEach(([k, v]) => grad.setAttribute(k, v));
+      if (tag) {
+        const p = at(c, w.chEnd === "from" ? 0.12 : 0.88);
+        tag.setAttribute("transform", `translate(${p.x},${p.y + 6 * lr})`);
+      }
+    }
+    placePortals();
+    placeChip();
+  }
+
+  // Every portal's badges together (owner: they overlapped, and one moved when another was
+  // toggled): each wants its spot, Tidy's or a short way off its socket at the socket's own height
+  // (not a channel's ±3 px, nor a place in a list); then, from the top down in a fixed order, any
+  // badge nearer than PORTAL_GAP to one already placed is pushed below it. Same portals, same spots.
+  const PORTAL_GAP = 30;
+  function placePortals() {
+    const spots = [];
+    for (const we of Object.values(S.wireEls)) {
+      const w = we.w, a = we.ends && anchor(...w.from), b = we.ends && anchor(...w.to);
+      if (!a || !b) continue;
+      const how = S.ws.portals?.[w.id], tidy = how && typeof how === "object";
+      spots.push({ we, i: 0, sock: a, x: tidy && how.out ? how.out[0] : a.x + PORTAL_OUT, y: tidy && how.out ? how.out[1] : a.y, id: `${w.id}>0` },
+                 { we, i: 1, sock: b, x: tidy && how.in ? how.in[0] : b.x - PORTAL_OUT, y: tidy && how.in ? how.in[1] : b.y, id: `${w.id}>1` });
+    }
+    spots.sort((p, q) => p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1));
+    // (Pushed below one, it may now touch another: again. Nearer than the gap less half a pixel:
+    // exactly a gap apart, rounding read 29.999… and pushed it to the same spot forever, freezing
+    // Tidy on the owner's board; and never more rounds than badges, whatever happens.)
+    spots.forEach((p, i) => {
+      for (let moved = true, rounds = 0; moved && rounds <= spots.length; rounds++) {
+        moved = false;
+        for (const q of spots.slice(0, i)) {
+          if (Math.abs(p.x - q.x) < PORTAL_GAP - 0.5 && Math.abs(p.y - q.y) < PORTAL_GAP - 0.5) { p.y = q.y + PORTAL_GAP; moved = true; }
+        }
+      }
+    });
+    // A stub's own S: handles half its length (a wire's curve took one this short for a wire going
+    // back and looped it; owner saw it).
+    const stub = (p, q) => { const h = Math.max(4, (q.x - p.x) / 2); return [p, { x: p.x + h, y: p.y }, { x: q.x - h, y: q.y }, q]; };
+    const at2 = {};
+    for (const p of spots) (at2[p.we.w.id] ||= [])[p.i] = p;
+    for (const [out, into] of Object.values(at2)) {
+      const we = out.we;
+      we.stubs.setAttribute("d", `${pathD(stub(out.sock, { x: out.x - 10, y: out.y }))} ${pathD(stub({ x: into.x + 10, y: into.y }, into.sock))}`);
+      we.ends[0].setAttribute("transform", `translate(${out.x},${out.y})`);
+      we.ends[1].setAttribute("transform", `translate(${into.x},${into.y})`);
+    }
+  }
+
+  function select(id) {
+    S.selected = id;
+    for (const { line, w } of Object.values(S.wireEls)) line.classList.toggle("selected", w.id === id);
+    placeChip();
+    hover(null);
+    return !!S.wireEls[id];
+  }
+
+  function placeChip() {
+    const chip = $("unlink"), we = S.wireEls[S.selected];
+    $("chip-insert").hidden = !!we?.w.ghost;
+    if (!we) { chip.hidden = true; return; }
+    const a = anchor(...we.w.from), b = anchor(...we.w.to);
+    if (!a || !b) { chip.hidden = true; return; }
+    const m = toScreen(at(curve(a, b), 0.5));
+    chip.hidden = false;
+    chip.style.left = `${m.x}px`; chip.style.top = `${m.y}px`;
+  }
+
+  function unlinkSelected() {
+    if (!S.selected) return;
+    const ghost = S.model.wires.find((w) => w.id === S.selected && w.ghost);
+    send(ghost ? { op: "forget-wire", from: ghost.from, to: ghost.to } : { op: "disconnect", wire: S.selected });
+    S.selected = null; placeChip();
+  }
+
+  // Hovering a card or wire quietens every other wire; a selected wire stays lit the whole time.
+  function hover(id, cardKey) {
+    S.hovered = [id, cardKey];
+    const sel = S.wireEls[S.selected] ? S.selected : null;
+    board.classList.toggle("focus", !!(id || cardKey || sel));
+    for (const { g, w, ends } of Object.values(S.wireEls)) {
+      const hot = w.id === id || w.id === sel || w.from[0] === cardKey || w.to[0] === cardKey;
+      g.classList.toggle("hot", hot);
+      ends?.forEach((e) => e.classList.toggle("hot", hot));
+    }
+  }
+
+  // ---- live wires: each wire carries its sound along, like an oscilloscope in roll mode -------
+  // The server sends what is new (1 value per ms, numbered by a running count, 50 frames a second).
+  // As it arrives it is folded into 30 ms slots, each keeping its highest and lowest value. Each
+  // slot is one point of the wire, alternately its high and its low (by the slot's own number, so
+  // the pattern travels with the sound), smoothed into a wave of ~15 px that moves at a steady
+  // 260 px/s from the source down the wire: a long wire shows seconds of sound, a short one the
+  // latest. Up-swings are the sound's real positive peaks, down-swings its real negative ones.
+  // The loop runs only while some wire has sound.
+  // px/s, ms, px. 480 px/s (owner: faster, more like the real sound; was 260), the slots kept
+  // ~6 px wide (13 ms), so the wave is as detailed along the wire as before.
+  const ROLL_SPEED = 480, SLOT_MS = 13, SLOT_PX = ROLL_SPEED * SLOT_MS / 1000;
+  // The swing eases in and out over the same EASE px at both plugs (user: the two ends looked
+  // different with 18 px at the source and 70 px at the destination).
+  const SLOTS = 1024, LIVE_SWING = 6, EASE = 36, WAVE_PX = 1.5;  // (swing 6 px: owner, 14 wobbled too much, 7 a touch much; a point every 1.5 px keeps a 5 px wave round)
+  // Drawn this far behind the newest value: more than a frame interval (20 ms) plus its jitter, so
+  // the playhead never runs into the end of what has arrived.
+  const LIVE_DELAY = 50;
+  S.liveSources = []; S.liveOn = true;
+  const rings = {};  // "key|sock" → { hi, lo: per slot; at: which slot number each holds }
+  const clock = { newest: -1, when: 0, head: 0, last: 0, sound: 0 };
+  let liveRunning = false;
+
+  function sayVisible() { send({ op: "live", visible: !document.hidden }); }
+
+  // New source numbers. Only a new capture (fresh) has a new count: then the old history and
+  // clock are forgotten; the same capture following the wires keeps them.
+  function newSources(list, fresh) {
+    S.liveSources = list;
+    if (fresh === false) return;
+    for (const k of Object.keys(rings)) delete rings[k];
+    clock.newest = -1;
+    drawLive();
+  }
+
+  // The wiggle follows the dominant pitch (owner: a kick drum a wide wave, a hi-hat dense ones).
+  // A wire cannot draw the real waveform (at ROLL_SPEED even a 100 Hz cycle is 2.6 px), so the
+  // capture sends each stretch's brightness (scope.bright: 40 Hz … 4 kHz on a log scale, 0 not
+  // known) and the wave's wavelength follows it, from WAVE_WIDE px for a kick to WAVE_DENSE for a
+  // hi-hat; height is still loudness. ph: the phase at each slot's centre, fixed once the slot
+  // before it is complete, so the wave never shimmers as it scrolls.
+  const WAVE_WIDE = 44, WAVE_DENSE = 5;  // (owner: a wider range, more detail; was 34 … 6.5; at 4 a hi-hat read as a ribbon)
+  const step = (r, i) => {
+    const t = r.tone[i] ? Math.max(0, Math.min(1, (r.tone[i] - 50) / 125)) : 0.45;  // kick ~52, voice ~127, hi-hat ~172
+    return (2 * Math.PI * SLOT_PX) / (WAVE_WIDE * (WAVE_DENSE / WAVE_WIDE) ** t);
+  };
+  function feed(key, first, values, tone = 0) {
+    const r = rings[key] || (rings[key] = { hi: new Int8Array(SLOTS), lo: new Int8Array(SLOTS), at: new Int32Array(SLOTS).fill(-1),
+                                            tone: new Uint8Array(SLOTS), ph: new Float64Array(SLOTS) });
+    for (let j = 0; j < values.length; j++) {
+      const n = Math.floor((first + j) / SLOT_MS), i = n & (SLOTS - 1), v = values[j];
+      if (r.at[i] !== n) {
+        const p = (n - 1) & (SLOTS - 1);
+        r.ph[i] = r.at[p] === n - 1 ? r.ph[p] + step(r, p) : 0;
+        r.at[i] = n; r.hi[i] = 0; r.lo[i] = 0; r.tone[i] = 0;
+      }
+      if (v > r.hi[i]) r.hi[i] = v;
+      if (v < r.lo[i]) r.lo[i] = v;
+      if (tone) r.tone[i] = r.tone[i] ? (r.tone[i] + tone) >> 1 : tone;
+    }
+  }
+
+  // Where the playhead should be now: LIVE_DELAY behind the newest value, moving at real time.
+  const target = (now) => clock.newest + (now - clock.when) - LIVE_DELAY;
+
+  function liveFrame(buf) {
+    try {
+      if (buf.byteLength < 4) return;
+      const total = new DataView(buf).getUint32(0, true), bytes = new Int8Array(buf);
+      let sound = false;
+      for (let i = 4; i + 2 <= bytes.length;) {
+        const src = S.liveSources[bytes[i] & 0xff], n = bytes[i + 1] & 0xff;
+        if (i + 3 + n > bytes.length) break;
+        if (src) { feed(src.join("|"), total - n, bytes.subarray(i + 2, i + 2 + n), bytes[i + 2 + n] & 0xff); sound = true; }
+        i += 3 + n;  // (index, count, the values, their brightness: scope.encode)
+      }
+      const now = performance.now();
+      clock.newest = total - 1;  // even a silent frame keeps the clock in time
+      clock.when = now;
+      if (sound) clock.sound = now;
+      if (!liveRunning && sound && S.mode !== "preview") {
+        clock.head = target(now);  // start exactly in place: no catching up, no lurch
+        clock.last = now;
+        liveRunning = true;
+        requestAnimationFrame(tick);
+      }
+    } catch (e) { /* a bad frame is dropped; the wires carry on */ }
+  }
+
+  function tick(now) {
+    const dt = Math.min(100, now - clock.last), fresh = now - clock.when < 300;
+    clock.last = now;
+    clock.head += dt;  // real time…
+    const off = target(now) - clock.head;
+    if (Math.abs(off) > 250) clock.head += off;  // lost the beat (a stall): jump back in place
+    else if (Math.abs(off) > 15) clock.head += (off - Math.sign(off) * 15) * 0.02;  // …nudged only past ±15 ms
+    if (fresh) clock.head = Math.min(clock.head, clock.newest);  // never ahead of what arrived
+    const any = drawLive();
+    // On while a wave is in sight or sound arrived lately (a new burst reaches the playhead ~50 ms
+    // after it arrives); off in silence, so a quiet board costs nothing.
+    if (any || now - clock.sound < 500) requestAnimationFrame(tick);
+    else liveRunning = false;
+  }
+
+  // A wire's length table, for placing points by distance along it: once per wire position.
+  function arc(we) {
+    const ts = [0], ds = [0];
+    let prev = at(we.c, 0);
+    for (let i = 1; i <= 48; i++) {
+      const p = at(we.c, i / 48);
+      ts.push(i / 48); ds.push(ds[i - 1] + Math.hypot(p.x - prev.x, p.y - prev.y)); prev = p;
+    }
+    return { ts, ds, len: ds[48], in: Math.min(EASE, ds[48] / 2), out: Math.min(EASE, ds[48] / 2) };
+  }
+
+  // Point, unit normal and swing allowance at a distance along the wire.
+  function along(we, d) {
+    const A = we.arc;
+    let lo = 0, hi = 48;  // the last table entry at or before d (a binary search: called per pixel)
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (A.ds[m] < d) lo = m; else hi = m - 1; }
+    const k = Math.min(47, lo);
+    const t = A.ts[k] + (A.ts[k + 1] - A.ts[k]) * ((d - A.ds[k]) / ((A.ds[k + 1] - A.ds[k]) || 1));
+    const [a, c1, c2, b] = we.c, u = 1 - t, p = at(we.c, t);
+    const dx = 3 * u * u * (c1.x - a.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (b.x - c2.x);
+    const dy = 3 * u * u * (c1.y - a.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (b.y - c2.y);
+    const l = Math.hypot(dx, dy) || 1, up = (x, w) => Math.sin(Math.min(1, Math.max(0, x) / w) * Math.PI / 2) ** 2;
+    return [p.x, p.y, -dy / l, dx / l, up(d, A.in) * up(A.len - d, A.out)];
+  }
+
+  function wave(we, r) {
+    we.arc = we.arc || arc(we);
+    const len = we.arc.len, slot = clock.head / SLOT_MS;
+    const pts = [], clipped = [];
+    let loud = 0;
+    const put = (d, v, clip) => {
+      if (d < 0 || d > len) return;
+      const [x, y, nx, ny, ease] = along(we, d), a = Math.max(-1, Math.min(1, v / 126)) * ease * LIVE_SWING;
+      if (clip) clipped.push(pts.length);
+      pts.push([x + nx * a, y + ny * a]);
+    };
+    // A slot's loudness (its strongest value), phase and clipping; nothing for a slot not heard.
+    const at = (n) => {
+      const i = n & (SLOTS - 1);
+      if (r.at[i] !== n) return null;
+      const peak = Math.max(r.hi[i], -r.lo[i]);
+      return { env: peak, ph: r.ph[i], next: r.ph[i] + step(r, i), clip: peak >= 127 };
+    };
+    // Points every WAVE_PX along the wire, each between two slot centres: loudness and phase
+    // eased from one to the next, so the line is smooth whatever the pitch.
+    put(0, 0);
+    for (let d = WAVE_PX / 2; d <= len; d += WAVE_PX) {
+      const s = slot - d / SLOT_PX - 0.5, n = Math.floor(s), t = s - n, a = at(n), b = at(n + 1);
+      if (!a && !b) { put(d, 0); continue; }
+      const env = (a ? a.env : 0) * (1 - t) + (b ? b.env : 0) * t;
+      const ph = a ? a.ph + (b ? b.ph - a.ph : a.next - a.ph) * t : b.ph - (1 - t) * Math.PI;
+      loud = Math.max(loud, env);
+      put(d, env * Math.sin(ph), (t < 0.5 ? a : b)?.clip);
+    }
+    put(len, 0);
+    if (loud < 2 || pts.length < 3) return null;
+    const f = (p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
+    // Clipping (owner: a smooth red glow, not flecks or steps): the wave drawn again in red
+    // through a gradient along the wire, each point's red as strong as it is near a full-scale
+    // point (a bell ~24 px either side): the red rises and falls gently, without seams.
+    let clip = null;
+    if (clipped.length) {
+      const a = pts[0], b = pts[pts.length - 1], dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy || 1;
+      const near = new Array(pts.length).fill(Infinity);  // points to the nearest clipped one: two passes
+      for (const c of clipped) near[c] = 0;
+      for (let k = 1; k < near.length; k++) near[k] = Math.min(near[k], near[k - 1] + 1);
+      for (let k = near.length - 2; k >= 0; k--) near[k] = Math.min(near[k], near[k + 1] + 1);
+      const sigma = 24 / WAVE_PX;
+      const stops = pts.map((p, k) => [Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2)), Math.exp(-((near[k] / sigma) ** 2))])
+        .sort((p, q) => p[0] - q[0]);
+      clip = { a, b, stops };
+    }
+    let d = `M${f(pts[0])}`;  // smooth: quadratic curves through the midpoints
+    for (let i = 1; i < pts.length - 1; i++) d += ` Q${f(pts[i])} ${f([(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2])}`;
+    return { d: `${d} L${f(pts[pts.length - 1])}`, clip };
+  }
+
+  function drawLive() {
+    let any = false;
+    try {
+      for (const we of Object.values(S.wireEls)) {
+        const shown = !we.ends || we.g.classList.contains("hot");  // a portal's wave only while its wire shows
+        const r = S.liveOn && !we.w.ghost && we.c && shown ? rings[we.w.from.join("|")] : null;
+        const shape = r ? wave(we, r) : null;
+        if (!shape) {
+          if (we.live) { we.live = false; we.line.setAttribute("d", we.plain); we.shadow.setAttribute("d", we.plain); we.clip?.forEach((el) => el.remove()); we.clip = null; }
+          continue;
+        }
+        // A live wave draws no shadow: on the dark board it hardly shows, and drawing it again
+        // every frame doubled the repaint (owner: live wires stuttered; traced 397 → 200 ms/s).
+        if (!we.live) we.shadow.setAttribute("d", "");
+        any = we.live = true;
+        we.line.setAttribute("d", shape.d);
+        if (shape.clip && !we.clip) {
+          const id = `${we.grad.id}c`, grad = s("linearGradient", { id, gradientUnits: "userSpaceOnUse" });
+          $("grads").append(grad);
+          we.clip = [s("path", { class: "live-clip", stroke: `url(#${id})` }), grad];
+          we.g.insertBefore(we.clip[0], we.hit);
+        }
+        if (we.clip) {
+          const [path, grad] = we.clip, c = shape.clip;
+          if (c) {
+            path.setAttribute("d", shape.d);
+            for (const [k, v] of Object.entries({ x1: c.a[0], y1: c.a[1], x2: c.b[0], y2: c.b[1] })) grad.setAttribute(k, v);
+            grad.replaceChildren(...c.stops.map(([t, o]) => s("stop", { offset: t.toFixed(4), "stop-color": "#ff5a4e", "stop-opacity": o.toFixed(3) })));
+          } else { we.clip.forEach((el) => el.remove()); we.clip = null; }
+        }
+      }
+    } catch (e) { S.errors.push(`live: ${e}`); }
+    return any;
+  }
+
+  function toggleLive() {
+    S.liveOn = !S.liveOn;
+    $("live").setAttribute("aria-pressed", String(S.liveOn));
+    send({ op: "live-setting", on: S.liveOn });
+    if (!S.liveOn) { for (const k of Object.keys(rings)) delete rings[k]; drawLive(); }
+  }
+
+  // ---- view: pan, zoom, fit -----------------------------------------------------------------
+  let viewTimer = null;
+  function applyView(save = true) {
+    // Whole pixels: at a fractional offset Chrome snaps borders to pixels but not what is inside
+    // them, so an icon sat up to half a pixel off its button's centre (owner noticed). The view
+    // itself keeps its exact numbers; only what is drawn is rounded (the grid with it).
+    const { z } = S.view, x = Math.round(S.view.x), y = Math.round(S.view.y);
+    world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
+    const gs = 28 * z, mod = (v) => ((v + 64) % gs + gs) % gs;  // the grid's dots line up with x, y (its box starts at −64)
+    if (grid.dataset.gs !== String(gs)) { grid.style.backgroundSize = `${gs}px ${gs}px`; grid.dataset.gs = gs; }  // (a zoom repaints it; a pan does not)
+    grid.style.transform = `translate3d(${mod(x)}px, ${mod(y)}px, 0)`;
+    placeChip();
+    if (save && S.mode !== "preview") {
+      clearTimeout(viewTimer);
+      viewTimer = setTimeout(() => send({ op: "view", view: S.view }), 600);
+    }
+  }
+
+  function zoomAt(sx, sy, z) {
+    closeMenu();  // a menu stays where it opened; zoomed, it no longer points at what it was for (owner)
+    z = Math.min(1.75, Math.max(0.35, z));
+    const p = toWorld(sx, sy);
+    S.view = { x: sx - p.x * z, y: sy - p.y * z, z };
+    applyView();
+  }
+
+  function bounds(keys) {
+    const boxes = keys.filter((k) => S.pos[k] && S.sizes[k]).map((k) => ({ ...S.pos[k], ...S.sizes[k] }));
+    if (!boxes.length) return null;
+    const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+    const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
+    return { x0, y0, x1, y1 };
+  }
+
+  function fit(animate = true, keys = visible().map((c) => c.key), maxZ = 1.1) {
+    const b = bounds(keys);
+    if (!b) return;
+    const top = 70, pad = 50, W = innerWidth, H = innerHeight;
+    const z = Math.min(maxZ, Math.max(0.35, Math.min((W - 2 * pad) / (b.x1 - b.x0), (H - top - pad) / (b.y1 - b.y0))));
+    const to = { z, x: (W - (b.x1 - b.x0) * z) / 2 - b.x0 * z, y: top + (H - top - pad - (b.y1 - b.y0) * z) / 2 - b.y0 * z };
+    if (!animate || S.mode === "preview") { S.view = to; applyView(); return; }
+    const from = { ...S.view }, t0 = performance.now();
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / 260), e = 1 - (1 - k) ** 3;
+      S.view = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, z: from.z + (to.z - from.z) * e };
+      applyView(k === 1);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  // ---- pointer: drag cards, draw wires, pan -------------------------------------------------
+  function onDown(e) {
+    if (e.button === 2) return;
+    closeMenu();
+    const sock = e.target.closest(".sock"), head = e.target.closest(".card header");
+    if (sock && e.button === 0) {
+      // From an input that has a wire: pick that wire up and move it (Shift: a new one instead).
+      // An input with none starts nothing (owner): connections are drawn from outputs.
+      const into = sock.dataset.side === "in" && wireInto(sock.dataset.key, sock.dataset.sock);
+      if (sock.dataset.side === "in" && !into) return;
+      return into && !e.shiftKey ? startMove(into, e) : startWire(sock, e);
+    }
+    if (head && e.button === 0 && !e.target.isContentEditable) {
+      const key = head.parentElement.dataset.key, p = toWorld(e.clientX, e.clientY);
+      S.drag = { kind: "card", key, dx: p.x - S.pos[key].x, dy: p.y - S.pos[key].y, moved: false };
+      S.els[key].classList.add("dragging");
+      return;
+    }
+    if (e.target.closest(".card")) return;
+    select(null);
+    S.drag = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: S.view.x, vy: S.view.y };
+    board.classList.add("panning");
+  }
+
+  function startWire(sock, e) {
+    const { key, sock: id, side } = sock.dataset;
+    S.drag = { kind: "wire", key, sock: id, side };
+    for (const el of document.querySelectorAll(".sock")) {
+      el.classList.toggle("dim", el.dataset.side === side);
+    }
+    S.drag.path = s("path", { class: "wire pending" });
+    layer.append(S.drag.path);
+    moveWire(e.clientX, e.clientY);
+  }
+
+  // A stereo output dropped on a mono input takes one channel, L then R (graph.next_side). While a
+  // wire from a stereo output is held, a tag beside the pointer says what it carries: L or R, or
+  // "L R" over a stereo input (both go). Held from a mono input, it shows over a stereo output.
+  const sockOf = (key, id, side) => byKey()[key]?.[side === "out" ? "outputs" : "inputs"].find((s) => s.id === id);
+  function nextSide(src) {
+    const alone = S.model.wires.filter((w) => w.from[0] === src[0] && w.from[1] === src[1] && w.fromPorts?.length === 1).map((w) => w.fromPorts[0]);
+    return alone.includes(0) && !alone.includes(1) ? 1 : 0;
+  }
+  function showSide(target, sx, sy) {
+    const d = S.drag, el = $("drag-side"), over = target && [target.dataset.key, target.dataset.sock];
+    const [out, inn] = d.side === "out" ? [[d.key, d.sock], over] : [over, [d.key, d.sock]];
+    const wide = out && sockOf(...out, "out")?.ports.length === 2, ins = inn && sockOf(...inn, "in")?.ports.length;
+    // Moving a wire: it keeps its channels (L stays L), so the tag says what it carries.
+    const carries = d.moving && (d.moving.fromPorts?.length === 1 ? "LR"[d.moving.fromPorts[0]] : "L R");
+    const text = !wide ? "" : carries || (ins === 2 ? "L R" : ins === 1 || (d.side === "out" && !over) ? "LR"[nextSide(out)] : "");
+    el.hidden = !text;
+    el.textContent = text;
+    el.classList.toggle("both", text.length > 1);
+    el.style.transform = `translate(${sx + 14}px, ${sy + 12}px)`;  // below-right: clear of the wire
+  }
+
+  function moveWire(sx, sy) {
+    const d = S.drag, from = anchor(d.key, d.sock);
+    const target = document.elementFromPoint(sx, sy)?.closest(".sock");
+    for (const el of document.querySelectorAll(".sock.target")) el.classList.remove("target");
+    const ok = target && target.dataset.side !== d.side;
+    if (ok) target.classList.add("target");
+    showSide(ok ? target : null, sx, sy);
+    const end = ok ? anchor(target.dataset.key, target.dataset.sock) : toWorld(sx, sy);
+    d.at = { x: sx, y: sy };
+    const [a, b] = d.side === "out" ? [from, end] : [end, from];
+    d.path.setAttribute("d", pathD(curve(a, b)));
+    d.target = ok ? target : null;
+  }
+
+  function onMove(e) {
+    const d = S.drag;
+    if (!d) return tip(e);
+    if (d.kind === "pan") {
+      S.view = { ...S.view, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy };
+      applyView();
+    } else if (d.kind === "card") {
+      // The card follows the mouse; an outline shows the grid spot it drops into (Alt: no snap).
+      const p = toWorld(e.clientX, e.clientY), free = { x: Math.round(p.x - d.dx), y: Math.round(p.y - d.dy) };
+      S.pos[d.key] = free;
+      d.to = e.altKey ? free : { x: snap(free.x), y: snap(free.y) };
+      d.moved = true;
+      placeCard(d.key);
+      placeWires(new Set([d.key]));
+      showLanding(d);
+    } else if (d.kind === "wire") moveWire(e.clientX, e.clientY);
+  }
+
+  function showLanding(d) {
+    const el = $("landing"), size = S.sizes[d.key], at = S.pos[d.key];
+    el.hidden = at.x === d.to.x && at.y === d.to.y;
+    Object.assign(el.style, { transform: `translate(${d.to.x}px, ${d.to.y}px)`,
+                              width: `${size.w}px`, height: `${size.h}px` });
+    el.className = `landing k-${byKey()[d.key].kind}`;
+  }
+
+  function onUp() {
+    const d = S.drag;
+    if (!d) return;
+    S.drag = null;
+    board.classList.remove("panning");
+    // A click on empty board (pressed, let go, the view not moved) closes an open effect panel
+    // (owner). Panning keeps it open; a card or a wire never gets here.
+    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); }
+    if (d.kind === "card") {
+      S.els[d.key]?.classList.remove("dragging");
+      $("landing").hidden = true;
+      if (d.moved) {
+        S.pos[d.key] = d.to;
+        placeCard(d.key);
+        placeWires(new Set([d.key]));
+        send({ op: "place", cards: { [d.key]: S.pos[d.key] } });
+      }
+    }
+    if (d.kind === "wire") finishWire(d);
+    if (S.queued) { const q = S.queued; S.queued = null; load(q); }
+  }
+
+  // The wire to pick up from an input: the selected one if it ends here, else the latest.
+  function wireInto(key, sock) {
+    const here = visibleWires().filter((w) => w.to[0] === key && w.to[1] === sock && !w.ghost);
+    return here.find((w) => w.id === S.selected) || here.at(-1) || null;
+  }
+
+  function startMove(w, e) {
+    const el = S.wireEls[w.id];
+    if (el) el.g.style.visibility = "hidden";  // it travels with the mouse instead
+    startWire(document.querySelector(`.sock[data-key="${CSS.escape(w.from[0])}"][data-sock="${CSS.escape(w.from[1])}"]`), e);
+    S.drag.moving = w;
+    moveWire(e.clientX, e.clientY);  // the tag now says what this wire carries
+  }
+
+  function cancelWire() {
+    const d = S.drag;
+    if (d?.kind !== "wire") return;
+    S.drag = null;
+    d.target = null;
+    d.cancelled = true;
+    finishWire(d);
+  }
+
+  function finishWire(d) {
+    $("drag-side").hidden = true;
+    const keep = !d.target && !d.moving && !d.cancelled;  // may stay up while a drop menu is open
+    if (!keep) d.path.remove();
+    for (const el of document.querySelectorAll(".sock")) el.classList.remove("dim", "target");
+    if (d.moving) {
+      const el = S.wireEls[d.moving.id];
+      if (el) el.g.style.visibility = "";  // back until the server says it moved
+      const to = d.target && [d.target.dataset.key, d.target.dataset.sock];
+      if (to && to.join("|") !== d.moving.to.join("|")) send({ op: "move-wire", wire: d.moving.id, to });
+      return;  // dropped elsewhere: it stays where it was
+    }
+    if (!d.target) {
+      // Let go on empty board (not on a card, the bar, a panel): offer something to connect to.
+      const under = d.at && document.elementFromPoint(d.at.x, d.at.y);
+      if (!d.cancelled && d.at && !under?.closest(".card, #bar, .panel, .problems-btn, .changes, .chip")) {
+        S.menuAt = toWorld(d.at.x, d.at.y);
+        dropMenu(d.at.x, d.at.y, d);
+        S.menuAt = toWorld(d.at.x, d.at.y);
+        S.dropPath = d.path;  // the wire stays drawn to where it was let go until the menu closes
+      } else d.path.remove();
+      return;
+    }
+    const here = [d.key, d.sock], there = [d.target.dataset.key, d.target.dataset.sock];
+    const [from, to] = d.side === "out" ? [here, there] : [there, here];
+    const id = `${from.join(":")}>${to.join(":")}`;
+    if (S.model.wires.some((w) => w.id === id)) return toast("Already connected.", "info");
+    send({ op: "connect", from, to });
+  }
+
+  // ---- menus: cascading, like the desktop's own right-click menu -----------------------------
+  // An item: {label, icon, hint, off, action, sub: [items], forget} · {sep: true} · {head: "text"}
+  const MI = {
+    add: '<path d="M7 2.5v9M2.5 7h9"/>',
+    fit: '<path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/>',
+    tidy: '<rect x="1.5" y="3" width="3" height="8" rx="1"/><rect x="5.5" y="5" width="3" height="4" rx="1"/><rect x="9.5" y="2" width="3" height="10" rx="1"/>',
+    gain: '<circle cx="7" cy="7" r="5"/><path d="M7 7l2.6-2.6"/>',
+    eq: '<path d="M1.5 9c2 0 2.5-5 4.5-5s2.5 7 4.5 7 1.5-3 2.5-3"/>',
+    limiter: '<path d="M1.5 4h11" stroke-dasharray="1.6 1.4"/><path d="M1.5 11l2.5-4 2 2.5 2-6.5h2.5l2-1"/>',
+    compressor: '<path d="M1.5 12.5L7 7l5.5-2"/><path d="M7 7l5.5-5.5" stroke-dasharray="1.4 1.4"/>',
+    gate: '<path d="M1.5 11h3.5V4h4v7h3.5"/>',
+    denoise: '<path d="M1.5 7h1l1-2 1 4 1-3 1 2h5.5"/><path d="M9 4.5l3 5M12 4.5l-3 5"/>',
+    deesser: '<path d="M9.5 3.5c-.8-.7-1.6-1-2.6-1-1.6 0-2.7.9-2.7 2.2 0 2.9 5.8 1.7 5.8 5 0 1.4-1.2 2.3-2.9 2.3-1.1 0-2.1-.4-2.8-1.1"/><path d="M1.5 7h11" stroke-dasharray="1.3 1.5"/>',
+    plugin: '<rect x="2" y="4" width="10" height="8" rx="1.5"/><path d="M5 4V2.2h4V4"/>',
+    virtual: '<rect x="2.5" y="2.5" width="9" height="9" rx="2" stroke-dasharray="2.2 1.6"/>',
+    rename: '<path d="M2.5 11.5l.6-2.6 6.4-6.4 2 2-6.4 6.4z"/>',
+    hide: '<path d="M1.5 7s2-3.8 5.5-3.8S12.5 7 12.5 7 10.5 10.8 7 10.8 1.5 7 1.5 7z"/><path d="M2.5 12l9-10"/>',
+    names: '<circle cx="7" cy="7" r="5"/><path d="M7 4.2V7l2 1.3"/>',
+    check: '<path d="M3 7.5l2.6 2.6L11 4.5"/>',
+    save: '<path d="M2.5 2.5h7l2 2v7h-9z"/><path d="M4.8 2.5v3h4v-3M4.8 11.5V8.5h4.4v3"/>',
+    trash: '<path d="M2.5 4h9M5.5 4V2.5h3V4M3.6 4l.7 7.5h5.4l.7-7.5"/>',
+    portal: '<circle cx="4" cy="7" r="2.5"/><circle cx="10" cy="7" r="2.5" stroke-dasharray="1.3 1.2"/><path d="M6.5 7h1"/>',
+    unlink: '<path d="M6 4.5L7.5 3a2.5 2.5 0 0 1 3.5 3.5L9.5 8"/><path d="M8 9.5L6.5 11A2.5 2.5 0 0 1 3 7.5L4.5 6"/><path d="M2 2l1.8 1.8M12 12l-1.8-1.8"/>',
+    revert: '<path d="M4.5 3.5L2 6l2.5 2.5"/><path d="M2 6h6.5a3 3 0 0 1 0 6H6"/>',
+    ...ICON,
+  };
+  const CHEVRON = '<svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5L9 7l-3.5 3.5"/></svg>';
+  const menus = [];
+  let subTimer = null;
+
+  function openMenu(x, y, items) {
+    closeMenu();
+    hideTip();
+    S.menuAt = toWorld(x, y);  // where something added from this menu will appear
+    showLevel(items, { x, y }, null).focus({ preventScroll: true });
+  }
+
+  function showLevel(items, at, parentRow) {
+    const level = menus.length;
+    const menu = h("div", { class: "menu", role: "menu", tabindex: "-1" });
+    for (const it of items) menu.append(menuRow(it, level));
+    menu.addEventListener("keydown", (e) => { menu.classList.add("keys"); menuKeys(e, level); });
+    menu.addEventListener("mousemove", () => menu.classList.remove("keys"));
+    document.body.append(menu);
+    menus.push(menu);
+    const r = menu.getBoundingClientRect();
+    let { x, y } = at || {};
+    if (parentRow) {
+      const pr = parentRow.getBoundingClientRect(), mr = menus[level - 1].getBoundingClientRect();
+      // Keep going the way the cascade already turned; turn only when there is no room.
+      const left = menus[level - 1].dataset.dir === "left";
+      const fitsRight = mr.right + 2 + r.width <= innerWidth - 8, fitsLeft = mr.left - r.width - 2 >= 8;
+      const goLeft = left ? fitsLeft || !fitsRight : !fitsRight;
+      x = goLeft ? mr.left - r.width - 2 : mr.right + 2;
+      y = pr.top - 6;
+      menu.dataset.dir = goLeft ? "left" : "right";
+    }
+    menu.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+    return menu;
+  }
+
+  function menuRow(it, level) {
+    if (it.sep) return h("hr");
+    if (it.head) return h("div", { class: "head", text: it.head });
+    const sub = it.sub, off = it.off || (sub && !sub.length);
+    const row = h("div", { class: `item${off ? " off" : ""}${sub ? " has-sub" : ""}${it.danger ? " danger" : ""}`, role: "menuitem",
+                           tabindex: off ? null : "-1", "aria-haspopup": sub ? "menu" : null },
+                  h("span", { class: "label", text: it.label }), it.hint ? h("small", { text: it.hint }) : null);
+    row.insertAdjacentHTML("afterbegin", `<svg class="mi" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${MI[it.icon] || ""}</svg>`);
+    if (sub) row.insertAdjacentHTML("beforeend", CHEVRON);
+    if (it.forget) {
+      const x = h("button", { class: "forget", type: "button", title: "Forget this name", text: "✕" });
+      x.addEventListener("click", (e) => { e.stopPropagation(); closeMenu(); it.forget(); });
+      row.append(x);
+    }
+    row.addEventListener("mouseenter", () => {
+      clearTimeout(subTimer);
+      if (!off) row.focus({ preventScroll: true });
+      // A short pause forgives a mouse cutting across rows on its way into an open submenu.
+      subTimer = setTimeout(() => openSub(row, off ? null : sub, level), 140);
+    });
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (off) return;
+      if (sub) { clearTimeout(subTimer); openSub(row, sub, level); return; }
+      closeMenu();
+      it.action();
+    });
+    return row;
+  }
+
+  function openSub(row, sub, level) {
+    if (menus[level + 1] && row.classList.contains("open")) return;
+    closeFrom(level + 1);
+    if (!sub) return;
+    row.classList.add("open");
+    return showLevel(sub, null, row);
+  }
+
+  function closeFrom(level) {
+    for (const m of menus.splice(level)) m.remove();
+    menus[level - 1]?.querySelectorAll(".item.open").forEach((r) => r.classList.remove("open"));
+  }
+  const closeMenu = () => {
+    clearTimeout(subTimer);
+    closeFrom(0);
+    S.dropPath?.remove();  // a dropped wire's dashed path goes with its menu
+    S.dropPath = null;
+  };
+
+  function menuKeys(e, level) {
+    const items = [...menus[level].querySelectorAll(".item:not(.off)")];
+    const at = items.indexOf(document.activeElement);
+    const go = (i) => items[(i + items.length) % items.length]?.focus();
+    const row = items[at];
+    if (e.key === "ArrowDown") go(at + 1);
+    else if (e.key === "ArrowUp") go(at < 0 ? -1 : at - 1);
+    else if (e.key === "ArrowRight" && row?.classList.contains("has-sub")) {
+      row.click();
+      menus[level + 1]?.querySelector(".item:not(.off)")?.focus();
+    } else if (e.key === "ArrowLeft" && level > 0) {
+      const parent = menus[level - 1].querySelector(".item.open");
+      closeFrom(level);
+      parent?.focus();
+    } else if (e.key === "Enter" || e.key === " ") row?.click();
+    else if (e.key === "Escape") closeMenu();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  // ---- what the menus offer -----------------------------------------------------------------
+  const iconOf = (c) => (ICON[c.role] ? c.role : c.kind === "app" ? "app" : c.kind === "effect" ? "effect" : "virtual");
+
+  function bringBack(cards, empty, ctx = {}) {
+    // Devices that exist but are not on the board: adding them shows them where you clicked, and
+    // from a dropped wire, connected to it (only the ones with a socket on the right side).
+    const conn = ctx.connect, side = conn?.from ? "inputs" : "outputs";
+    if (conn) cards = cards.filter((c) => c[side].length);
+    if (!cards.length) return [{ label: conn ? "None that could take this wire" : empty, off: true }];
+    const back = (c) => {
+      showAt(c.key);
+      if (!conn) return;
+      const sock = c[side][0].id;
+      send(conn.from ? { op: "connect", from: conn.from, to: [c.key, sock] } : { op: "connect", from: [c.key, sock], to: conn.to });
+    };
+    return [{ head: "Not on the board" },
+            ...cards.map((c) => ({ label: titleOf(c), icon: iconOf(c), action: () => back(c) }))];
+  }
+
+  function addNodeItems(ctx = {}) {
+    const hidden = ctx.insert ? [] : S.model.cards.filter(isHidden), of = (k) => hidden.filter((c) => c.kind === k);
+    const effects = of("effect");
+    const physical = ctx.insert ? [] : [{ label: "Physical", icon: "interface",
+      sub: bringBack(of("hardware"), "All physical devices are on the board", ctx) }];
+    return [
+      { label: "Effects", icon: "effect", sub: [
+        { label: "Gain", icon: "gain", hint: "−144 … +24 dB", action: () => addGain(ctx) },
+        { label: "EQ", icon: "eq", hint: "parametric", action: () => makeDevice({ type: "eq", name: "EQ", channels: 2 }, ctx) },
+        { label: "Compressor", icon: "compressor", hint: "evens out loudness", action: () => makeDevice({ type: "compressor", name: "Compressor", channels: 2 }, ctx) },
+        { label: "Limiter", icon: "limiter", hint: "stops clipping", action: () => makeDevice({ type: "limiter", name: "Limiter", channels: 2 }, ctx) },
+        { label: "Noise Gate", icon: "gate", hint: "quiets hiss between words", action: () => makeDevice({ type: "gate", name: "Noise Gate", channels: 2 }, ctx) },
+        { label: "De-Esser", icon: "deesser", hint: "tames harsh \"s\" sounds", action: () => makeDevice({ type: "deesser", name: "De-Esser", channels: 2 }, ctx) },
+        { label: "Noise Suppression", icon: "denoise", hint: "takes out hiss and hum", action: () => makeDevice({ type: "denoise", name: "Noise Suppression", channels: 2 }, ctx) },
+        { sep: true },
+        { label: "Plugin…", icon: "plugin", hint: "LV2 · VST3", action: () => pickPlugin(ctx) },
+        ...(effects.length ? [{ sep: true }, ...bringBack(effects, "", ctx)] : [])] },
+      { label: "Devices", icon: "interface", sub: [
+        { label: "Virtual", icon: "virtual", sub: [
+          { label: "New microphone…", icon: "mic", action: () => createDevice("mic", ctx) },
+          { label: "New speaker…", icon: "speaker", action: () => createDevice("speaker", ctx) },
+          ...(of("virtual").length ? [{ sep: true }, ...bringBack(of("virtual"), "", ctx)] : [])] },
+        ...physical,
+      ] },
+      ...(ctx.insert ? [] : [{ label: "Apps", icon: "app", sub: bringBack(of("app"), "All playing apps are on the board", ctx) }]),
+    ];
+  }
+
+  // A new wire let go on empty board: what to put there, already connected to it.
+  function dropMenu(x, y, d) {
+    const ctx = { connect: d.side === "out" ? { from: [d.key, d.sock] } : { to: [d.key, d.sock] } };
+    openMenu(x, y, [{ head: "Add and connect" }, ...addNodeItems(ctx)]);
+  }
+
+  // A wire's menu: put a node in the middle of it, or disconnect it.
+  function wireMenu(id, x, y) {
+    select(id);
+    const ghost = S.model.wires.find((w) => w.id === id)?.ghost;
+    openMenu(x, y, [
+      ...(ghost ? [] : [{ label: "Insert node", icon: "add", sub: addNodeItems({ insert: id }) }]),
+      ...(ghost ? [] : [S.ws.portals?.[id]
+        ? { label: "Show as a wire", icon: "portal", hint: "no portal", action: () => setPortals({ [id]: null }) }
+        : { label: "Make portal", icon: "portal", hint: "hide the wire, keep the sound", action: () => setPortals({ [id]: "hand" }) }]),
+      { label: ghost ? "Forget connection" : "Disconnect", icon: "trash", hint: "Delete", action: unlinkSelected },
+    ]);
+  }
+
+  // Portals set here and on the server alike (tidy: a Tidy's own are replaced, the user's kept).
+  function setPortals(set, tidyOwn = false, tell = true) {
+    const p = S.ws.portals ||= {};
+    if (tidyOwn) for (const [id, how] of Object.entries(p)) if (typeof how === "object") delete p[id];  // (a Tidy's own: {how: "tidy", …})
+    for (const [id, how] of Object.entries(set)) { if (how) p[id] = how; else delete p[id]; }
+    if (tell) send({ op: "portals", set, tidy: tidyOwn });
+    drawWires();
+  }
+
+  function boardMenu(x, y) {
+    openMenu(x, y, [
+      { label: "Add node", icon: "add", sub: addNodeItems() },
+      { sep: true },
+      { label: "Fit to window", icon: "fit", hint: "F", action: () => fit() },
+      { label: "Tidy layout", icon: "tidy", action: tidy },
+      ...Object.entries(S.takeover || {}).map(([unit, names]) => (
+        { label: "Take over devices…", icon: "virtual", hint: `${names.length} from ${unit.replace(/\.service$/, "")}`,
+          action: () => askTakeOver(unit, names) })),
+      { sep: true },
+      { label: "Launch at login", icon: S.autostart ? "check" : "", hint: "in the tray",
+        action: () => { S.autostart = !S.autostart; send({ op: "autostart", on: S.autostart }); } },
+    ]);
+  }
+
+  function replacements(c) {
+    const live = S.model.cards.filter((o) => !o.missing && o.kind !== "app");
+    const item = (o) => ({ label: titleOf(o), icon: iconOf(o), action: () => send({ op: "retarget", key: c.key, to: o.key }) });
+    const same = live.filter((o) => o.kind === c.kind), other = live.filter((o) => o.kind !== c.kind);
+    const group = { hardware: "Physical devices", virtual: "Virtual devices", effect: "Effects", plugin: "Plugins" };
+    return [...(same.length ? [{ head: group[c.kind] || KIND[c.kind] }, ...same.map(item)] : []),
+            ...(other.length ? [{ sep: true }, { head: "Others" }, ...other.map(item)] : [])];
+  }
+
+  function missingMenu(c, x, y) {
+    openMenu(x, y, [
+      { label: "Use another device", icon: "interface", sub: replacements(c) },
+      ...(S.ws.devices?.[c.key] ? [{ label: { plugin: "Start this plugin", eq: "Start this EQ", limiter: "Start this limiter", compressor: "Start this compressor", gate: "Start this noise gate", denoise: "Start this noise suppression", deesser: "Start this de-esser", gain: "Create this gain" }[S.ws.devices[c.key].type] || "Create this device",
+                                     icon: "add", hint: ["plugin", "eq", "gain"].includes(S.ws.devices[c.key].type) || DYN.KINDS[S.ws.devices[c.key].type] ? "" : "on the system",
+                                     action: () => send({ op: "create-missing", key: c.key }) }] : []),
+      { sep: true },
+      { label: "Remove", icon: "trash", hint: "forget it and its wires", action: () => send({ op: "drop-card", key: c.key }) },
+    ]);
+  }
+
+  // PipeBoard's own device: its name is real (apps see it), and Remove deletes it (after asking).
+  function ownMenu(c, x, y) {
+    const names = (saved(c.key).names || []).filter((n) => n !== c.title).map((n) => ({
+      label: n, action: () => send({ op: "rename-device", key: c.key, name: n }),
+      forget: () => send({ op: "forget-name", key: c.key, name: n }) }));
+    const dev = S.ws.devices[c.key], plug = dev.type === "plugin" && dev.params;
+    const open = (S.editors || []).includes(c.key);
+    openMenu(x, y, [
+      { label: "Rename", icon: "rename", hint: "double-click", action: () => startRename(c.key) },
+      ...(names.length ? [{ label: "Names", icon: "names", sub: names }] : []),
+      ...(plug && dev.editor ? [{ label: open ? "Close editor" : "Open editor", icon: "plugin", action: () => send({ op: "plugin-editor", key: c.key, on: !open }) }] : []),
+      ...(plug && dev.bypassable ? [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => send({ op: "plugin-bypass", key: c.key, on: !dev.bypass }) }] : []),
+      ...(dev.type === "eq" ? [{ label: "Edit EQ", icon: "eq", action: () => openEq(c.key) },
+                               { label: "Bypass", icon: dev.bypass ? "check" : "", action: () => eqBypass(c.key) }] : []),
+      ...(dev.type === "gain" ? [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => gainBypass(c.key) }] : []),
+      ...(DYN.KINDS[dev.type] ? [{ label: "Live view", icon: dev.type, action: () => openDyn(c.key) },
+                                 ...(DYN.KINDS[dev.type].smooth ? [{ label: "Soft", icon: dev.smooth ? "check" : "", action: () => dynFlag(c.key, "smooth") }] : []),
+                                 ...(DYN.KINDS[dev.type].bypass === false ? [] : [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => dynFlag(c.key, "bypass") }])] : []),
+      ...disconnectAll(c.key),
+      { sep: true },
+      { label: "Remove…", icon: "trash", hint: ["gain", "eq", "plugin"].includes(dev.type) || DYN.KINDS[dev.type] ? "with its connections" : "deletes it from your system", danger: true, action: () => askDeleteDevice(c) },
+    ]);
+  }
+
+  async function createDevice(type, ctx) {
+    const word = type === "mic" ? "microphone" : "speaker";
+    const made = await dialog({
+      title: `New virtual ${word}`,
+      text: type === "mic" ? "Apps can record from it; wire anything into it on the board."
+                           : "Apps can play into it; wire it on to any device on the board.",
+      input: { placeholder: type === "mic" ? "e.g. Stream Mic" : "e.g. Game Audio", label: "Name",
+               check: (v) => (/^[^"\\{}[\]=]{1,40}$/.test(v) ? "" : "Up to 40 characters, without quotes, brackets, braces or =.") },
+      choices: { label: "Channels", options: [["2", "Stereo"], ["1", "Mono"]], value: "2" },
+      ok: "Create" });
+    if (!made) return;
+    makeDevice({ type, name: made.text, channels: Number(made.choice) }, ctx);
+  }
+
+  async function askDeleteDevice(c) {
+    if (["gain", "plugin", "eq"].includes(S.ws.devices?.[c.key]?.type) || DYN.KINDS[S.ws.devices?.[c.key]?.type]) return askDeleteEffect(c, S.ws.devices[c.key].type);
+    const word = c.role === "mic" ? "microphone" : "speaker";
+    const wires = S.model.wires.filter((w) => w.from[0] === c.key || w.to[0] === c.key).length;
+    const ok = await dialog({
+      title: `Remove the virtual ${word} ${c.title}?`,
+      text: `It is removed from your system, not just from the board. Apps that ${c.role === "mic" ? "record from" : "play into"} it `
+        + `lose it and switch to another device, and do not come back to it by themselves.`
+        + (wires ? ` Its ${wires === 1 ? "connection goes" : `${wires} connections go`} too.` : ""),
+      ok: `Remove ${c.title}`, danger: true });
+    if (ok) send({ op: "delete-device", key: c.key });
+  }
+
+  async function askTakeOver(unit, names) {
+    const ok = await dialog({
+      title: `Take over the devices ${unit} makes?`,
+      text: `PipeBoard stops and disables ${unit} and makes these devices itself, under the same names, so apps `
+        + "and your default devices keep finding them. They stay when PipeBoard closes, and Launch at login "
+        + "makes them again after a restart. Sound through them stops for a second or two while they are swapped.",
+      lists: [["Devices", names, ""],
+              ["To undo", ["Delete them in PipeBoard", `then run: systemctl --user enable --now ${unit}`], ""]],
+      ok: "Take over", danger: true });
+    if (ok) send({ op: "take-over", unit });
+  }
+
+  async function askDeleteEffect(c, type) {
+    const wires = S.model.wires.filter((w) => w.from[0] === c.key || w.to[0] === c.key).length;
+    const ok = await dialog({
+      title: `Remove ${c.title}?`,
+      text: `Sound passing through it stops`
+        + (wires ? `: its ${wires === 1 ? "connection goes" : `${wires} connections go`} too.` : ".")
+        + ` Apps are not affected; they never see ${type === "eq" ? "an EQ" : `a ${DYN.KINDS[type]?.word || type}`}.`,
+      ok: `Remove ${c.title}`, danger: true });
+    if (ok) send({ op: "delete-device", key: c.key });
+  }
+
+  // A card's Disconnect (owner wanted it back): every wire in or out of it; none, no entry.
+  function disconnectAll(key) {
+    const n = S.model.wires.filter((w) => !w.ghost && (w.from[0] === key || w.to[0] === key)).length;
+    return n ? [{ label: "Disconnect", icon: "unlink", hint: n === 1 ? "its wire" : `all ${n} wires`, action: () => send({ op: "disconnect", card: key }) }] : [];
+  }
+
+  function cardMenu(key, x, y) {
+    const c = byKey()[key], ws = saved(key), nick = ws.nick;
+    if (c.missing) return missingMenu(c, x, y);
+    if (c.owned && S.ws.devices?.[key]) return ownMenu(c, x, y);
+    const earlier = (ws.names || []).filter((n) => n !== nick);
+    const names = [
+      ...(nick ? [{ label: nick, hint: "current", icon: "rename", off: true },
+                  { label: c.title, hint: "original", action: () => rename(key, "") }] : []),
+      ...earlier.map((n) => ({ label: n, action: () => rename(key, n),
+                               forget: () => send({ op: "forget-name", key, name: n }) })),
+    ];
+    openMenu(x, y, [
+      { label: "Rename", icon: "rename", hint: "double-click", action: () => startRename(key) },
+      ...(names.length ? [{ label: "Names", icon: "names", sub: names }] : []),
+      ...disconnectAll(key),
+      { sep: true },
+      { label: "Remove", icon: "hide", hint: "from the board; your wires go with it", action: () => setHidden(key, true) },
+    ]);
+  }
+
+  function showAt(key) {
+    const p = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
+    S.pos[key] = { x: snap(p.x), y: snap(p.y) };
+    send({ op: "place", cards: { [key]: S.pos[key] } });
+    setHidden(key, false);
+  }
+
+  function setHidden(key, hidden) {
+    S.ws.cards[key] = { ...saved(key), hidden, ...(S.pos[key] || {}) };
+    send({ op: "hide", key, hidden });
+    render();
+  }
+
+  // ---- renaming: a nickname for hardware, a real name for PipeBoard's own devices (M5) -----
+  function startRename(key) {
+    const el = S.els[key]?.querySelector(".title");
+    if (!el) return;
+    const c = byKey()[key], before = el.textContent;
+    el.contentEditable = "true";
+    el.focus();
+    getSelection().selectAllChildren(el);
+    const seen = ["mic", "speaker"].includes(S.ws.devices?.[key]?.type);  // the only ones apps list
+    const hint = h("div", { class: "rename-hint", text: seen
+      ? "Apps see this name from PipeBoard's next start · Enter saves · Esc cancels"
+      : c.owned ? "Only PipeBoard shows this name · Enter saves · Esc cancels"
+        : "Only PipeBoard shows this name · empty it for the original" });
+    S.els[key].append(hint);
+    S.els[key].classList.add("renaming");
+    if (hint.getBoundingClientRect().right > innerWidth - 8) Object.assign(hint.style, { left: "auto", right: "0" });
+    const done = (commit) => {
+      el.contentEditable = "false";
+      hint.remove();
+      S.els[key]?.classList.remove("renaming");
+      el.removeEventListener("keydown", keys);
+      const now = el.textContent.trim();
+      if (!commit || now === before) { el.textContent = before; return; }
+      if (c.owned && S.ws.devices?.[key]) send({ op: "rename-device", key, name: now });  // a real rename
+      else rename(key, now === c.title ? "" : now);
+    };
+    const keys = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+      if (e.key === "Escape") { el.textContent = before; el.blur(); }
+      e.stopPropagation();
+    };
+    el.addEventListener("keydown", keys);
+    el.addEventListener("blur", () => done(true), { once: true });
+  }
+
+  function rename(key, title) {
+    const ws = saved(key);
+    S.ws.cards[key] = { ...ws, nick: title || undefined };
+    send({ op: "rename", key, title });
+    render();
+  }
+
+  // ---- profiles: the whole board saved; Default saves itself until the user makes one ----------
+  const PROFILE_NAME = /^[\w][\w \-().']{0,39}$/u;
+
+  function renderProfile() {
+    const P = S.profile, btn = $("profile");
+    btn.hidden = !P;
+    if (!P) return;
+    $("profile-name").textContent = P.active || "No profile";
+    $("profile-note").textContent = P.changes.length ? "unsaved" : "";
+    btn.classList.toggle("dirty", P.changes.length > 0);
+    const card = $("changes"), list = $("change-list");
+    card.hidden = !(P.active && P.changes.length);
+    if (card.hidden) return;
+    $("changes-title").textContent = `${P.active} · unsaved changes`;
+    list.textContent = "";
+    for (const line of P.changes.slice(0, 6)) {
+      const sign = line[0] === "+" ? "plus" : line[0] === "−" ? "minus" : "";
+      list.append(h("li", { class: sign, text: sign ? line.slice(2) : line }));
+    }
+    if (P.changes.length > 6) list.append(h("li", { class: "more", text: `and ${P.changes.length - 6} more` }));
+  }
+
+  function profileMenu(x, y) {
+    const P = S.profile, mark = (on) => (on ? "check" : "");
+    openMenu(x, y, [
+      { head: "Profiles" },
+      ...P.names.map((n) => ({ label: n, icon: mark(n === P.active), hint: n === P.launch ? "at launch" : "",
+                               action: () => n !== P.active && send({ op: "profile-plan", name: n }) })),
+      { sep: true },
+      { label: "Save", icon: "save", hint: "Ctrl+S", off: !P.changes.length, action: () => send({ op: "profile-save" }) },
+      { label: "Save as new profile…", icon: "add", action: saveAs },
+      { label: "Load at launch", icon: "names", sub: [
+        { label: "Nothing: the system as it is", icon: mark(!P.launch), action: () => send({ op: "profile-launch", name: null }) },
+        ...P.names.map((n) => ({ label: n, icon: mark(P.launch === n), action: () => send({ op: "profile-launch", name: n }) }))] },
+      { label: "Delete profile", icon: "trash", sub: P.names.map((n) => ({ label: n, action: () => askDelete(n) })) },
+    ]);
+  }
+
+  async function showPlan(p) {
+    const same = !p.make.length && !p.remove.length;
+    const ok = await dialog({
+      title: `Load ${p.name}?`,
+      text: same ? "The connections already match. Names, places and hidden cards change to the profile's."
+                 : "These connections change on your system:",
+      lists: [["Connect", p.make, "plus"], ["Disconnect", p.remove, "minus"],
+              ["Not on this system: kept, shown dimmed", p.missing, "warn"]],
+      ok: `Load ${p.name}` });
+    if (ok) send({ op: "profile-load", name: p.name });
+  }
+
+  async function saveAs() {
+    const name = await dialog({
+      title: "Save as a new profile",
+      text: "Saves the whole board: devices, connections, names and places.",
+      input: { placeholder: "e.g. Streaming", label: "Profile name",
+               check: (v) => (PROFILE_NAME.test(v) ? "" : "Letters, digits, spaces and - _ ( ), up to 40.") },
+      ok: "Save" });
+    if (!name) return;
+    if (S.profile.names.includes(name) && !(await dialog({
+      title: `Replace ${name}?`, text: `A profile called ${name} exists. Saving replaces it with this board.`,
+      ok: `Replace ${name}`, danger: true }))) return;
+    send({ op: "profile-save", name });
+  }
+
+  async function askDelete(name) {
+    const ok = await dialog({
+      title: `Delete the profile ${name}?`,
+      text: "Only the saved profile is deleted. Nothing on your system changes: devices and connections stay as they are.",
+      ok: `Delete ${name}`, danger: true });
+    if (ok) send({ op: "profile-delete", name });
+  }
+
+  // A modal card: resolves to true, the typed text, or null when cancelled. A dangerous one starts
+  // on Cancel, so Enter alone never confirms it.
+  function dialog({ title, text, lists = [], input, choices, ok, danger = false, cancel = "Cancel" }) {
+    return new Promise((done) => {
+      closeMenu();
+      const box = h("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title },
+                    h("h2", { text: title }), text ? h("p", { text }) : null);
+      for (const [head, items, cls] of lists) {
+        if (!items.length) continue;
+        const shown = items.slice(0, 8).map((t) => h("li", { text: t }));
+        if (items.length > 8) shown.push(h("li", { class: "more", text: `and ${items.length - 8} more` }));
+        box.append(h("h3", { text: head }), h("ul", { class: cls }, ...shown));
+      }
+      const field = input ? h("input", { type: "text", placeholder: input.placeholder, "aria-label": input.label, maxlength: "40" }) : null;
+      let choice = choices?.value;
+      const seg = choices ? h("div", { class: "segmented", role: "radiogroup", "aria-label": choices.label },
+        ...choices.options.map(([value, label]) => {
+          const b = h("button", { type: "button", role: "radio", "aria-checked": String(value === choice), text: label });
+          b.addEventListener("click", () => {
+            choice = value;
+            for (const x of b.parentElement.children) x.setAttribute("aria-checked", String(x === b));
+          });
+          return b;
+        })) : null;
+      const err = h("p", { class: "err", "aria-live": "polite" });
+      if (field) box.append(field, err);
+      if (seg) box.append(seg);
+      const no = h("button", { type: "button", text: cancel });
+      const yes = h("button", { type: "button", class: danger ? "danger" : "primary", text: ok });
+      box.append(h("div", { class: "actions" }, no, yes));
+      const veil = h("div", { class: "veil" }, box);
+      document.body.append(veil);
+      const finish = (v) => { veil.remove(); removeEventListener("keydown", keys, true); done(v); };
+      const keys = (e) => {
+        if (e.key === "Escape") finish(null);
+        else if (e.key === "Enter") (document.activeElement?.tagName === "BUTTON" ? document.activeElement : yes).click();
+        else return;
+        e.preventDefault(); e.stopPropagation();
+      };
+      addEventListener("keydown", keys, true);
+      no.addEventListener("click", () => finish(null));
+      yes.addEventListener("click", () => {
+        if (!field) return finish(true);
+        const v = field.value.trim(), problem = input.check ? input.check(v) : "";
+        if (problem || !v) { err.textContent = problem || "Give it a name."; field.focus(); return; }
+        finish(choices ? { text: v, choice } : v);
+      });
+      veil.addEventListener("mousedown", (e) => { if (e.target === veil) finish(null); });
+      (field || (danger ? no : yes)).focus();
+    });
+  }
+
+  // ---- problems -----------------------------------------------------------------------------
+  const RANK = { error: 0, warning: 1, info: 2 };
+  // One word for the tag above a card; the problem center has the whole story.
+  const SHORT = { "Feedback loop": "Feedback", "Connection failed": "Failed",
+                  "Only one side of a stereo input": "One side", "Same sound arrives twice": "Doubled",
+                  "Clipping": "Clipping", "Device missing": "Missing" };
+
+  function problemCards() {
+    const flagged = {};
+    for (const p of S.problems) {  // worst first, so the first problem on a card names its tag
+      if (p.severity === "info") continue;
+      for (const k of new Set(p.cards)) {
+        const f = flagged[k];
+        if (f) { f.more += 1; f.tip += `\n${p.title}`; continue; }
+        flagged[k] = { severity: p.severity, label: SHORT[p.title] || p.title, tip: p.title, more: 0 };
+      }
+    }
+    return flagged;
+  }
+
+  function renderProblems() {
+    const list = $("problem-list"), btn = $("problems-btn"), ps = S.problems;
+    const worst = ps.length ? ps[0].severity : "ok";
+    const real = ps.filter((p) => p.severity !== "info").length;
+    btn.className = `problems-btn sev-${worst}`;
+    $("problems-count").textContent = real ? `${real} problem${real > 1 ? "s" : ""}`
+      : ps.length ? `${ps.length} note${ps.length > 1 ? "s" : ""}` : "All good";
+    list.textContent = "";
+    if (!ps.length) list.append(h("li", { class: "none", text: "Nothing to fix. Free sockets are fine." }));
+    for (const p of ps) {
+      const show = h("button", { type: "button", text: "Show" });
+      show.addEventListener("click", () => showProblem(p));
+      list.append(h("li", { class: `sev-${p.severity}` },
+        h("div", { class: "p-head" }, h("span", { class: "sev-dot" }), h("strong", { text: p.title }), p.cards.length ? show : null),
+        h("p", { text: p.text })));
+    }
+  }
+
+  function showProblem(p) {
+    if (p.wires[0]) select(p.wires[0]);
+    showCard(...p.cards);
+  }
+  // Frames these cards on the board and flashes them (a problem's Show; an open panel's title).
+  function showCard(...keys) {
+    for (const k of keys) {
+      const el = S.els[k];
+      if (!el) continue;
+      el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+    }
+    fit(true, keys.filter((k) => S.els[k]), 1);
+  }
+
+  function toggleProblems(open) {
+    const panel = $("problems"), btn = $("problems-btn");
+    panel.hidden = !(open ?? panel.hidden);
+    btn.setAttribute("aria-expanded", String(!panel.hidden));
+  }
+
+  // ---- status, tooltip, toast ---------------------------------------------------------------
+  function setStatus(cls, text) { const el = $("status"); el.className = `status ${cls}`; el.textContent = text; }
+  function showClock(clock) {
+    $("clock").textContent = clock ? `${clock.rate / 1000} kHz · ${clock.quantum} · ${(clock.quantum / clock.rate * 1000).toFixed(1)} ms` : "";
+  }
+  let tipTimer = null;
+  function hideTip() { clearTimeout(tipTimer); $("tip").hidden = true; }
+
+  function tip(e) {
+    const el = e.target.closest?.("[data-tip]"), box = $("tip");
+    clearTimeout(tipTimer);
+    if (!el) { box.hidden = true; hover(null); return; }
+    if (menus.length || document.querySelector(".veil")) { box.hidden = true; return; }  // a menu or dialog is up
+    const card = e.target.closest(".card");
+    if (card && !S.drag) hover(null, card.dataset.key);
+    tipTimer = setTimeout(() => {
+      fillTip(box, el.dataset.tip);
+      box.hidden = false;
+      const r = box.getBoundingClientRect();
+      box.style.left = `${Math.min(e.clientX + 14, innerWidth - r.width - 8)}px`;
+      box.style.top = `${Math.min(e.clientY + 16, innerHeight - r.height - 8)}px`;
+    }, 450);
+  }
+  // A tooltip: plain text, or {title, sub, kind, wire, rows: [[label, value, mono]], warn, hint}.
+  function fillTip(box, raw) {
+    box.textContent = "";
+    let t;
+    try { t = raw.startsWith("{") ? JSON.parse(raw) : null; } catch { t = null; }
+    box.className = `tip${t ? " rich" : ""}${t?.kind ? ` k-${t.kind}` : ""}`;
+    if (!t) { box.textContent = raw; return; }
+    if (t.wire) {
+      box.classList.add(`k-${t.wire[0].kind}`);
+      box.append(h("div", { class: "tip-wire" }, ...t.wire.flatMap((e, i) => [
+        i ? h("span", { class: "tip-arrow", text: "→" }) : null,
+        h("span", { class: `tip-end k-${e.kind}` }, h("i", { class: "tip-dot" }), e.text)]).filter(Boolean)));
+    }
+    if (t.title) box.append(h("div", { class: "tip-title", text: t.title }));
+    if (t.sub) box.append(h("div", { class: "tip-sub" }, h("i", { class: "tip-dot" }), t.sub));
+    if (t.warn) box.append(h("div", { class: "tip-warn", text: t.warn }));
+    if (t.rows?.length) {
+      box.append(h("dl", { class: "tip-rows" }, ...t.rows.flatMap(([k, v, mono]) => [
+        h("dt", { text: k }), h("dd", { class: mono ? "mono" : "", text: v })])));
+    }
+    if (t.hint) box.append(h("div", { class: "tip-hint", text: t.hint }));
+  }
+
+  let toastTimer = null;
+  function toast(text, level = "error") {
+    const el = $("toast");
+    el.textContent = text; el.className = `toast ${level}`; el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+  }
+
+  // ---- wiring up the page -------------------------------------------------------------------
+  function bind() {
+    const css = getComputedStyle(document.documentElement);
+    for (const k of Object.keys(KIND)) colors[k] = css.getPropertyValue(`--${k}`).trim();
+    board.addEventListener("mousedown", onDown);
+    addEventListener("mousemove", onMove);
+    addEventListener("mouseup", onUp);
+    board.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.view.z * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+    board.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      hideTip();
+      const wire = e.target.closest?.(".wire-g, .portal-end");
+      if (wire) return wireMenu(wire.dataset.wire, e.clientX, e.clientY);
+      const card = e.target.closest(".card");
+      if (card) cardMenu(card.dataset.key, e.clientX, e.clientY); else boardMenu(e.clientX, e.clientY);
+    });
+    $("add").addEventListener("click", (e) => {
+      const r = e.target.getBoundingClientRect();
+      openMenu(r.left, r.bottom + 6, addNodeItems());
+      S.menuAt = toWorld(innerWidth / 2, innerHeight / 2);
+    });
+    $("fit").addEventListener("click", () => fit());
+    $("live").addEventListener("click", toggleLive);
+    document.addEventListener("visibilitychange", sayVisible);
+    $("profile").addEventListener("click", (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      profileMenu(r.left, r.bottom + 6);
+    });
+    $("save-changes").addEventListener("click", () => send({ op: "profile-save" }));
+    $("revert-changes").addEventListener("click", () => send({ op: "profile-revert" }));
+    $("tidy").addEventListener("click", tidy);
+    $("tidy-portals").addEventListener("change", (e) => {  // (the next Tidy follows it; saved with the board)
+      S.ws.tidy_portals = e.target.checked;
+      send({ op: "tidy-portals", on: e.target.checked });
+    });
+    $("chip-disconnect").addEventListener("click", unlinkSelected);
+    $("chip-insert").addEventListener("click", (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      const id = S.selected;
+      S.menuAt = toWorld(r.left, r.bottom + 30);
+      openMenu(r.left, r.bottom + 6, [{ head: "Insert into this wire" }, ...addNodeItems({ insert: id })]);
+      S.menuAt = toWorld(r.left, r.bottom + 30);
+    });
+    $("problems-btn").addEventListener("click", () => toggleProblems());
+    addEventListener("keydown", (e) => {
+      if (e.target.isContentEditable || e.target.tagName === "INPUT") return;
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        if (S.profile?.active) send({ op: "profile-save" });
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") unlinkSelected();
+      if (e.key === "Escape") { cancelWire(); closeMenu(); select(null); toggleProblems(false); }
+      if (e.key === "f" || e.key === "F") fit();
+    });
+    addEventListener("mousedown", (e) => { hideTip(); if (!e.target.closest(".menu, #add, #profile")) closeMenu(); }, true);
+    addEventListener("resize", () => placeChip());
+    addEventListener("error", (e) => S.errors.push(String(e.message)));
+    const err = console.error.bind(console);
+    console.error = (...a) => { S.errors.push(a.join(" ")); err(...a); };
+  }
+
+  // ---- self-audit for scripts/shots.py ------------------------------------------------------
+  function audit() {
+    const faults = [...S.errors];
+    const rect = (el) => el && !el.hidden && el.getClientRects().length ? el.getBoundingClientRect() : null;
+    const cards = Object.entries(S.els).map(([k, el]) => [k, el.getBoundingClientRect()]);
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) {
+        const [a, b] = [cards[i][1], cards[j][1]];
+        if (a.left < b.right - 2 && b.left < a.right - 2 && a.top < b.bottom - 2 && b.top < a.bottom - 2)
+          faults.push(`cards overlap: ${cards[i][0]} and ${cards[j][0]}`);
+      }
+      const r = cards[i][1];
+      if (!S.moved && (r.right > innerWidth || r.bottom > innerHeight || r.left < 0 || r.top < 0))
+        faults.push(`card off screen: ${cards[i][0]}`);
+    }
+    // A tag or badge must stack above the card's outline layer (it once sat under it). Hit-testing
+    // cannot tell: the outline ignores the mouse. So compare the stacking order itself.
+    for (const tag of document.querySelectorAll(".card .badge, .card .warn")) {
+      const card = tag.closest(".card"), z = (s) => parseInt(s.zIndex, 10) || 0;
+      if (z(getComputedStyle(tag)) <= z(getComputedStyle(card, "::before")))
+        faults.push(`under the card outline: "${tag.textContent}" on ${card.dataset.key}`);
+    }
+    if (!$("tip").hidden && (menus.length || document.querySelector(".veil"))) faults.push("a tooltip shows over an open menu");
+    const menuBoxes = [...document.querySelectorAll(".menu")].map((m) => m.getBoundingClientRect());
+    for (let i = 0; i < menuBoxes.length; i++) {
+      for (let j = i + 1; j < menuBoxes.length; j++) {
+        const [a, b] = [menuBoxes[i], menuBoxes[j]];
+        if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1)
+          faults.push(`menu ${j} covers menu ${i}`);
+      }
+    }
+    for (const [k, el] of Object.entries(S.els)) {
+      if (el.offsetWidth % GRID || el.offsetHeight % GRID) faults.push(`card off the grid: ${k} is ${el.offsetWidth}×${el.offsetHeight}`);
+      const sz = S.sizes[k];  // whole pixels whatever the zoom: Tidy must not depend on float noise
+      if (sz && !(Number.isInteger(sz.w) && Number.isInteger(sz.h))) faults.push(`card size not whole pixels: ${k} ${sz.w}×${sz.h}`);
+      for (const [sock, o] of Object.entries(S.offsets[k] || {}))
+        if (Math.abs(o.y - snap(o.y)) > 0.6 || Math.abs(o.x - snap(o.x)) > 0.6) faults.push(`socket off the grid: ${k} ${sock} at ${o.x},${o.y}`);
+    }
+    for (const d of document.querySelectorAll(".card .sock .dot")) {  // centred on the edge (owner: outs were not)
+      const c = d.closest(".card").getBoundingClientRect(), r = d.getBoundingClientRect();
+      const edge = d.closest(".sock").dataset.side === "in" ? c.left : c.right;
+      if (Math.abs((r.left + r.right) / 2 - edge) > 0.6) faults.push(`socket dot off its edge by ${((r.left + r.right) / 2 - edge).toFixed(1)} px: ${d.closest(".card").dataset.key} ${d.closest(".sock").dataset.sock}`);
+    }
+    for (const sp of document.querySelectorAll(".sock span, .menu .item span"))
+      if (sp.scrollWidth > sp.clientWidth + 1) faults.push(`text clipped: "${sp.textContent}"`);
+    for (const t of document.querySelectorAll(".card .title"))
+      if (t.scrollWidth > t.clientWidth + 1 && t.parentElement.parentElement.offsetWidth < 255) faults.push(`title clipped though the card could grow: "${t.textContent}"`);
+    for (const el of [...["bar", "problems", "problems-btn", "unlink", "toast", "changes"].map($),
+                      ...document.querySelectorAll(".rename-hint, .menu, .dialog, .badge, .eq-panel")]) {
+      const r = rect(el), id = el.id || el.className;
+      if (r && (r.right > innerWidth + 0.5 || r.bottom > innerHeight + 0.5 || r.left < -0.5 || r.top < -0.5)) faults.push(`#${id} leaves the window`);
+    }
+    faults.push(...EQ.selftest());
+    for (const wrap of document.querySelectorAll(".eq-mini-wrap")) {  // a gap beside the card's curve (owner saw one)
+      const svg = wrap.querySelector("svg");
+      if (svg && Math.abs(svg.getBoundingClientRect().width - wrap.getBoundingClientRect().width) > 1) faults.push(`an EQ card's curve does not fill its box (${Math.round(svg.getBoundingClientRect().width)} of ${Math.round(wrap.getBoundingClientRect().width)})`);
+    }
+    // Hidden must mean unseen: a display rule beats the hidden attribute (the drag's L/R tag once
+    // stayed on screen after the drag).
+    for (const el of document.querySelectorAll("[hidden]"))
+      if (getComputedStyle(el).display !== "none") faults.push(`#${el.id || el.className} is hidden but still shows`);
+    const eqp = document.querySelector(".eq-panel");
+    if (eqp) {  // the EQ panel: its menus open above it, its band strip fits, its curves draw
+      const z = (el) => parseInt(getComputedStyle(el).zIndex, 10) || 0;
+      for (const m of document.querySelectorAll(".menu")) if (z(m) <= z(eqp)) faults.push("a menu opens under the EQ panel");
+      const st = eqp.querySelector(".eq-strip");
+      if (st.scrollWidth > st.clientWidth + 1) faults.push(`the EQ's band strip overflows (${st.scrollWidth} > ${st.clientWidth})`);
+      for (const p of eqp.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("an EQ curve has NaN in it");
+    }
+    const bar = rect($("bar")), pb = rect($("problems-btn"));
+    if (bar && pb && bar.right > pb.left - 8) faults.push("the bar runs into the problems button");
+    for (const p of layer.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("a wire has NaN in its path");
+    const drawn = Object.values(S.wireEls).filter((x) => x.g.style.display !== "none").length;
+    if (drawn !== visibleWires().length) faults.push(`drew ${drawn} of ${visibleWires().length} wires`);
+    $("audit").textContent = JSON.stringify(faults);
+  }
+
+  const debug = {
+    openProblems: () => toggleProblems(true),
+    pending: (key, sock, x, y) => { startWire(document.querySelector(`.sock[data-key="${key}"][data-sock="${sock}"]`), { clientX: x, clientY: y }); },
+    select, wires: () => visibleWires(),
+    // A wire from one socket held over another (not let go): the target lit, the channel tag up.
+    dragTo: (key, sock, toKey, toSock) => {
+      startWire(document.querySelector(`.sock[data-key="${key}"][data-sock="${sock}"]`), { clientX: 0, clientY: 0 });
+      const r = document.querySelector(`.sock[data-key="${toKey}"][data-sock="${toSock}"] .dot`).getBoundingClientRect();
+      moveWire(r.left + r.width / 2, r.top + r.height / 2);
+      if ($("drag-side").hidden) S.errors.push("no channel tag over a mono input");
+    },
+    // The same wire held over empty board: the tag still says which channel it carries.
+    dragFree: (key, sock, x, y) => {
+      startWire(document.querySelector(`.sock[data-key="${key}"][data-sock="${sock}"]`), { clientX: 0, clientY: 0 });
+      moveWire(x, y);
+      if ($("drag-side").textContent !== "L") S.errors.push(`held from a stereo output, the tag says "${$("drag-side").textContent}"`);
+    },
+    // Opens the board menu at x, y and then the submenus named in path, as a hover would.
+    menu: (x, y, path = []) => {
+      boardMenu(x, y);
+      for (const label of path) {
+        const row = [...menus.at(-1).querySelectorAll(".item")].find((r) => r.textContent.startsWith(label));
+        row?.click();
+      }
+    },
+    cardMenu: (key) => { const r = S.els[key].getBoundingClientRect(); cardMenu(key, r.right - 20, r.top + 20); },
+    // Plugins: the picker (with the fixture's list, searched for query), a card's controls, an open editor.
+    pickPlugin: (list, query = "") => {
+      S.pluginList = list.map((p) => ({ ...p, ref: `${p.format}:${p.path || ""}:${p.label}` }));
+      pickPlugin({});
+      const box = document.querySelector(".picker input");
+      box.value = query; box.dispatchEvent(new Event("input"));
+    },
+    editorOpen: (key) => { S.editors = [key]; render(); },
+    // The EQ: open its panel with band sel picked and a made-up spectrum behind the curve.
+    eqOpen: (key, sel = 0, spectrum = true) => { openEq(key); EQ.debug.select(sel); if (spectrum) EQ.debug.spectrum(); },
+    eqDrag: (key, i, dx, dy) => { openEq(key); EQ.debug.spectrum(); EQ.debug.drag(i, dx, dy); },
+    eqMenu: (key, i) => { openEq(key); EQ.debug.spectrum(); EQ.debug.menu(i); },
+    eqBypass: (key) => eqBypass(key),
+    // A limiter or compressor: its panel with 6 s of made-up sound; drag: its line held at that dB.
+    dynFlag: (key, flag) => dynFlag(key, flag),
+    // Clicks the open panel's title: its card is framed on the board and flashed.
+    panelTitle: () => {
+      S.moved = true;  // the view frames one card on purpose: others may be off screen
+      const title = document.querySelector(".eq-panel .eq-title"), r = title.getBoundingClientRect();
+      const at = { clientX: r.left + 5, clientY: r.top + r.height / 2, pointerId: 9, bubbles: true, button: 0 };
+      title.dispatchEvent(new PointerEvent("pointerdown", at));
+      title.dispatchEvent(new PointerEvent("pointerup", at));
+    },
+    // Drags the open panel by its header by dx, dy (as a person would, with the pointer).
+    panelMove: (dx, dy) => {
+      const head = document.querySelector(".eq-panel .eq-head"), r = head.querySelector(".eq-title").getBoundingClientRect();
+      const at = { clientX: r.right + 30, clientY: r.top + r.height / 2, pointerId: 9, bubbles: true, button: 0 };
+      head.dispatchEvent(new PointerEvent("pointerdown", at));
+      head.dispatchEvent(new PointerEvent("pointermove", { ...at, clientX: at.clientX + dx, clientY: at.clientY + dy }));
+      head.dispatchEvent(new PointerEvent("pointerup", { ...at, clientX: at.clientX + dx, clientY: at.clientY + dy }));
+    },
+    dynOpen: (key, drag = null) => { openDyn(key); if (drag != null) DYN.debug.drag(drag); DYN.debug.fill(); },
+    // Scrolls on band i (ticks up) and double-clicks band j, as a person would; the shot's audit
+    // then checks what that did (Q narrower, slope steeper, band j off).
+    eqGestures: (key, i, ticks, j) => {
+      openEq(key); EQ.debug.spectrum();
+      const q0 = EQ.debug.band(i).q, s0 = EQ.debug.band(0).slope, n0 = EQ.debug.count();
+      EQ.debug.wheel(i, ticks); EQ.debug.wheel(0, 1); EQ.debug.dblclick(j);
+      const want = [[EQ.debug.band(i).q < q0, `wheel up did not widen band ${i + 1}`],
+                    [EQ.debug.band(0).slope > s0, "wheel up did not steepen the cut"],
+                    [EQ.debug.band(j).on === false, `double-click did not turn band ${j + 1} off`],
+                    [EQ.debug.count() === n0, `double-clicking a band added one (${n0} → ${EQ.debug.count()})`]];
+      S.errors.push(...want.filter(([ok]) => !ok).map(([, why]) => why));
+      EQ.debug.select(i);
+    },
+    rename: (key) => startRename(key),
+    profileMenu: (path = []) => {
+      const r = $("profile").getBoundingClientRect();
+      profileMenu(r.left, r.bottom + 6);
+      for (const label of path) [...menus.at(-1).querySelectorAll(".item")].find((x) => x.textContent.startsWith(label))?.click();
+    },
+    showPlan, saveAs, askDelete, askTakeOver,
+    // Tidy, then every column's rows must be evenly spaced, one gap apart (owner).
+    // Tidy with the columns cut where asked ([] one row; [k] before column k…); what it gives.
+    tidyCuts: (cuts) => { S.forceCuts = cuts; tidy(); S.forceCuts = null; return S.foldInfo; },
+    columns: () => { S.forceCuts = []; layout(visible().map((c) => c.key)); S.forceCuts = null; return S.foldInfo.n; },
+    tidy: () => {
+      tidy();
+      const cols = {};
+      for (const [k, p] of Object.entries(S.pos)) if (S.els[k]) (cols[p.x] ||= []).push({ y: p.y, h: S.sizes[k].h });
+      for (const col of Object.values(cols)) {
+        col.sort((a, b) => a.y - b.y);
+        const gaps = col.slice(1).map((c, i) => Math.round(c.y - col[i].y - col[i].h));
+        if (gaps.some((g) => g !== gaps[0])) S.errors.push(`tidy: uneven rows in a column, gaps ${gaps.join(", ")}`);
+      }
+      // Portals: every wire between rows is one; no badge on a card or on another badge.
+      const { rowOf } = S.fold, ends = [...document.querySelectorAll(".portal-end")].map((e) => e.querySelector(".portal-disc").getBoundingClientRect());
+      for (const w of visibleWires()) if (rowOf[w.from[0]] !== rowOf[w.to[0]] && !S.ws.portals?.[w.id]) S.errors.push(`tidy: a wire between rows is not a portal: ${w.id}`);
+      const cardBoxes = Object.values(S.els).map((el) => el.getBoundingClientRect());
+      const meet = (p, q) => p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom;
+      ends.forEach((p, i) => {
+        if (cardBoxes.some((q) => meet(p, q))) S.errors.push("tidy: a portal badge sits on a card");
+        if (ends.some((q, j) => j > i && meet(p, q))) S.errors.push("tidy: two portal badges overlap");
+      });
+    },
+    // Four portals by hand on neighbouring wires; one toggled off and on: every badge must be where
+    // it was (owner: one moved), and none may overlap another.
+    noPortals: () => { $("tidy-portals").click(); },
+    // Tidy, then a fractional zoom (the owner's) and the cards measured again, then Tidy: nothing
+    // may move (sizes once carried zoom-dependent float noise and a card flipped a grid step).
+    tidyZoom: () => {
+      const where = () => JSON.stringify(Object.values(S.els).map((el) => el.style.transform));
+      tidy();
+      const first = where();
+      zoomAt(innerWidth / 2, innerHeight / 2, 0.7791780025683952);
+      render();
+      tidy();
+      if (where() !== first) S.errors.push("tidy: a card moved after a zoom and a second Tidy");
+    },
+    // A state sent before the server saved a Tidy arrives after it: no card may move back (owner:
+    // they jittered).
+    tidyEcho: () => {
+      const behind = structuredClone(S.lastState), where = () => JSON.stringify(Object.values(S.els).map((el) => el.style.transform));
+      for (const k of Object.keys(S.els)) behind.workspace.cards[k] = { ...behind.workspace.cards[k], x: 14, y: 14 };  // its places before
+      tidy();
+      const after = where();
+      receive(behind);
+      if (where() !== after) S.errors.push("tidy: a state from before it moved cards back");
+    },  // the bar's switch off (the next Tidy: one row)
+    portalToggle: () => {
+      const ws = visibleWires().filter((w) => !w.ghost).slice(0, 4).map((w) => w.id);
+      setPortals(Object.fromEntries(ws.map((id) => [id, "hand"])));
+      const spots = () => Object.fromEntries([...document.querySelectorAll(".portal-end")].map((e, i) => [`${e.dataset.wire}>${i % 2}`, e.getAttribute("transform")]));
+      const before = spots();
+      setPortals({ [ws[1]]: null });
+      setPortals({ [ws[1]]: "hand" });
+      const after = spots();
+      for (const [k, v] of Object.entries(before)) if (after[k] !== v) S.errors.push(`portal toggle: ${k} moved from ${v} to ${after[k]}`);
+      const discs = [...document.querySelectorAll(".portal-disc")].map((d) => d.getBoundingClientRect());
+      discs.forEach((p, i) => discs.slice(i + 1).forEach((q) => {
+        if (p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom) S.errors.push("portal toggle: two badges overlap");
+      }));
+    },
+    // The pointer on portal i's exit badge: its wire shows, whole.
+    portalHover: (i) => {
+      const end = document.querySelectorAll(".portal-end")[2 * i];
+      end?.dispatchEvent(new MouseEvent("mouseenter"));
+      const we = S.wireEls[end?.dataset.wire];
+      if (!we || !we.g.classList.contains("hot")) S.errors.push("portal hover: its wire did not show");
+    },
+    // A card appearing where another card has been moved to (owner: new app cards landed on top
+    // of existing ones): its spot in a fresh layout is taken first, then it "appears".
+    appearOver: (key, other) => {
+      delete S.pos[key];
+      const slot = layout([key]) && S.pos[key];
+      S.pos[other] = { ...slot };
+      delete S.pos[key];
+      render();
+    },
+    askDeleteDevice: (key) => askDeleteDevice(byKey()[key]),
+    // A new wire from a socket, let go on empty board at x, y.
+    dropWire: (key, sock, x, y) => {
+      const el = document.querySelector(`.sock[data-key="${CSS.escape(key)}"][data-sock="${sock}"]`);
+      startWire(el, { clientX: x, clientY: y });
+      moveWire(x, y);
+      const d = S.drag;
+      S.drag = null;
+      finishWire(d);
+      menus.at(-1)?.querySelector(".item")?.click();  // open Effects, to show what is there
+      if (!S.dropPath?.isConnected) S.errors.push("the dropped wire's path is gone while its menu is open");
+    },
+    wireMenu: (id, x, y) => { wireMenu(id, x, y); menus.at(-1).querySelector(".item")?.click(); },
+    createDevice: (type) => { S.menuAt = toWorld(800, 500); createDevice(type); },
+    deleteDevice: (key) => askDeleteDevice(byKey()[key]),
+    clock: () => ({ ...clock, running: liveRunning }),
+    // A tooltip up on a card's title, then a right-click there: the tooltip must go.
+    // A gain box: typing and stepping change nothing until confirmed; a board update waits;
+    // Enter applies (clamped); Esc or clicking away cancels.
+    // Scrolling a band's Q while the server's state, a step behind, comes back (owner: the curve
+    // jittered back and forth): the panel must keep what was scrolled, not jump back.
+    eqEcho: (key, i) => {
+      openEq(key); EQ.debug.select(i);
+      EQ.debug.wheel(i, 1);
+      const behind = structuredClone(S.lastState), q1 = EQ.debug.band(i).q;
+      behind.workspace.devices[key].bands = structuredClone(S.ws.devices[key].bands);
+      behind.workspace.devices[key].bands[i].q = q1;
+      EQ.debug.wheel(i, 2);
+      const q3 = EQ.debug.band(i).q;
+      receive(behind);
+      if (EQ.debug.band(i).q !== q3) S.errors.push(`a state a step behind pulled band ${i + 1}'s Q back from ${q3} to ${EQ.debug.band(i).q}`);
+    },
+    fieldHold: (key) => {
+      const box = () => S.els[key].querySelector(".gain-field"), dev = S.ws.devices[key], start = dev.gain_db;
+      const sent = [], real = send;
+      send = (m) => { if (m.op === "set-gain") sent.push(m.db); };  // eslint-disable-line no-func-assign
+      try {
+        const before = box();
+        before.focus();
+        before.value = "-6";
+        before.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+        if (sent.length || dev.gain_db !== start) S.errors.push("the gain changed before it was confirmed");
+        receive(S.lastState);
+        if (box() !== before) S.errors.push("a board update replaced the gain box while editing");
+        before.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        if (sent.join() !== "-5.5") S.errors.push(`expected -5.5 sent on Enter, sent ${sent.join() || "nothing"}`);
+        if (box() === before) S.errors.push("the held update was never applied after confirming");
+        const b2 = box();
+        b2.focus(); b2.value = "99"; b2.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        if (sent.at(-1) !== 24) S.errors.push(`99 should be clamped to 24, sent ${sent.at(-1)}`);
+        const b3 = box();
+        b3.focus(); b3.value = "-20"; b3.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        if (sent.length !== 2) S.errors.push("Esc applied a value");
+        const b3b = box(), shown = b3b.value;  // clicking away cancels too (owner), even after stepping
+        b3b.focus(); b3b.value = "-20"; b3b.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); b3b.blur();
+        if (sent.length !== 2) S.errors.push("clicking away applied a value");
+        if (box().value !== shown) S.errors.push(`clicking away left ${box().value} in the box, not ${shown}`);
+        const b4 = box();
+        b4.focus(); b4.value = "-inf"; b4.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        if (sent.at(-1) !== -144 || box().value !== "−144") S.errors.push(`-inf should give −144, sent ${sent.at(-1)}, shows ${box().value}`);
+        const b5 = box();
+        b5.focus(); b5.value = "-500"; b5.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        if (sent.length !== 3 || box().value !== "−144") S.errors.push(`-500 should stay at −144, shows ${box().value}`);
+        const b6 = box();
+        b6.focus(); b6.value = "3.55"; b6.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        if (sent.at(-1) !== 3.6 || box().value !== "+3.6") S.errors.push(`3.55 should become 3.6, sent ${sent.at(-1)}, shows ${box().value}`);
+        const b7 = box();
+        b7.focus(); b7.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        if (b7.value !== "+3.6") S.errors.push(`double-click changed the value to ${b7.value}`);
+        b7.blur();
+      } finally { send = real; }  // eslint-disable-line no-func-assign
+    },
+    // The tooltip of a card's title, a socket, or a wire, shown at a point (for the shots).
+    showTip: (selector, x, y) => {
+      const el = document.querySelector(selector), box = $("tip");
+      fillTip(box, el.dataset.tip);
+      box.hidden = false;
+      box.style.left = `${x}px`; box.style.top = `${y}px`;
+    },
+    tipThenMenu: (key) => {
+      const head = S.els[key].querySelector("header"), r = head.getBoundingClientRect();
+      const at = { clientX: r.left + 30, clientY: r.top + 10 };
+      $("tip").textContent = head.dataset.tip; $("tip").hidden = false;
+      head.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...at }));
+    },
+    drawCost: () => { const t = performance.now(); for (let i = 0; i < 50; i++) drawLive(); return (performance.now() - t) / 50; },
+    // Live wires with made-up sound: speech, a chord, music that clips, the rest silent.
+    // n: how many sources get made-up sound; clipWire: the wire whose source is the one that clips
+    // (README: the hovered portal's), else the first loud one.
+    fakeLive: (n = 5, clipWire = null) => {
+      const srcs = [...new Set(visibleWires().map((w) => w.from.join("|")))];
+      const clipSrc = clipWire ? S.wireEls[clipWire]?.w.from.join("|") : null;
+      // Speech in bursts, a sustained chord, loud music with a hit every 1.6 s that clips for
+      // ~80 ms (owner: a short burst, not a second of red).
+      const hit = (t) => Math.exp(-((((t % 1.6) - 0.3) / 0.06) ** 2));
+      const shapes = [
+        (t) => Math.max(0, Math.sin(t * 2.1) * 0.9 + 0.1) * Math.sin(t * 2 * Math.PI * 140) * (0.5 + 0.5 * Math.sin(t * 9)),
+        (t) => Math.exp(-((t % 3) * 0.8)) * (Math.sin(t * 2 * Math.PI * 98) * 0.6 + Math.sin(t * 2 * Math.PI * 147) * 0.4),
+        (t) => (0.6 + 0.6 * hit(t)) * Math.sin(t * 2 * Math.PI * 220),
+      ];
+      const bytes = (x) => { const m = Math.abs(x); const v = m >= 0.999 ? 127 : m < 0.002 ? 0 : Math.round((20 * Math.log10(m) + 54) / 54 * 126); return x < 0 ? -v : v; };
+      const tones = [125, 55, 168];  // a voice, a bass chord, bright music (scope.bright's scale)
+      srcs.slice(0, n).forEach((k, n) => {
+        const values = Int8Array.from({ length: 8000 }, (_, ms) => {
+          let peak = 0;
+          const shape = clipSrc === k ? 2 : n % 3, clips = clipSrc ? clipSrc === k : n === 2;
+          const quiet = shape === 2 && !clips ? 0.55 : 1;  // (one source clips: one warning)
+          for (let s8 = 0; s8 < 8; s8++) { const x = quiet * shapes[shape](ms / 1000 + s8 / 8000); if (Math.abs(x) > Math.abs(peak)) peak = x; }
+          return bytes(peak);
+        });
+        feed(k, 0, values, tones[n % 3]);
+        // Clipping raises its warning, as the server's does (problems.clipping), so a picture with
+        // red on a wire also says why (owner).
+        if (values.some((v) => Math.abs(v) >= 127) && !S.problems.some((p) => p.title === "Clipping" && p.cards[0] === k.split("|")[0])) {
+          const c = byKey()[k.split("|")[0]];
+          S.problems = [...S.problems.filter((p) => p.severity === "error"),
+                        { severity: "warning", title: "Clipping", text: `${titleOf(c)} reaches full scale, so it distorts. Turn it down at its source.`, cards: [c.key], wires: [] },
+                        ...S.problems.filter((p) => p.severity !== "error")];
+          renderProblems();
+        }
+      });
+      clock.newest = clock.head = 7999;
+      drawLive();
+    },
+    // A frame made by the capture's own encoder (scripts/shots.py: scope.encode, two sources,
+    // the second bright): the page must read both, values and brightness, in that layout.
+    frameCheck: (b64, tones) => {
+      const raw = atob(b64), buf = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+      S.liveSources = [["frame-a", "out"], ["frame-b", "out"]];
+      liveFrame(buf.buffer);
+      tones.forEach((want, k) => {
+        const r = rings[`frame-${"ab"[k]}|out`], got = r ? Math.max(...r.tone) : -1;
+        if (got !== want) S.errors.push(`live frame: source ${k} brightness ${got}, the capture sent ${want}`);
+      });
+    },
+    // The live wires at a given moment of the fake sound (frames of the README's animation).
+    liveAt: (ms) => { clock.head = ms; drawLive(); },
+    // The fake live wires moving (for the frame-time check): their 8 s played round, a frame each.
+    liveLoop: () => {
+      PB.debug.fakeLive();
+      const t0 = performance.now();
+      const step = (now) => { clock.head = 2000 + ((now - t0) % 5000); drawLive(); requestAnimationFrame(step); };
+      requestAnimationFrame(step);
+    },
+    missingMenu: (key) => {
+      const r = S.els[key].getBoundingClientRect();
+      cardMenu(key, r.right - 20, r.top + 20);
+      menus.at(-1).querySelector(".item")?.click();
+    },
+    // Half-way through moving a wire: picked up at its input, held at x, y.
+    moveWire: (key, sock, toKey, toSock) => {
+      const at = (k, s) => document.querySelector(`.sock[data-key="${k}"][data-sock="${s}"] .dot`).getBoundingClientRect();
+      const a = at(key, sock), b = at(toKey, toSock);
+      const w = wireInto(key, sock);
+      startMove(w, { clientX: a.left, clientY: a.top });
+      moveWire(b.left + b.width / 2, b.top + b.height / 2);
+      const want = sockOf(...w.from, "out")?.ports.length === 2 ? (w.fromPorts.length === 1 ? "LR"[w.fromPorts[0]] : "L R") : "";
+      const got = $("drag-side").hidden ? "" : $("drag-side").textContent;
+      if (got !== want) S.errors.push(`moving a wire that carries "${want}", the tag says "${got}"`);
+    },
+    // Half-way through dragging a card: pressed on its title, moved by dx, dy (screen px).
+    drag: (key, dx, dy) => {
+      const head = S.els[key].querySelector("header"), r = head.getBoundingClientRect();
+      const x = r.left + 40, y = r.top + r.height / 2;
+      onDown({ target: head, button: 0, clientX: x, clientY: y });
+      onMove({ clientX: x + dx, clientY: y + dy, altKey: false });
+    },
+    zoom: (z) => { S.moved = true; zoomAt(innerWidth / 2, innerHeight / 2, z); },
+    fit: (keys, dy = 0, dx = 0) => { S.moved = true; fit(false, keys || undefined); S.view.y += dy; S.view.x += dx; applyView(false); },  // dy: room for a panel
+  };
+
+  function start() {
+    bind();
+    const boot = window.PB_BOOT;
+    if (boot) {
+      // Screenshots catch animations halfway; a preview shows every state as it settles.
+      document.documentElement.classList.add("preview");
+      load(boot);
+      try { if (boot.after) new Function("PB", boot.after)(PB); } catch (e) { S.errors.push(`after: ${e}`); }
+      setTimeout(audit, 200);
+    } else connect();
+  }
+
+  const PB = { debug, audit };
+  addEventListener("DOMContentLoaded", start);
+  return PB;
+})();

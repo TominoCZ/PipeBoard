@@ -1,0 +1,9 @@
+.venv/
+.dev/
+__pycache__/
+*.pyc
+.ponytail/
+
+# Private working notes (stay on this machine)
+docs/next.md
+docs/open.md

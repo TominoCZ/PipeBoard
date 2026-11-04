@@ -1,0 +1,38 @@
+[project]
+name = "pipeboard"
+version = "0.1.0"
+description = "Route PipeWire audio on a calm node board"
+requires-python = ">=3.12"
+dependencies = [
+    # The page and its WebSocket; everything else is the standard library and PipeWire's own tools.
+    "aiohttp>=3.10",
+    "dbus-fast>=5.2.0",
+]
+
+[project.scripts]
+pipeboard = "pipeboard.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".ponytail", ".dev", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C90", "PLR0913", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.per-file-ignores]
+# Checks and fixtures read best as long, flat lists of asserts.
+"tests/*" = ["E501", "PLR0915"]
+# dbus-fast reads quoted annotations as D-Bus signatures and needs the D-Bus method names.
+"pipeboard/tray.py" = ["UP037", "F821", "F722", "N802"]
+
+[tool.ruff.lint.pylint]
+max-statements = 25
+max-args = 5
