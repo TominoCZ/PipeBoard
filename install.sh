@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Install PipeBoard for this user: check what it needs, set it up in your home folder, and add
-# it to your app menu. Nothing outside your home is changed unless you agree to install missing
-# system packages (that step asks, then uses sudo).
+# Install PipeBoard for this user: check what it needs, set it up in your home folder, add it to
+# your app menu and start it at login (in the tray; off again from its tray menu). Nothing outside
+# your home is changed unless you agree to install missing system packages (that step asks, then
+# uses sudo).
 #
 #   ./install.sh                 from a clone of the repository
 #   curl -fsSL https://raw.githubusercontent.com/TominoCZ/PipeBoard/main/install.sh | bash
@@ -17,16 +18,37 @@ CLONE=$SHARE/pipeboard/app            # where the one-liner puts the code
 BIN=$HOME/.local/bin
 APP_ID=chrome-127.0.0.1__pipeboard_-Default  # the window's id; the app uses the same (__main__.py)
 
-say()  { printf '\033[1m%s\033[0m\n' "$*"; }
-note() { printf '  %s\n' "$*"; }
-warn() { printf '\033[33m  ! %s\033[0m\n' "$*"; }
-die()  { printf '\033[31mpipeboard install: %s\033[0m\n' "$*" >&2; exit 1; }
-has()  { command -v "$1" >/dev/null 2>&1; }
+# ---- how it looks: numbered steps, ✓ / ○ / ! per line, colour only on a terminal -------------
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+  B=$'\033[1m' D=$'\033[2m' R=$'\033[0m' G=$'\033[32m' Y=$'\033[33m' E=$'\033[31m' A=$'\033[38;5;79m'
+else
+  B='' D='' R='' G='' Y='' E='' A=''
+fi
+STEP=0 STEPS=4
+banner() { printf '\n  %s◉ PipeBoard%s  %s%s%s\n  %s──────────────────────────────%s\n' "$A$B" "$R" "$D" "$1" "$R" "$D" "$R"; }
+step()   { STEP=$((STEP + 1)); printf '\n  %s%d/%d%s  %s%s%s\n' "$D" "$STEP" "$STEPS" "$R" "$B" "$*" "$R"; }
+ok()     { printf '     %s✓%s %s\n' "$G" "$R" "$*"; }
+skip()   { printf '     %s○%s %s\n' "$D" "$R" "$*"; }  # optional, and not there
+warn()   { printf '     %s!%s %s\n' "$Y" "$R" "$*"; }
+note()   { printf '       %s%s%s\n' "$D" "$*" "$R"; }
+finish() { printf '\n  %s✓ %s%s\n' "$G$B" "$*" "$R"; }
+after()  { printf '    %s%s%s\n' "$D" "$*" "$R"; }  # a line under the final one
+die()    { printf '\n  %s✗ %s%s\n\n' "$E" "$*" "$R" >&2; exit 1; }
+has()    { command -v "$1" >/dev/null 2>&1; }
 # A yes/no question, read from the terminal (also under `curl … | bash`). No terminal: no.
 ask()  {
   local a
-  { printf '  %s [y/N] ' "$1" >/dev/tty && read -r a </dev/tty; } 2>/dev/null || return 1
+  { printf '       %s [y/N] ' "$1" >/dev/tty && read -r a </dev/tty; } 2>/dev/null || return 1
   [[ $a == [yY]* ]]
+}
+# busy <label> <command…>: a "⋯ label" line while it runs, turned into ✓ when it is done
+busy() {
+  local label=$1 status=0; shift
+  [[ -t 1 ]] && printf '     %s⋯ %s%s' "$D" "$label" "$R"
+  "$@" || status=$?
+  [[ -t 1 ]] && printf '\r\033[K'
+  (( status == 0 )) && ok "$label"
+  return $status
 }
 
 # ---- where the code is ------------------------------------------------------------------------
@@ -59,125 +81,157 @@ install_cmd() {  # install_cmd <debian packages> <fedora packages> <arch package
 }
 offer() {  # offer <what> <debian> <fedora> <arch>: show the command; run it if the user agrees
   local cmd; cmd=$(install_cmd "$2" "$3" "$4")
-  if [[ -z $cmd ]]; then warn "Install $1 with your package manager."; return 1; fi
+  if [[ -z $cmd ]]; then note "Install $1 with your package manager."; return 1; fi
   note "To install $1: $cmd"
   if ask "Run that now?"; then $cmd; else return 1; fi
 }
 
 # ---- uninstall --------------------------------------------------------------------------------
 uninstall() {
-  say "Removing PipeBoard"
+  STEPS=2
+  banner "uninstall"
   if pgrep -f -- "$SRC/.venv/bin/python3? -m pipeboard|$SRC/.venv/bin/pipeboard" >/dev/null 2>&1; then
     die "PipeBoard is running from $SRC. Quit it first (tray icon → Quit PipeBoard)."
   fi
+  step "Removing PipeBoard"
   if [[ -f $CONFIG/systemd/user/pipeboard.service ]]; then
     systemctl --user disable pipeboard.service >/dev/null 2>&1 || true
     rm -f "$CONFIG/systemd/user/pipeboard.service"
     systemctl --user daemon-reload 2>/dev/null || true
-    note "Launch at login: removed"
+    ok "Launch at login"
   fi
   rm -f "$BIN/pipeboard" "$SHARE/applications/$APP_ID.desktop" \
         "$SHARE"/icons/hicolor/scalable/apps/pipeboard{,-tray,-tray-alert}.svg
-  note "Command, app-menu entry and icons: removed"
-  if [[ -d $CLONE ]] && ask "Delete the downloaded code in $CLONE?"; then
-    rm -rf "$CLONE"; rmdir "$SHARE/pipeboard" 2>/dev/null || true; note "Code: removed"
+  ok "Command, app-menu entry and icons"
+
+  step "Your files"
+  if [[ -d $CLONE ]]; then
+    if ask "Delete the downloaded code in $CLONE?"; then
+      rm -rf "$CLONE"; rmdir "$SHARE/pipeboard" 2>/dev/null || true; ok "Code removed"
+    else skip "Code kept  ${D}$CLONE${R}"
+    fi
   fi
-  if [[ -d $CONFIG/pipeboard ]] && ask "Delete your boards and profiles in $CONFIG/pipeboard?"; then
-    rm -rf "$CONFIG/pipeboard"; note "Boards and profiles: removed"
+  if [[ -d $CONFIG/pipeboard ]]; then
+    if ask "Delete your boards and profiles in $CONFIG/pipeboard?"; then
+      rm -rf "$CONFIG/pipeboard"; ok "Boards and profiles removed"
+    else skip "Boards and profiles kept  ${D}$CONFIG/pipeboard${R}"
+    fi
   fi
-  note "Virtual devices PipeBoard made stay in PipeWire until it restarts (or log out and in)."
-  say "Done."
+  finish "PipeBoard is removed."
+  after "Virtual devices it made stay in PipeWire until PipeWire restarts (or you log out and in)."
+  echo
 }
 
 # ---- install ----------------------------------------------------------------------------------
 check_system() {
-  say "Checking your system"
+  step "Checking your system"
   [[ $(uname -s) == Linux ]] || die "PipeBoard runs on Linux (PipeWire)."
   local missing=()
   for c in pipewire pw-dump pw-link pw-cli pw-cat wpctl stdbuf; do has "$c" || missing+=("$c"); done
   if (( ${#missing[@]} )); then
-    warn "Missing: ${missing[*]}"
+    warn "PipeWire's tools: missing ${missing[*]}"
     offer "PipeWire's tools and WirePlumber" "pipewire pipewire-bin wireplumber coreutils" \
           "pipewire pipewire-utils wireplumber coreutils" "pipewire wireplumber coreutils" \
       || die "PipeBoard needs PipeWire's tools and WirePlumber."
   else
-    note "PipeWire and WirePlumber: ok"
+    ok "PipeWire and WirePlumber"
   fi
-  pgrep -x pipewire >/dev/null 2>&1 || warn "PipeWire is not running: PipeBoard will have nothing to show until it is."
+  pgrep -x pipewire >/dev/null 2>&1 \
+    || warn "PipeWire is not running: PipeBoard has nothing to show until it is."
 
   local browser=""
   for b in google-chrome google-chrome-stable chromium chromium-browser; do has "$b" && { browser=$b; break; }; done
-  if [[ -n $browser ]]; then note "Window ($browser): ok"
-  else warn "No Chrome or Chromium found: PipeBoard will still run; open http://127.0.0.1:7870 in any browser."
+  if [[ -n $browser ]]; then
+    ok "Window  ${D}$browser${R}"
+  else
+    skip "Window: no Chrome or Chromium"
+    note "PipeBoard still runs: open http://127.0.0.1:7870 in any browser."
   fi
 
   if [[ -f /usr/share/carla/carla_backend.py ]] && has pw-jack; then
-    note "Plugins (Carla, pw-jack): ok"
+    ok "Plugins  ${D}Carla, pw-jack${R}"
   else
-    note "Optional: LV2 and VST3 plugins need Carla and pw-jack."
+    skip "Plugins (optional): LV2 and VST3 plugins need Carla and pw-jack"
     offer "Carla and pw-jack" "carla pipewire-jack" "Carla pipewire-jack-audio-connection-kit" \
           "carla pipewire-jack" || note "Skipped: everything but plugins works without them."
   fi
-  if has cc && ldconfig -p 2>/dev/null | grep -q 'libspeexdsp\.so\.1'; then
-    note "Noise Suppression (a C compiler, libspeexdsp): ok"
+  # (grep reads it all: `grep -q` stops at the first match, ldconfig gets SIGPIPE, and under
+  # pipefail the check failed on a system that had both)
+  if has cc && ldconfig -p 2>/dev/null | grep 'libspeexdsp\.so\.1' >/dev/null; then
+    ok "Noise Suppression  ${D}C compiler, libspeexdsp${R}"
   else
-    note "Optional: the Noise Suppression node is built once with a C compiler, against libspeexdsp."
+    skip "Noise Suppression (optional): built once with a C compiler, against libspeexdsp"
     offer "gcc and libspeexdsp" "gcc libspeexdsp1" "gcc speexdsp" "gcc speexdsp" \
       || note "Skipped: everything but Noise Suppression works without them."
   fi
-  has kdialog || has zenity || has notify-send \
-    || note "Optional: kdialog, zenity or notify-send shows PipeBoard's messages on the desktop."
+  if has kdialog || has zenity || has notify-send; then
+    ok "Desktop messages"
+  else
+    skip "Desktop messages (optional): kdialog, zenity or notify-send"
+  fi
 }
 
 get_uv() {
-  if has uv; then return; fi
-  [[ -x $BIN/uv ]] && { export PATH="$BIN:$PATH"; return; }
-  say "PipeBoard runs with uv (a Python tool that also fetches the right Python)"
+  if has uv; then ok "uv"; return; fi
+  [[ -x $BIN/uv ]] && { export PATH="$BIN:$PATH"; ok "uv"; return; }
+  skip "uv: not installed"
+  note "PipeBoard runs with uv, a Python tool that also fetches the right Python."
   ask "Install uv for your user from astral.sh?" || die "uv is needed: https://docs.astral.sh/uv/"
   has curl || die "curl is needed to install uv."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$BIN:$PATH"
   has uv || die "uv did not install."
+  ok "uv"
 }
 
 get_code() {
   if [[ $SRC == "$CLONE" ]]; then
     has git || die "git is needed to download PipeBoard."
     if [[ -d $CLONE/.git ]]; then
-      say "Updating PipeBoard in $CLONE"
-      git -C "$CLONE" pull --ff-only --quiet
+      busy "Updated  ${D}$CLONE${R}" git -C "$CLONE" pull --ff-only --quiet \
+        || die "Could not update $CLONE (git pull)."
     else
-      say "Downloading PipeBoard to $CLONE"
       mkdir -p "$(dirname "$CLONE")"
-      git clone --quiet --depth 1 "$REPO" "$CLONE"
+      busy "Downloaded  ${D}$CLONE${R}" git clone --quiet --depth 1 "$REPO" "$CLONE" \
+        || die "Could not download PipeBoard."
     fi
   else
-    say "Installing PipeBoard from $SRC"
+    ok "From  ${D}$SRC${R}"
   fi
 }
 
-install() {
-  check_system
-  get_uv
-  get_code
-  (cd "$SRC" && uv sync --quiet) || die "Could not set up PipeBoard's Python environment (uv sync)."
-  note "Python environment: ok"
-
+setup() {
+  step "Setting up"
+  busy "Python environment" bash -c 'cd "$1" && uv sync --quiet' _ "$SRC" \
+    || die "Could not set up PipeBoard's Python environment (uv sync)."
   mkdir -p "$BIN"
   printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$SRC/run.sh" > "$BIN/pipeboard"
   chmod +x "$BIN/pipeboard" "$SRC/run.sh"
   (cd "$SRC" && uv run --quiet python -c "from pipeboard.__main__ import install_entry; install_entry()")
   has update-desktop-database && update-desktop-database "$SHARE/applications" >/dev/null 2>&1 || true
-  note "Command 'pipeboard' and the app-menu entry: ok"
+  ok "Command ${B}pipeboard${R} and the app-menu entry"
   case ":$PATH:" in *":$BIN:"*) ;; *) warn "$BIN is not on your PATH: start it from the app menu, or add it." ;; esac
+}
 
-  if ask "Start PipeBoard at login (in the tray, with your launch profile)?"; then
-    (cd "$SRC" && uv run --quiet python -c \
-      "import asyncio; from pipeboard import autostart; asyncio.run(autostart.set_enabled(True))")
-    note "Launch at login: on (turn it off in PipeBoard's tray menu)"
-  fi
-  say "PipeBoard is installed. Start it from your app menu, or run: pipeboard"
-  note "Remove it again with: $SRC/install.sh --uninstall"
+install() {
+  banner "install"
+  check_system
+  step "Getting PipeBoard"
+  get_uv
+  get_code
+  setup
+  # On by default (owner): PipeBoard lives in the tray and loads your launch profile at login.
+  step "Launch at login"
+  (cd "$SRC" && uv run --quiet python -c \
+    "import asyncio; from pipeboard import autostart; raise SystemExit(asyncio.run(autostart.set_enabled(True)))") \
+    || die "Could not set up launch at login."
+  ok "On  ${D}in the tray, with your launch profile${R}"
+  note "Turn it off in PipeBoard's tray menu."
+
+  finish "PipeBoard is installed."
+  after "Start it from your app menu, or run: pipeboard"
+  after "Remove it with: $SRC/install.sh --uninstall"
+  echo
 }
 
 case "${1:-}" in

@@ -57,8 +57,9 @@ curl -fsSL https://raw.githubusercontent.com/TominoCZ/PipeBoard/main/install.sh 
 ```
 
 Or from a clone: `./install.sh`. It checks what your system needs, offers the install command for
-your distribution (it only uses sudo if you say yes), and adds a `pipeboard` command and an
-app-menu entry. Run it again to update; `install.sh --uninstall` removes it. Everything it may ask
+your distribution (it only uses sudo if you say yes), adds a `pipeboard` command and an
+app-menu entry, and starts PipeBoard at login, in the tray (turn that off in the tray menu). Run it
+again to update; `install.sh --uninstall` removes it. Everything it may ask
 for is in [`docs/deps.md`](docs/deps.md).
 
 Built for Linux with PipeWire and WirePlumber; the tray and window are made for KDE Plasma. It is
