@@ -23,7 +23,7 @@ const PB = (() => {
   };
   const S = {
     model: { cards: [], wires: [], clock: null }, problems: [], ws: { cards: {} }, mode: "connecting",
-    view: { x: 0, y: 0, z: 1 }, pos: {}, offsets: {}, sizes: {}, els: {}, wireEls: {},
+    view: { x: 0, y: 0, z: 1 }, pos: {}, offsets: {}, sizes: {}, els: {}, wireEls: {}, shown: new Set(),
     selected: null, drag: null, queued: null, socket: null, errors: [], moved: false, hovered: [null, null],
   };
   const colors = {};
@@ -84,6 +84,7 @@ const PB = (() => {
     if (msg.type === "plugins") { S.pluginList = msg.list; S.picker?.(); return; }
     if (msg.type === "eq-pcm") { EQ.pcm(msg.key, msg.pcm); return; }
     if (msg.type === "dyn-peaks") { DYN.peaks(msg.key, msg.peaks); return; }
+    if (msg.type === "drops") { S.drops = msg.counts; showDrops(); return; }
     if (msg.type !== "state") return;
     if (S.drag || S.editing) { S.queued = msg; return; }
     load(msg);
@@ -94,20 +95,29 @@ const PB = (() => {
     S.lastState = msg;
     const first = !S.model.cards.length && !S.ws.view;
     S.problems = msg.problems || []; S.ws = msg.workspace || { cards: {} };
-    $("tidy-portals").checked = S.ws.tidy_portals !== false;
+    S.showLatency = !!msg.show_latency;
+    $("show-latency").checked = S.showLatency;
     S.profile = msg.profile || null;
     S.liveOn = msg.live ? msg.live.on : S.liveOn;
+    S.liveInstant = msg.live ? !!msg.live.instant : !!S.liveInstant;
     S.autostart = !!msg.autostart;
     S.takeover = msg.takeover || {};
     S.editors = msg.editors || [];
     if (msg.live?.sources?.length) S.liveSources = msg.live.sources;
-    $("live").setAttribute("aria-pressed", String(!!S.liveOn));
+    showWires();
     S.model = withMissing(msg.model, S.profile);
     S.ws.cards = S.ws.cards || {};
     S.mode = msg.mode || S.mode;
     setStatus(S.mode === "live" ? "live" : "fixture",
               { live: "live", fixture: "fixture graph", preview: "preview" }[S.mode] || S.mode);
     showClock(S.model.clock);
+    // The idle states changed (a password prompt answered): the open panel shows it, drawn again
+    // only then, so a click elsewhere in it is never lost to a rebuild (owner: "they don't toggle").
+    const idleWas = JSON.stringify(S.engine?.cstates);
+    S.engine = msg.engine || null;
+    if (JSON.stringify(S.engine?.cstates) !== idleWas) { S.idlePending = null; if ($("engine")) drawEngine(); }
+    if (S.pathKey) (S.showLatency && S.model.latency?.[S.pathKey]?.path ? openPath(S.pathKey) : closePath());
+    showTrial(S.engine?.trial);
     // Saved places, except just after a Tidy: a state the server sent before it saved them would
     // put cards back for a moment (owner: they jittered); the layout applied here stands until the
     // board shows it saved (or 3 s).
@@ -159,13 +169,142 @@ const PB = (() => {
     // drawn (owner: a gap on the right).
     for (const wrap of cardsEl.querySelectorAll(".eq-mini-wrap")) eqMini(wrap, wrap.closest(".card").dataset.key);
     measure();
+    // A card that comes back keeps the spot it had (an app's key returns with the place it had the
+    // last time it played), and other cards may sit there now: it is placed again like a new one
+    // (owner: a new Chrome stream landed on top of another card). On the first draw only apps:
+    // the owner's own arrangement is never moved.
+    const back = visible().filter((c) => !S.shown.has(c.key) && S.pos[c.key] && (S.shown.size || c.kind === "app")
+                                         && covered(c.key)).map((c) => c.key);
+    for (const k of back) delete S.pos[k];
     const missing = visible().filter((c) => !S.pos[c.key]).map((c) => c.key);
     if (missing.length) placeNew(missing);
+    S.shown = new Set(visible().map((c) => c.key));
+    if (S.pathKey) markPath();
     for (const c of visible()) placeCard(c.key);
     drawWires();
     renderProblems();
     renderProfile();
     $("empty").hidden = S.model.cards.length > 0;
+  }
+
+  // Show latency (owner): under an effect what it adds, under a virtual device the total arriving.
+  const ms = (v) => (v ? `${v.toFixed(1)} ms` : "0 ms");
+  function latencyTag(lat, dev, key) {
+    if ("own" in lat) {  // dimmed while the node is bypassed, and at 0 ms (owner: either way)
+      const known = lat.own != null, off = !!dev?.bypass || (known && !lat.own);
+      const says = known ? (lat.own ? `Delays its sound ${ms(lat.own)}.` : "No delay.") : "Delay not reported.";
+      return h("span", { class: `lat${off ? " off" : ""}`, text: known ? ms(lat.own) : "?",
+        "data-tip": off ? `Bypassed. ${says}` : says });
+    }
+    const tip = ["Delay of the sound arriving here."];
+    if (lat.spread) tip.push("Longest of several paths.");
+    if (lat.unsure) tip.push("A ? on the way: at least this.");
+    tip.push("Click: breakdown.");
+    const tag = h("span", { class: `lat total${S.pathKey === key ? " open" : ""}`, role: "button", tabindex: "0", "data-tip": tip.join("\n"),
+      text: `${lat.unsure ? "≥ " : lat.spread ? "up to " : ""}${ms(lat.total)} total` });
+    tag.addEventListener("pointerdown", (e) => e.stopPropagation());  // a click, never a card drag
+    tag.addEventListener("mousedown", (e) => e.stopPropagation());
+    tag.addEventListener("click", (e) => { e.stopPropagation(); S.pathKey === key ? closePath() : openPath(key); });
+    tag.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPath(key); } });
+    return tag;
+  }
+
+  // The path behind a total (owner, from the design): where the sound enters to this device, its
+  // delays in one bar, what adds nothing listed; the other cards dimmed while it shows.
+  function pathSteps(lat) {
+    const cards = byKey();
+    return lat.path.map((k) => {
+      const c = cards[k];
+      if (!c) return null;
+      const own = S.model.latency?.[k];
+      const ms = c.kind === "hardware" ? (c.delay?.capture ?? null) : own && "own" in own ? own.own : 0;
+      return { k, name: c.kind === "hardware" ? `${titleOf(c)} input` : titleOf(c), ms, kind: c.kind };
+    }).filter(Boolean);
+  }
+  function openPath(key) {
+    const lat = S.model.latency?.[key];
+    if (!lat?.path) { closePath(); return; }
+    const steps = pathSteps(lat), cards = byKey();
+    // Every new state from the server comes here to keep it current: drawn again only if what it
+    // shows changed, and never with the opening animation then (owner: it replayed at random).
+    const old = $("latpath"), sig = JSON.stringify([key, lat, steps, titleOf(cards[key])]);
+    if (old && S.pathKey === key && old.dataset.sig === sig) { markPath(); return; }
+    old?.remove();
+    const again = !!old && S.pathKey === key;
+    S.pathKey = key;
+    // The chain (owner's pick L1): every step a stop on one line, in order; a step that delays
+    // the sound stretches with its ms under it, one that does not is a dot with its name.
+    const color = (x) => `var(--${["hardware", "plugin", "virtual", "app"].includes(x.kind) ? x.kind : "effect"})`;
+    const delays = (x) => x.ms == null || x.ms > 0.05;
+    const step = (x, i) => focusOn(x.k, delays(x)
+      ? h("div", { class: `seg delay${x.ms == null ? " unknown" : ""}`, style: `flex:${x.ms == null ? 2 : x.ms} 1 0;--c:${color(x)}`,
+                   "data-tip": x.ms == null ? `${x.name}: does not report its delay` : `${x.name}: ${ms(x.ms)}` },
+          h("span", { class: "bar" }), h("span", { class: "say" }, h("b", { text: x.ms == null ? "?" : ms(x.ms) }), x.name))
+      : h("div", { class: `seg stop${i === steps.length - 1 || i === 0 ? " end" : ""}`, style: `--c:${color(x)}`, "data-tip": `${x.name}: no delay` },
+          h("i"), h("span", { text: x.name })));
+    const chain = steps.flatMap((x, i) => [i ? h("span", { class: "gap" }) : null, step(x, i)]).filter(Boolean);
+    const big = steps.filter((x) => x.ms != null && x.ms > 0.05).sort((a, b) => b.ms - a.ms)[0];
+    const close = h("button", { type: "button", class: "x", "aria-label": "Close", text: "×" });
+    close.addEventListener("click", closePath);
+    let most = null;
+    if (big?.kind === "hardware") {
+      const go = h("button", { type: "button", class: "go-engine", text: "Audio engine ›" });
+      go.addEventListener("click", () => { closePath(); openEngine(); });
+      most = [h("span", { text: "Most of it is the interface's buffer" }), go];
+    } else if (big) most = [h("span", { text: `Most of it: ${big.name}, ${ms(big.ms)}` })];
+    const panel = h("div", { id: "latpath", class: "latpath", role: "dialog", "aria-label": "Where the delay comes from" },
+      h("div", { class: "latpath-head" },
+        h("span", { class: "route" }, h("b", { text: steps[0]?.name || "?" }), h("span", { class: "to", text: "→" }), h("b", { text: titleOf(cards[key]) })),
+        h("span", { class: "total" }, `${lat.unsure ? "≥ " : ""}${lat.total.toFixed(1)}`, h("small", { text: "ms" })), close),
+      h("div", { class: "chain" }, ...chain),
+      h("div", { class: "latpath-foot" },
+        h("span", { id: "latpath-drops", class: "drops", title: "Clicks or gaps since this opened." }), h("span", { class: "grow" }),
+        lat.unsure ? h("span", { class: "unsure", text: "? = not reported: at least this" }) : null, ...(most || [])));
+    panel.addEventListener("keydown", (e) => { if (e.key === "Escape") closePath(); });
+    panel.dataset.sig = sig;
+    if (!S.dropsOn) { S.dropsOn = true; S.drops = null; send({ op: "drops", on: true }); }
+    if (again) panel.style.animation = "none";
+    document.body.append(panel);
+    markPath();
+    showDrops();
+  }
+  // The path's cards' dropouts since the panel opened (owner: a live drop counter on devices),
+  // filled in place as the server counts, never redrawing the panel.
+  function showDrops() {
+    const el = $("latpath-drops"), path = S.model.latency?.[S.pathKey]?.path;
+    if (!el || !path) return;
+    const cards = byKey(), heard = path.filter((k) => S.drops?.[k] != null), hit = heard.filter((k) => S.drops[k] > 0);
+    // Just the number (owner: the panel already says which path); which card had them, in the tip.
+    const total = hit.reduce((t, k) => t + S.drops[k], 0);
+    el.classList.toggle("bad", hit.length > 0);
+    el.title = hit.length > 1 ? hit.map((k) => `${titleOf(cards[k])}: ${S.drops[k]}`).join("\n")
+      : "Clicks or gaps since this opened.";
+    el.textContent = S.drops == null ? "Dropouts: counting…" : !heard.length ? "Dropouts: none of these report any."
+      : hit.length ? `Dropouts since opened: ${total}` : "No dropouts since opened.";
+  }
+  // Pointing at a step (a segment or a name) lights its card on the board while the pointer stays.
+  function focusOn(key, el) {
+    el.addEventListener("mouseenter", () => S.els[key]?.classList.add("path-focus"));
+    el.addEventListener("mouseleave", () => S.els[key]?.classList.remove("path-focus"));
+    return el;
+  }
+  function markPath() {  // the path's cards and the wires between them lit, the rest dimmed (owner)
+    const path = S.model.latency?.[S.pathKey]?.path || [], on = new Set(path);
+    const steps = new Set(path.slice(1).map((k, i) => `${path[i]}>${k}`));
+    for (const [k, el] of Object.entries(S.els)) el.classList.toggle("off-path", !!S.pathKey && !on.has(k));
+    for (const we of Object.values(S.wireEls)) {
+      const off = !!S.pathKey && !steps.has(`${we.w.from[0]}>${we.w.to[0]}`);
+      we.g.classList.toggle("off-path", off);
+      for (const end of we.ends || []) end.classList.toggle("off-path", off);
+    }
+    for (const el of document.querySelectorAll(".lat.total")) el.classList.toggle("open", el.closest(".card")?.dataset.key === S.pathKey);
+  }
+  function closePath() {
+    if (S.dropsOn) { S.dropsOn = false; S.drops = null; send({ op: "drops", on: false }); }
+    S.pathKey = null;
+    $("latpath")?.remove();
+    for (const el of document.querySelectorAll(".card.path-focus")) el.classList.remove("path-focus");
+    markPath();
   }
 
   function cardEl(c, wired, flags) {
@@ -193,6 +332,8 @@ const PB = (() => {
                   h("span", { class: "sev-dot" }),
                   h("span", { class: "label", text: `${flags.label}${flags.more ? ` +${flags.more}` : ""}` })));
     }
+    const lat = S.showLatency && !c.missing && S.model.latency?.[c.key];
+    if (lat) el.append(latencyTag(lat, dev, c.key));
     if (c.missing) {
       el.append(h("span", { class: "warn", "data-tip": "Not on the system. Its connections wait for it.\nRight-click to use another device.", text: "!" }));
     }
@@ -619,7 +760,7 @@ const PB = (() => {
       return { bands, score: Math.abs(Math.log(w / h / aspect)) + 0.04 * crossing(cuts) };  // (a wire between rows: a portal, a small cost)
     };
     if (S.forceCuts) { S.foldInfo = { n, ...shape(S.forceCuts), crossings: crossing(S.forceCuts) }; return S.foldInfo.bands; }  // (renders comparing splits)
-    if (S.ws.tidy_portals === false) return [[0, n]];  // Portals off (the bar's switch): one row, as before
+    if (S.ws.tidy_portals !== true) return [[0, n]];  // Portals off (off unless turned on, owner): one row
     let best = shape([]);
     for (let r = 2; r <= Math.min(6, n); r++) {
       const total = span(0, n), cuts = [];
@@ -664,6 +805,14 @@ const PB = (() => {
   // it is free, else the nearest free grid spot, a grid step clear of every card; then saved, so
   // they stay put. A fresh layout alone ignored where cards had been moved to since, and a new
   // app's card landed right on top of one (owner).
+  function covered(key) {  // another card on the board overlaps this one's spot
+    const a = S.pos[key], sa = S.sizes[key];
+    return !!a && !!sa && visible().some((c) => {
+      const b = S.pos[c.key], sb = S.sizes[c.key];
+      return c.key !== key && b && sb && a.x < b.x + sb.w && b.x < a.x + sa.w && a.y < b.y + sb.h && b.y < a.y + sa.h;
+    });
+  }
+
   function placeNew(keys) {
     layout(keys);
     const want = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
@@ -788,6 +937,7 @@ const PB = (() => {
     });
     hover(...S.hovered);  // the wires were rebuilt: a hovered card's stay lit (owner: a button press dimmed them)
     placeWires();
+    if (S.pathKey) markPath();  // (rebuilt wires lose their dimming)
   }
 
   function wireTip(w, by) {
@@ -1055,6 +1205,19 @@ const PB = (() => {
       const peak = Math.max(r.hi[i], -r.lo[i]);
       return { env: peak, ph: r.ph[i], next: r.ph[i] + step(r, i), clip: peak >= 127 };
     };
+    // Instant (owner): the newest sound along the whole wire, its loudness the height everywhere,
+    // its pitch the wavelength, the wiggle still moving down the wire at the roll speed: the wire
+    // answers at once instead of the sound taking a second to travel its length.
+    if (S.liveInstant) {
+      const n = Math.floor(slot - 0.5), a = at(n), b = at(n - 1), c = a || b;
+      const env = Math.max(a ? a.env : 0, b ? b.env : 0);  // (two slots: no flicker between them)
+      if (!c || env < 2) return null;
+      const k = step(r, n & (SLOTS - 1)) / SLOT_PX, ph = (clock.head / SLOT_MS) * SLOT_PX * k;
+      put(0, 0);
+      for (let d = WAVE_PX / 2; d <= len; d += WAVE_PX) put(d, env * Math.sin(ph - d * k), c.clip);
+      put(len, 0);
+      loud = env;
+    } else {
     // Points every WAVE_PX along the wire, each between two slot centres: loudness and phase
     // eased from one to the next, so the line is smooth whatever the pitch.
     put(0, 0);
@@ -1067,6 +1230,7 @@ const PB = (() => {
       put(d, env * Math.sin(ph), (t < 0.5 ? a : b)?.clip);
     }
     put(len, 0);
+    }
     if (loud < 2 || pts.length < 3) return null;
     const f = (p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
     // Clipping (owner: a smooth red glow, not flecks or steps): the wave drawn again in red
@@ -1126,9 +1290,41 @@ const PB = (() => {
 
   function toggleLive() {
     S.liveOn = !S.liveOn;
-    $("live").setAttribute("aria-pressed", String(S.liveOn));
+    showWires();
     send({ op: "live-setting", on: S.liveOn });
     if (!S.liveOn) { for (const k of Object.keys(rings)) delete rings[k]; drawLive(); }
+  }
+  // The wires: Still, Flowing or Instant, one choice (owner: Instant alone did not say it needs
+  // Animate). Still is Animate off; the Instant setting is kept for the next time it animates.
+  const WIRES = {
+    still: { label: "Still", desc: "Plain wires", icon: "still" },
+    flowing: { label: "Flowing", desc: "Sound travels along each wire", icon: "wave" },
+    instant: { label: "Instant", desc: "The whole wire shows the sound now", icon: "bolt" },
+  };
+  const wiresMode = () => (!S.liveOn ? "still" : S.liveInstant ? "instant" : "flowing");
+  function showWires() {
+    const m = WIRES[wiresMode()];
+    $("wires-mode").textContent = m.label;
+    $("wires-icon").innerHTML = MI[m.icon];
+  }
+  function setWires(mode) {
+    const on = mode !== "still", instant = mode === "instant";
+    if (on && instant !== !!S.liveInstant) { S.liveInstant = instant; send({ op: "live-instant", on: instant }); }
+    if (on !== !!S.liveOn) toggleLive(); else { showWires(); drawLive(); }
+  }
+  function wiresMenu(e) {
+    const r = e.currentTarget.getBoundingClientRect(), now = wiresMode();
+    openMenu(r.left, r.bottom + 6, Object.entries(WIRES).map(([k, m]) => ({ ...m, on: k === now, action: () => setWires(k) })));
+  }
+  // Tidy's one option: Portals (the next Tidy follows it; saved with the board).
+  function setTidyPortals(on) {
+    S.ws.tidy_portals = on;
+    send({ op: "tidy-portals", on });
+  }
+  function tidyMenu(e) {
+    const r = e.currentTarget.closest(".split").getBoundingClientRect(), on = S.ws.tidy_portals === true;
+    openMenu(r.left, r.bottom + 6, [{ label: "Portals", desc: "A long board folds into rows; the wires between them become lettered portals",
+      icon: on ? "boxon" : "boxoff", on, action: () => setTidyPortals(!on) }]);
   }
 
   // ---- view: pan, zoom, fit -----------------------------------------------------------------
@@ -1185,7 +1381,12 @@ const PB = (() => {
   // ---- pointer: drag cards, draw wires, pan -------------------------------------------------
   function onDown(e) {
     if (e.button === 2) return;
+    // The middle button pans: Chrome's own use of it (autoscroll, which took the mouse from the
+    // page, and the selection paste on release) made a middle drag stop and stutter (owner).
+    if (e.button === 1) e.preventDefault();
     closeMenu();
+    closeEngine();  // popovers, like the menus: any press on the board closes them (owner)
+    toggleProblems(false);
     const sock = e.target.closest(".sock"), head = e.target.closest(".card header");
     if (sock && e.button === 0) {
       // From an input that has a wire: pick that wire up and move it (Shift: a new one instead).
@@ -1285,7 +1486,7 @@ const PB = (() => {
     board.classList.remove("panning");
     // A click on empty board (pressed, let go, the view not moved) closes an open effect panel
     // (owner). Panning keeps it open; a card or a wire never gets here.
-    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); }
+    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); closePath(); }  // a click on the board (owner)
     if (d.kind === "card") {
       S.els[d.key]?.classList.remove("dragging");
       $("landing").hidden = true;
@@ -1358,6 +1559,11 @@ const PB = (() => {
   const MI = {
     add: '<path d="M7 2.5v9M2.5 7h9"/>',
     fit: '<path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/>',
+    still: '<path d="M1.5 7h11"/>',
+    wave: '<path d="M1.5 7h2l1.5-4 2 8 2-6 1.2 2h2.3"/>',
+    bolt: '<path d="M8 1.5 3 8h4l-1 4.5L11 6H7z"/>',
+    boxon: '<rect x="2" y="2" width="10" height="10" rx="2.5"/><path d="M4.6 7.2l1.7 1.7 3.2-3.5"/>',
+    boxoff: '<rect x="2" y="2" width="10" height="10" rx="2.5"/>',
     tidy: '<rect x="1.5" y="3" width="3" height="8" rx="1"/><rect x="5.5" y="5" width="3" height="4" rx="1"/><rect x="9.5" y="2" width="3" height="10" rx="1"/>',
     gain: '<circle cx="7" cy="7" r="5"/><path d="M7 7l2.6-2.6"/>',
     eq: '<path d="M1.5 9c2 0 2.5-5 4.5-5s2.5 7 4.5 7 1.5-3 2.5-3"/>',
@@ -1419,9 +1625,11 @@ const PB = (() => {
     if (it.sep) return h("hr");
     if (it.head) return h("div", { class: "head", text: it.head });
     const sub = it.sub, off = it.off || (sub && !sub.length);
-    const row = h("div", { class: `item${off ? " off" : ""}${sub ? " has-sub" : ""}${it.danger ? " danger" : ""}`, role: "menuitem",
+    const row = h("div", { class: `item${off ? " off" : ""}${sub ? " has-sub" : ""}${it.danger ? " danger" : ""}${it.desc ? " tall" : ""}${it.on ? " on" : ""}`,
+                           role: it.on == null ? "menuitem" : "menuitemcheckbox", "aria-checked": it.on == null ? null : String(!!it.on),
                            tabindex: off ? null : "-1", "aria-haspopup": sub ? "menu" : null },
-                  h("span", { class: "label", text: it.label }), it.hint ? h("small", { text: it.hint }) : null);
+                  h("span", { class: "label" }, it.label, it.desc ? h("span", { class: "desc", text: it.desc }) : null),
+                  it.hint ? h("small", { text: it.hint }) : null);
     row.insertAdjacentHTML("afterbegin", `<svg class="mi" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${MI[it.icon] || ""}</svg>`);
     if (sub) row.insertAdjacentHTML("beforeend", CHEVRON);
     if (it.forget) {
@@ -1879,7 +2087,7 @@ const PB = (() => {
   // One word for the tag above a card; the problem center has the whole story.
   const SHORT = { "Feedback loop": "Feedback", "Connection failed": "Failed",
                   "Only one side of a stereo input": "One side", "Same sound arrives twice": "Doubled",
-                  "Clipping": "Clipping", "Device missing": "Missing" };
+                  "Clipping": "Clipping", "Device missing": "Missing", "Dropouts": "Dropouts" };
 
   function problemCards() {
     const flagged = {};
@@ -1906,9 +2114,12 @@ const PB = (() => {
     for (const p of ps) {
       const show = h("button", { type: "button", text: "Show" });
       show.addEventListener("click", () => showProblem(p));
+      // Laid out (owner: concise, formatted): where in bold, what muted, the fix on its own line.
       list.append(h("li", { class: `sev-${p.severity}` },
         h("div", { class: "p-head" }, h("span", { class: "sev-dot" }), h("strong", { text: p.title }), p.cards.length ? show : null),
-        h("p", { text: p.text })));
+        p.where ? h("p", { class: "p-where", text: p.where }) : null,
+        h("p", { class: "p-what", text: p.what ?? p.text }),
+        p.fix ? h("p", { class: "p-fix", text: p.fix }) : null));
     }
   }
 
@@ -1934,8 +2145,222 @@ const PB = (() => {
 
   // ---- status, tooltip, toast ---------------------------------------------------------------
   function setStatus(cls, text) { const el = $("status"); el.className = `status ${cls}`; el.textContent = text; }
+  // ---- the audio engine (PLAN §8c): block size, safety margin, priority, tried for a minute ----
+  const BLOCKS = [128, 256, 512, 1024, 2048], MARGINS = [1, 2, 3];  // (the margin in whole blocks: engine.MARGIN_BLOCKS)
+  const roundTrip = (e, rate) => (2 * (e.block + e.margin) / rate) * 1000;  // in and out: block + margin each
+  function openEngine() {
+    const e = S.engine;
+    if (!e?.interface?.length) { toast("No audio interface clocks the graph: there is nothing to set.", "info"); return; }
+    if (e.trial) { toast("A setting is being tried: keep or revert it first.", "info"); return; }
+    S.pick = { block: e.block, blocks: e.margin_blocks || 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, advanced: S.pick?.advanced || false };
+    drawEngine();
+  }
+  // The safety margin in whole blocks (owner: only values that work; under one block the input
+  // dropped out, over one did not fit until the buffer is made to fit: engine.texts).
+  function p0() { S.pick.margin = S.pick.block * S.pick.blocks; }
+  // Whether trying these values makes the interface start again (engine.reopens).
+  const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) || (!p.tsched && p.block !== e.block);
+  // CPU idle states, one toggle each (owner): lit = allowed. By the names and wake times the CPU
+  // reports, any vendor. Applied at once through the system's password prompt; nothing restarts.
+  function deepSleep(e, row) {
+    const states = e.cstates?.states || [];
+    if (!states.length) return [row("CPU idle states", h("span", { class: "of", text: "none reported" }), ""), null];
+    const off = states.filter((x) => x.off).map((x) => x.name);
+    const chips = h("div", { class: "chips" }, ...states.map((x) => {
+      const b = h("button", { type: "button", class: `chip-state${S.idlePending === x.name ? " pending" : ""}`, "aria-pressed": String(!x.off), "data-k": `idle-${x.name}`,
+                              disabled: !!S.idlePending,
+                              title: `${x.name}: ${x.us} µs to wake. ${x.off ? "Off" : "Allowed"}. Click to ${x.off ? "allow" : "turn off"}.` },
+        h("b", { text: x.name }), h("small", { text: `${x.us} µs` }));
+      b.addEventListener("click", () => {
+        S.idlePending = x.name;  // (until the server's answer: no second click on a stale chip)
+        send({ op: "cstates", off: x.off ? off.filter((n) => n !== x.name) : [...off, x.name] });
+        toast("Asking for your password…", "info");
+        drawEngine();
+      });
+      return b;
+    }));
+    const kept = (e.cstates.rules || []).map((r) => r.split("/").pop()).join(", ");
+    return [row("CPU idle states", chips, off.length ? `${off.join(", ")} off` : "all on"),
+            h("p", { class: "hint", text: `Slow-waking states can cause dropouts; off costs some power. Needs your password.${kept ? ` Boot rule: ${kept}.` : ""}` })];
+  }
+  function marginSeg(p, e) {  // 1 · 2 · 3 blocks, the one running marked like the block's
+    return h("div", { class: "segmented words", role: "radiogroup", "aria-label": "Safety margin" }, ...MARGINS.map((v) => {
+      const b = h("button", { type: "button", role: "radio", "aria-checked": String(p.blocks === v), class: v === (e.margin_blocks || 1) ? "cur" : "",
+                              "data-k": `blocks-${v}`, text: v === 1 ? "1 block" : `${v} blocks` });
+      b.addEventListener("click", () => { p.blocks = v; drawEngine(); });
+      return b;
+    }));
+  }
+  function scheduling(p, e) {  // Interrupts | Timer, the one running marked like the block's
+    return h("div", { class: "segmented words", role: "radiogroup", "aria-label": "Scheduling" }, ...[[false, "Interrupts"], [true, "Timer"]].map(([v, text]) => {
+      const b = h("button", { type: "button", role: "radio", "aria-checked": String(p.tsched === v), class: v === !!e.tsched ? "cur" : "", "data-k": `tsched-${v}`, text });
+      b.addEventListener("click", () => { p.tsched = v; drawEngine(); });
+      return b;
+    }));
+  }
+  function closeEngine() { $("engine")?.remove(); $("clock").classList.remove("open"); }
+  function drawEngine() {
+    // Drawn again on every change: no opening animation then, and the focus back where it was
+    // (owner: each + or − made the panel close and open).
+    const again = !!$("engine"), focused = document.activeElement?.dataset?.k;
+    closeEngine();
+    p0();
+    // The round trip compares only when the block changes (owner: a priority shown as a new
+    // round trip); otherwise it is what runs (on the timer PipeWire pads the margin itself).
+    const e = S.engine, p = S.pick, rate = e.rate, resized = p.block !== e.block || p.blocks !== (e.margin_blocks || 1), shown = resized ? p : e;
+    const scale = Math.max(roundTrip(e, rate), roundTrip(shown, rate));
+    const w = (samples) => `${(samples / rate * 1000) / scale * 100}%`;  // a part of the round trip, as wide as its share
+    const bar = (v, cls) => h("div", { class: `bar${cls}` }, ...[v.block, v.margin, v.block, v.margin].map((x, i) =>
+      h("i", { class: i % 2 ? "margin" : "", style: `width:${w(x)}` })));
+    const seg = (vals, key, label) => h("div", { class: "segmented", role: "radiogroup", "aria-label": label },
+      ...vals.map((v) => {
+        const b = h("button", { type: "button", role: "radio", "aria-checked": String(p[key] === v), class: v === e[key] ? "cur" : "", "data-k": `${key}-${v}`,
+          title: v === e[key] ? "What runs now" : "", text: v === 0 ? "None" : String(v) });
+        b.addEventListener("click", () => { p[key] = v; drawEngine(); });
+        return b;
+      }));
+    const stepper = (key, lo, hi) => {
+      const box = h("span", { class: "stepper" }), minus = h("button", { type: "button", text: "−", "aria-label": "Lower", "data-k": `${key}-` }),
+        plus = h("button", { type: "button", text: "+", "aria-label": "Higher", "data-k": `${key}+` });
+      minus.addEventListener("click", () => { p[key] = Math.max(lo, p[key] - 1); drawEngine(); });
+      plus.addEventListener("click", () => { p[key] = Math.min(hi, p[key] + 1); drawEngine(); });
+      box.append(minus, h("span", { text: String(p[key]) }), plus);
+      return box;
+    };
+    const row = (label, control, val) => h("div", { class: "eng-row" }, h("label", { text: label }), control, h("span", { class: "val", text: val }));
+    const msOf = (n) => `${(n / rate * 1000).toFixed(1)} ms`;
+    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1);
+    const now = roundTrip(e, rate), next = roundTrip(shown, rate);
+    const adv = h("button", { type: "button", class: "adv-head", "aria-expanded": String(p.advanced), "data-k": "advanced" },
+      h("span", { class: "chev", text: p.advanced ? "▾" : "▸" }), "Advanced",
+      p.advanced ? null : h("small", { text: `priority ${p.prio} · nice ${p.nice}` }));
+    adv.addEventListener("click", () => { p.advanced = !p.advanced; drawEngine(); });
+    const cancel = h("button", { type: "button", class: "btn quiet", text: "Cancel" });
+    const go = h("button", { type: "button", class: "btn go", text: "Try it", disabled: !changed });
+    cancel.addEventListener("click", closeEngine);
+    go.addEventListener("click", () => { send({ op: "engine-try", block: p.block, margin: p.margin, prio: p.prio, nice: p.nice, tsched: p.tsched }); closeEngine(); });
+    const close = h("button", { type: "button", class: "x", "aria-label": "Close", text: "×" });
+    close.addEventListener("click", closeEngine);
+    const panel = h("div", { id: "engine", class: "eng", role: "dialog", "aria-label": "Audio engine" },
+      h("div", { class: "eng-head" }, h("b", { text: "Audio engine" }), h("span", { class: "sub", text: `clocked by ${e.title || "the interface"} · ${rate / 1000} kHz` }), h("span", { class: "sp" }), close),
+      h("div", { class: "rt" },
+        h("div", { class: "rt-top" }, h("span", { class: "what", text: "Round trip" }),
+          resized && Math.abs(next - now) > 0.05 ? h("span", { class: "now struck", text: `${now.toFixed(1)} ms` }) : null,
+          resized && Math.abs(next - now) > 0.05 ? h("span", { class: "arrow", text: "→" }) : null,
+          h("span", { class: "new", text: next.toFixed(1) }, h("small", { text: "ms" }))),
+        h("div", { class: "bars" }, resized ? bar(e, " ghost") : null, bar(shown, "")),
+        h("div", { class: "legend" }, h("span", { text: "block, in and out" }), h("span", { class: "m", text: "safety margin" }))),
+      row("Block size", seg(BLOCKS, "block", "Block size"), msOf(p.block)),
+      h("p", { class: "hint", text: "Smaller: less delay, more CPU." }),
+      row("Safety margin", marginSeg(p, e), msOf(p.margin)),
+      h("p", { class: "hint", text: "More: fewer dropouts, more delay." }),
+      h("hr"), adv,
+      p.advanced ? row("Scheduling", scheduling(p, e), p.tsched ? "timer" : "interrupts") : null,
+      p.advanced ? h("p", { class: "hint", text: "Timer: block changes apply without restarting the interface." }) : null,
+      ...(p.advanced ? deepSleep(e, row) : []),
+      p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), "real time") : null,
+      p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), "") : null,
+      p.advanced ? h("p", { class: "hint", text: "Already real time; raising rarely helps and never cuts delay." }) : null,
+      h("div", { class: "eng-foot" },
+        h("span", { class: "note", text: S.pick && reopensNow(S.pick, S.engine)
+          ? "The interface restarts: silent until it is back. Then a minute to Keep."
+          : "Applies at once. A minute to Keep." }),
+        cancel, go));
+    panel.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); closeEngine(); } });
+    if (again) panel.style.animation = "none";
+    document.body.append(panel);
+    if (focused) panel.querySelector(`[data-k="${focused}"]`)?.focus();
+    const r = $("clock").getBoundingClientRect(), left = Math.max(12, Math.min(r.left - 30, innerWidth - panel.offsetWidth - 12));
+    panel.style.left = `${left}px`;
+    panel.style.setProperty("--tip", `${r.left + r.width / 2 - left - 5}px`);
+    $("clock").classList.add("open");
+  }
+  // The trial: one bar under the top bar, counting down to going back (the server keeps time too).
+  let trialTimer = null;
+  // Built once per trial; each new state only updates its numbers in place. Rebuilt with every
+  // state (the dropout count sends one every 2 s), a press on Keep and its release could land on
+  // two different buttons, and the click was lost (owner: "I have to click Keep twice").
+  function trialButtons(trial, waiting) {
+    const back = h("button", { type: "button", class: "btn danger", text: "Revert", title: `Back to block ${trial.was.block} now` });
+    const keep = h("button", { type: "button", class: "btn go", text: "Keep", disabled: waiting, title: waiting ? "Once its sound is back" : null });
+    back.addEventListener("click", () => send({ op: "engine-back" }));
+    keep.addEventListener("click", () => send({ op: "engine-keep" }));
+    return [back, keep];
+  }
+  function showTrial(trial) {
+    if (S.engine?.starting) { showStarting(S.engine.starting, trial); return; }
+    if (!trial) { clearInterval(trialTimer); $("trial")?.remove(); return; }
+    const v = trial.values, sig = JSON.stringify([v, trial.was]);
+    let bar = $("trial");
+    if (!bar || bar.dataset.sig !== sig) {
+      clearInterval(trialTimer);
+      bar?.remove();
+      const [back, keep] = trialButtons(trial, false);
+      const what = [`block ${v.block}`];
+      if (v.margin !== v.block) what.push(`${v.margin / v.block}-block margin`);
+      if (v.tsched !== trial.was.tsched) what.push(v.tsched ? "timer" : "interrupts");
+      // Design A (owner's pick): the seconds left in a ring, what is tried, then its numbers.
+      bar = h("div", { id: "trial", class: "trial", role: "status", "data-sig": sig },
+        h("span", { class: "ring", title: `Goes back to block ${trial.was.block} when it runs out` }, h("span", { class: "count" })),
+        h("span", { class: "lines" },
+          h("span", {}, "Trying ", h("b", { text: what.join(" · ") })),
+          h("span", { class: "sub" }, `${roundTrip(v, S.engine.rate).toFixed(1)} ms round trip`, h("span", { class: "sep", text: "·" }),
+            h("span", { class: "drops", title: "Clicks or gaps since this setting began" }),
+            h("span", { class: "took warn-text" }))),
+        back, keep);
+      document.body.append(bar);
+      bar.ends = performance.now() + trial.left * 1000;
+      const ring = bar.querySelector(".ring"), count = bar.querySelector(".count");
+      const tick = () => {
+        const left = Math.max(0, Math.round((bar.ends - performance.now()) / 1000));
+        count.textContent = String(left);
+        ring.style.setProperty("--p", `${(left / 60) * 100}%`);
+      };
+      tick();
+      trialTimer = setInterval(tick, 500);
+    }
+    const drops = bar.querySelector(".drops"), took = bar.querySelector(".took"), n = trial.dropouts;
+    drops.className = `drops ${n ? "warn-text" : n === 0 ? "ok" : ""}`;
+    drops.textContent = n == null ? "counting dropouts…" : `${n} dropout${n === 1 ? "" : "s"}`;
+    took.hidden = !!trial.took;
+    took.textContent = trial.took ? "" : ` · runs block ${S.engine.block}, margin ${S.engine.margin}: not as asked`;
+  }
+
+  // While a reopened interface comes back (server: starting) the same bar says so: its name (as
+  // PipeWire calls it), the step, seconds counted up, Keep waiting; then a moment saying how long
+  // it took (owner's pick, designs B + E). No time is promised: it differs per device.
+  const STARTING = { reopen: "Reopening it", wires: "Reconnecting wires", sound: "Waiting for its sound" };
+  function showStarting(st, trial) {
+    const name = S.engine.title || "the audio interface", back = st.back != null;
+    const sig = JSON.stringify(["starting", back, !!trial]);
+    let bar = $("trial");
+    if (!bar || bar.dataset.sig !== sig) {
+      clearInterval(trialTimer);
+      bar?.remove();
+      bar = h("div", { id: "trial", class: `trial${back ? " good" : ""}`, role: "status", "data-sig": sig },
+        h("span", { class: `ring ${back ? "done" : "spin"}` }, h("span", { class: "count" })),
+        h("span", { class: "lines" },
+          back ? h("span", {}, h("b", { text: name }), " is back") : h("span", {}, "Starting ", h("b", { text: name }), "…"),
+          h("span", { class: "sub" })),
+        ...(trial ? trialButtons(trial, !back) : []));
+      document.body.append(bar);
+      if (!back) trialTimer = setInterval(() => { bar.querySelector(".count").textContent = String(Math.floor((performance.now() - bar.since) / 1000)); }, 250);
+    }
+    const count = bar.querySelector(".count"), sub = bar.querySelector(".sub");
+    if (back) {
+      count.textContent = "✓";
+      sub.replaceChildren(`Sound returned after ${st.back} s`, ...(trial ? [h("span", { class: "sep", text: "·" }), "now try it for a minute"] : []));
+      return;
+    }
+    bar.since = performance.now() - st.elapsed * 1000;
+    count.textContent = String(Math.floor(st.elapsed));
+    const at = Object.keys(STARTING).indexOf(st.step);
+    sub.replaceChildren(h("span", { class: "dots", title: "Reopened · wires back · sound back" },
+      ...Object.keys(STARTING).map((_, i) => h("i", { class: i < at ? "on" : i === at ? "now" : "" }))), STARTING[st.step] ?? "");
+  }
+
   function showClock(clock) {
-    $("clock").textContent = clock ? `${clock.rate / 1000} kHz · ${clock.quantum} · ${(clock.quantum / clock.rate * 1000).toFixed(1)} ms` : "";
+    $("clock-text").textContent = clock ? `${clock.rate / 1000} kHz · ${clock.quantum} · ${(clock.quantum / clock.rate * 1000).toFixed(1)} ms` : "";
   }
   let tipTimer = null;
   function hideTip() { clearTimeout(tipTimer); $("tip").hidden = true; }
@@ -1993,6 +2418,7 @@ const PB = (() => {
     board.addEventListener("mousedown", onDown);
     addEventListener("mousemove", onMove);
     addEventListener("mouseup", onUp);
+    board.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });  // (no middle-click paste)
     board.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.view.z * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
     board.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -2003,12 +2429,13 @@ const PB = (() => {
       if (card) cardMenu(card.dataset.key, e.clientX, e.clientY); else boardMenu(e.clientX, e.clientY);
     });
     $("add").addEventListener("click", (e) => {
-      const r = e.target.getBoundingClientRect();
+      const r = e.currentTarget.getBoundingClientRect();
       openMenu(r.left, r.bottom + 6, addNodeItems());
       S.menuAt = toWorld(innerWidth / 2, innerHeight / 2);
     });
     $("fit").addEventListener("click", () => fit());
-    $("live").addEventListener("click", toggleLive);
+    $("wires-btn").addEventListener("click", wiresMenu);
+    $("tidy-more").addEventListener("click", tidyMenu);
     document.addEventListener("visibilitychange", sayVisible);
     $("profile").addEventListener("click", (e) => {
       const r = e.currentTarget.getBoundingClientRect();
@@ -2017,9 +2444,12 @@ const PB = (() => {
     $("save-changes").addEventListener("click", () => send({ op: "profile-save" }));
     $("revert-changes").addEventListener("click", () => send({ op: "profile-revert" }));
     $("tidy").addEventListener("click", tidy);
-    $("tidy-portals").addEventListener("change", (e) => {  // (the next Tidy follows it; saved with the board)
-      S.ws.tidy_portals = e.target.checked;
-      send({ op: "tidy-portals", on: e.target.checked });
+    $("clock").addEventListener("click", () => ($("engine") ? closeEngine() : openEngine()));
+    $("show-latency").addEventListener("change", (e) => {  // (a setting, like Animate)
+      S.showLatency = e.target.checked;
+      if (!S.showLatency) closePath();
+      send({ op: "show-latency", on: e.target.checked });
+      render();
     });
     $("chip-disconnect").addEventListener("click", unlinkSelected);
     $("chip-insert").addEventListener("click", (e) => {
@@ -2065,7 +2495,7 @@ const PB = (() => {
     }
     // A tag or badge must stack above the card's outline layer (it once sat under it). Hit-testing
     // cannot tell: the outline ignores the mouse. So compare the stacking order itself.
-    for (const tag of document.querySelectorAll(".card .badge, .card .warn")) {
+    for (const tag of document.querySelectorAll(".card .badge, .card .warn, .card .lat")) {
       const card = tag.closest(".card"), z = (s) => parseInt(s.zIndex, 10) || 0;
       if (z(getComputedStyle(tag)) <= z(getComputedStyle(card, "::before")))
         faults.push(`under the card outline: "${tag.textContent}" on ${card.dataset.key}`);
@@ -2096,7 +2526,7 @@ const PB = (() => {
     for (const t of document.querySelectorAll(".card .title"))
       if (t.scrollWidth > t.clientWidth + 1 && t.parentElement.parentElement.offsetWidth < 255) faults.push(`title clipped though the card could grow: "${t.textContent}"`);
     for (const el of [...["bar", "problems", "problems-btn", "unlink", "toast", "changes"].map($),
-                      ...document.querySelectorAll(".rename-hint, .menu, .dialog, .badge, .eq-panel")]) {
+                      ...document.querySelectorAll(".rename-hint, .menu, .dialog, .badge, .eq-panel, .eng, .trial, .latpath")]) {
       const r = rect(el), id = el.id || el.className;
       if (r && (r.right > innerWidth + 0.5 || r.bottom > innerHeight + 0.5 || r.left < -0.5 || r.top < -0.5)) faults.push(`#${id} leaves the window`);
     }
@@ -2228,7 +2658,64 @@ const PB = (() => {
     },
     // Four portals by hand on neighbouring wires; one toggled off and on: every badge must be where
     // it was (owner: one moved), and none may overlap another.
-    noPortals: () => { $("tidy-portals").click(); },
+    // Tidy is the same at any zoom (owner: zoom is only how it looks): positions, portals and
+    // socket offsets laid out at six zooms, every one compared with zoom 1.
+    tidyAnyZoom: () => {
+      const run = (z) => {
+        S.view = { ...S.view, z }; applyView(false); measure();
+        const keys = layout(visible().map((c) => c.key));
+        return JSON.stringify([keys.map((k) => [k, S.pos[k]]), foldPortals(), S.offsets]);
+      };
+      const want = run(1);
+      for (const z of [0.35, 0.47, 0.83, 1.31, 1.75]) if (run(z) !== want) S.errors.push(`Tidy differs at zoom ${z}`);
+      run(1); tidy();
+    },
+    noPortals: () => { setTidyPortals(false); if (S.ws.tidy_portals !== false) S.errors.push("Portals did not turn off"); },
+    showLatency: () => { $("show-latency").click(); },
+    liveInstant: () => setWires("instant"),
+    // The Wires and Tidy menus open (their rows, the current one marked).
+    wiresMenu: () => $("wires-btn").click(),
+    tidyMenu: () => $("tidy-more").click(),
+    openPath: (key) => openPath(key),
+    // A new state arriving with the panel open: the same panel stays (no redraw, no animation).
+    pathStays: () => {
+      const before = $("latpath");
+      load({ ...S.lastState, show_latency: true });  // (as the server would say: the box is on)
+      if ($("latpath") !== before) S.errors.push("the path panel was drawn again by a state that changed nothing");
+    },
+    pathDrops: (counts) => { S.drops = counts; showDrops(); },
+    // A new state during a trial (its dropout count): the same bar, the same Keep button.
+    // The bar while the interface comes back: a step, or the moment it is back.
+    starting: (step, back) => {
+      S.engine.starting = back ? { back } : { step, elapsed: 8 };
+      showTrial(S.engine.trial);
+      if (!document.querySelector("#trial .lines b")?.textContent) S.errors.push("the starting bar names no interface");
+    },
+    trialStays: () => {
+      const keep = document.querySelector("#trial .btn.go");
+      load(S.lastState);
+      if (document.querySelector("#trial .btn.go") !== keep) S.errors.push("a new state replaced the trial bar's Keep button");
+    },
+    pathHover: (i) => document.querySelectorAll("#latpath .seg")[i]?.dispatchEvent(new MouseEvent("mouseenter")),
+    problemsAway: () => {
+      toggleProblems(true);
+      $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      dispatchEvent(new MouseEvent("mouseup", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      if (!$("problems").hidden) S.errors.push("a press on the board left the problems list open");
+    },
+    engineAway: () => {
+      openEngine();
+      $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      dispatchEvent(new MouseEvent("mouseup", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      if ($("engine")) S.errors.push("a press on the board left the Audio engine panel open");
+    },
+    // A plain click on empty board (no drag) closes the path panel (owner).
+    clickBoard: (x, y) => {
+      $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: x, clientY: y, bubbles: true, button: 0 }));
+      dispatchEvent(new MouseEvent("mouseup", { clientX: x, clientY: y, bubbles: true, button: 0 }));
+      if ($("latpath")) S.errors.push("a click on the board left the path panel open");
+    },
+    engineOpen: (pick, advanced) => { openEngine(); Object.assign(S.pick, pick || {}, { advanced: !!advanced }); drawEngine(); },
     // Tidy, then a fractional zoom (the owner's) and the cards measured again, then Tidy: nothing
     // may move (sizes once carried zoom-dependent float noise and a card flipped a grid step).
     tidyZoom: () => {
@@ -2273,6 +2760,11 @@ const PB = (() => {
     },
     // A card appearing where another card has been moved to (owner: new app cards landed on top
     // of existing ones): its spot in a fresh layout is taken first, then it "appears".
+    comeBackOver: (key, other) => {  // an app's card returning to the spot another card has now
+      S.shown.delete(key);
+      S.pos[key] = { ...S.pos[other] };
+      render();
+    },
     appearOver: (key, other) => {
       delete S.pos[key];
       const slot = layout([key]) && S.pos[key];

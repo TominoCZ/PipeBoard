@@ -53,7 +53,7 @@ def snapshot(model: dict, board: dict) -> dict:
             "cut": [i for i in board.get("cut", []) if i not in ids],  # and unplugged here
             # wires drawn as portals (board-only: the sound goes straight from A to B)
             "portals": {i: how for i, how in board.get("portals", {}).items() if i in ids},
-            "tidy_portals": board.get("tidy_portals", True)}
+            "tidy_portals": board.get("tidy_portals", False)}
 
 
 def missing(board: dict, model: dict) -> list[dict]:
@@ -84,7 +84,7 @@ def describe(board: dict, w: dict) -> str:
             f"{_name(board, w['to'][0])}{_label(board, w['to'], 'inputs')}")
 
 
-def _ports(model: dict, end: list, side: str) -> list[int] | None:
+def ports(model: dict, end: list, side: str) -> list[int] | None:
     card = next((c for c in model["cards"] if c["key"] == end[0]), None)
     sock = next((s for s in card[side] if s["id"] == end[1]), None) if card else None
     return sock["ports"] if sock else None
@@ -97,7 +97,7 @@ def plan(board: dict, model: dict) -> dict:
     """
     want, make = set(), []
     for w in board.get("wires", []):
-        outs, ins = _ports(model, w["from"], "outputs"), _ports(model, w["to"], "inputs")
+        outs, ins = ports(model, w["from"], "outputs"), ports(model, w["to"], "inputs")
         if not outs or not ins:
             continue  # an end is missing: nothing to do until it comes back
         for i, j in w["pairs"]:
@@ -106,7 +106,7 @@ def plan(board: dict, model: dict) -> dict:
                 make.append({"out": outs[i], "in": ins[j], "text": describe(board, w)})
     known, remove, live = set(board.get("cards", {})), [], set()
     for w in model["wires"]:
-        outs, ins = _ports(model, w["from"], "outputs"), _ports(model, w["to"], "inputs")
+        outs, ins = ports(model, w["from"], "outputs"), ports(model, w["to"], "inputs")
         for link, (i, j) in zip(w["links"], w["pairs"], strict=True):
             live.add((outs[i], ins[j]))
             if (outs[i], ins[j]) not in want and w["from"][0] in known and w["to"][0] in known:

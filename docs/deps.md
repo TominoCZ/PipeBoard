@@ -13,11 +13,12 @@ library or relies on a new desktop service adds a row here in the same change.
 |---|---|---|---|
 | PipeWire (as the sound server) with WirePlumber | `pipewire`, `pipewire-audio`, `wireplumber` | The graph PipeBoard routes | Nothing to show or route |
 | `pw-dump`, `pw-link`, `pw-cli`, `pw-cat` | `pipewire-bin` | Reading and watching the graph; links; making devices and gains; gain levels; live wires capture | No board (pw-dump); no changes (others) |
+| `chrt`, `renice` | `util-linux`, `bsdutils` | The Audio engine: PipeWire's audio thread priority and nice, set live | Priority is only set at PipeWire's next start |
 | `stdbuf` | `coreutils` | Live wires: unbuffered `pw-cat` output; line-buffered `pw-cli` (it says when it is connected) | Live wires stutter in lumps; the first level sent waits 3 s |
 | Python ≥ 3.12 and `uv` | `uv` (astral.sh) | Running the app; `uv` installs `aiohttp` and `dbus-fast` itself | Does not start |
 | Google Chrome or Chromium | `google-chrome-stable` or `chromium` | The window (`--app` mode) | Serves on http://127.0.0.1:7870 only; open it in any browser |
 | glibc (`libc.so.6`) | `libc6` | `prctl(PR_SET_PDEATHSIG)`: helper processes end with PipeBoard | Does not start (always present) |
-| A systemd user session | `systemd` | Launch at login (`pipeboard.service`); taking over a service's devices (`systemctl --user`) | Those two features fail with a message |
+| A systemd user session | `systemd` | Launch at login (`pipeboard.service`); taking over a service's devices; the Audio engine finding PipeWire's process (`systemctl --user show`) | Those features fail with a message |
 
 ## For the EQ node (M11)
 

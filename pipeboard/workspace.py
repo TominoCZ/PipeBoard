@@ -107,7 +107,7 @@ WHOLE = {"place": lambda ws, op: place(ws["cards"], op.get("cards") or {}) or Tr
          # Tidy, all at once (owner: no steps seen): the cards' new places and its own portals
          "tidy": lambda ws, op: (place(ws["cards"], op.get("cards") or {})
                                  or _portals(ws, {**op, "tidy": True})),
-         # whether Tidy folds a long board into rows with portals (the bar's switch; on unless off)
+         # whether Tidy folds a long board into rows with portals (Tidy's menu; off unless on)
          "tidy-portals": lambda ws, op: ws.update(tidy_portals=bool(op.get("on"))) or True}
 
 
@@ -167,7 +167,13 @@ class Store:
             found = {}
         return {"active": found.get("active"), "launch": found.get("launch"),
                 "live": found.get("live", True),  # live wires: on unless turned off
-                "board": found.get("board")}  # this board's id, tagged on its nodes (devices.BOARD)
+                # Instant: the whole wire shows the sound as it is now (owner), not travelling
+                "live_instant": bool(found.get("live_instant", False)),  # (off by default: owner)
+                "board": found.get("board"),  # this board's id, tagged on its nodes (devices.BOARD)
+                "engine_trial": found.get("engine_trial"),  # an audio engine setting on trial
+                # the bar's Show latency: a view setting like Animate, not part of the board (a
+                # profile loaded at launch replaced the board, and the box came back off: owner)
+                "show_latency": bool(found.get("show_latency"))}
 
     def save_settings(self, settings: dict) -> None:
         save(self.settings_path, settings)

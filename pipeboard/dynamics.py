@@ -253,6 +253,13 @@ def capture(model: dict, key: str) -> list[tuple[int, str]]:
 DELAY = {"limiter": 240, "denoise": 1016}
 
 
+def latency_ms(kind: str) -> float:
+    """What an effect of PipeBoard's own adds itself, in ms: the limiter its lookahead, Noise
+    Suppression its two 10 ms Speex frames (pb_denoise.c reports 2 frames); the rest none (no
+    lookahead set; the EQ's filters work sample by sample)."""
+    return {"limiter": LIMITER_FIXED["Lookahead (ms)"], "denoise": 20.0}.get(kind, 0.0)
+
+
 def delays(kind: str, clock: dict | None) -> list[int]:
     """The delays an effect's output may trail its input by now: its own plus 0, 1, 2 cycles."""
     clock = clock or {}

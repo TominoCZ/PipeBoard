@@ -103,7 +103,8 @@ def _ports(dump: list[dict], nodes: dict[int, dict]) -> dict[int, dict]:
                 node.get("pipeboard.owned") and cls.startswith("Audio/"))
             ports[o["id"]] = {**p, "id": o["id"], "serial": int(node.get("object.serial", 0)),
                               "dir": "in" if direction in ("input", "in") else "out", "echo": echo,
-                              "device": node.get("media.class", "").startswith("Audio/")}
+                              "device": node.get("media.class", "").startswith("Audio/"),
+                              "latency": ((o.get("info") or {}).get("params") or {}).get("Latency")}
     return ports
 
 
@@ -236,8 +237,83 @@ def build(dump: list[dict]) -> dict:
     # Everything on the system, shown or not: a device with nothing to show right now (Easy
     # Effects' mic chain while idle) is still there, not missing.
     present = sorted(c["key"] for c in every)
-    return {"cards": cards, "wires": _wires(cards, links), "clock": _clock(dump),
+    clock = _clock(dump)
+    for c in cards:
+        if c["kind"] == "hardware":
+            c["delay"] = _hardware_delay(c, ports, clock)
+    return {"cards": cards, "wires": _wires(cards, links), "clock": clock,
             "present": present}
+
+
+def _port_ms(port: dict, direction: str, clock: dict) -> float | None:
+    """A port's latency as PipeWire reports it (blocks + samples + ns), in ms; None: none."""
+    lat = next((x for x in port.get("latency") or [] if x.get("direction") == direction), None)
+    if not lat:
+        return None
+    samples = lat.get("maxQuantum", 0) * clock["quantum"] + lat.get("maxRate", 0)
+    return samples / clock["rate"] * 1000 + lat.get("maxNs", 0) / 1e6
+
+
+def _hardware_delay(card: dict, ports: dict, clock: dict) -> dict:
+    """How late a device's capture reaches the graph (its outputs), and how long the graph's sound
+    takes to leave through it (its inputs): PipeWire's figures, the block and the ALSA headroom."""
+    def worst(side: str, direction: str) -> float | None:
+        found = [_port_ms(ports[p], direction, clock) for s in card[side] for p in s["ports"]]
+        return max((f for f in found if f is not None), default=None)
+    return {"capture": worst("outputs", "Output"), "playback": worst("inputs", "Input")}
+
+
+def latency(model: dict, own: dict) -> dict:
+    """How late each card's sound is, in ms, counted from where it enters the graph (an app, a
+    device's capture) along the longest path of wires: per effect its own delay ("own"; None:
+    unknown), per virtual device the total arriving ("total", "spread": paths in differ,
+    "unsure": an unknown delay on the way, "path": the cards of the longest path in, from where
+    the sound enters to this one). `own`: PipeBoard's effects' delays by card key.
+    PipeWire's own totals stop at every virtual device (a null sink restarts at 0), so not those.
+    ponytail: a feedback loop is cut where it closes; the totals around it are then too short."""
+    cards = {c["key"]: c for c in model["cards"]}
+    feeds: dict[str, set] = defaultdict(set)
+    for w in model["wires"]:
+        if w["from"][0] in cards:
+            feeds[w["to"][0]].add(w["from"][0])
+    g = {"cards": cards, "feeds": feeds, "own": own, "leaving": {}}
+    found = {}
+    for key, c in cards.items():
+        if c["kind"] in ("effect", "plugin"):
+            found[key] = {"own": _own(c, own)}
+        elif c["kind"] == "virtual" and feeds[key]:
+            ins = _arriving(g, key, frozenset())
+            times = [t for t, _, _ in ins] or [0.0]
+            longest = max(ins, key=lambda x: x[0], default=(0.0, False, []))
+            found[key] = {"total": max(times), "spread": max(times) - min(times) > 0.05,
+                          "unsure": any(u for _, u, _ in ins), "path": [*longest[2], key]}
+    return found
+
+
+def _own(card: dict, own: dict) -> float | None:
+    """What a card adds itself: an effect or plugin what PipeBoard knows (None: unknown)."""
+    return own.get(card["key"]) if card["kind"] in ("effect", "plugin") else 0.0
+
+
+def _arriving(g: dict, key: str, path: frozenset) -> list[tuple[float, bool, list]]:
+    path = path | {key}
+    return [_leaving(g, k, path) for k in g["feeds"][key] if k not in path]
+
+
+def _leaving(g: dict, key: str, path: frozenset) -> tuple[float, bool, list]:
+    """(ms, unsure, the cards of its longest path) of the sound leaving a card; a device's
+    capture starts a chain afresh."""
+    if key not in g["leaving"]:
+        c = g["cards"][key]
+        if c["kind"] == "hardware":
+            cap = (c.get("delay") or {}).get("capture")
+            g["leaving"][key] = (cap or 0.0, cap is None, [key])
+        else:
+            ins, me = _arriving(g, key, path), _own(c, g["own"])
+            t, _, before = max(ins, key=lambda x: x[0], default=(0.0, False, []))
+            g["leaving"][key] = (t + (me or 0.0), me is None or any(u for _, u, _ in ins),
+                                 [*before, key])
+    return g["leaving"][key]
 
 
 def _card(group: str, ids: list[int], seen: dict, fixed: tuple) -> dict:

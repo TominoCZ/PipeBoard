@@ -152,9 +152,9 @@ far wider than the window: candidates scored by how near their shape is to the w
 right edge and one before the next row's left (owner), but beside the socket for a card not at a
 row's edge (a column there drew a stub across the row). A Tidy's portals are redone each Tidy; the
 user's stay. Saved on the board (`portals`: wire id → "hand" or {how: "tidy", out, in}) and in
-profiles. The bar's Tidy is a split button, **[ Tidy | ☑ Portals ]** (one outline, a divider:
-owner wanted the switch visibly tied to Tidy): off, Tidy keeps one row and drops its own portals
-(the user's stay); saved on the board (`tidy_portals`, on unless turned off).
+profiles. The bar's Tidy is a split button, **[ Tidy | ▾ ]**: its menu holds Portals, with a line
+saying what it does (owner's pick W2). Off, Tidy keeps one row and drops its own portals (the
+user's stay); saved on the board (`tidy_portals`, off unless turned on: owner).
 Tidy is worked out in full, shown in one go and sent as one `tidy` message (places and portals):
 owner saw cards jitter, as Tidy sent its portals and its places separately and the server's state
 after the first still held the old places (each state puts the cards at their saved places).
@@ -815,9 +815,11 @@ to the tray, apply the launch profile, and make the virtual devices itself.
 
 The user wants to **see live activity** on the board: each wire swings around its curve with the
 signal it carries, a low-resolution picture of the last ~100 ms, newest at the source end. The swing
-is tapered to zero at both sockets (widest in the middle); silence is the plain curve. The **Animate**
-(owner: was Live; and not in the tray, the animation being the window's own)
-toggle in the bar turns it off; it is **on by default** (`settings.json` `live`).
+is tapered to zero at both sockets (widest in the middle); silence is the plain curve. The bar's
+**Wires** menu chooses: **Still** (off), **Flowing** (the sound travels along) or **Instant** (the
+whole wire shows the sound now); one choice, as Instant means nothing while still (owner; was an
+Animate toggle and an Instant switch). Flowing is the default (`settings.json` `live`,
+`live_instant`); not in the tray, the animation being the window's own.
 
 **Never touch the audio** (the user's hard rule):
 - The capture is one `pw-cat --record --raw` at 8 kHz, resampler quality 0, with
@@ -891,6 +893,90 @@ PipeBoard ends, even on SIGKILL (tested); its node name carries PipeBoard's pid.
 out smoothly (the wave again through a red gradient along the wire, each point as strong as it
 is near a clipped one; owner: rather than red flecks, and without steps), and raise a *Clipping* warning in
 the problem center for 2.5 s after the last one.
+
+## 8b. Show latency (built 2026-11-05)
+
+A checkbox in the bar, saved with the board like Portals (`show_latency`). On, each effect or
+plugin card gets a small tag centred under it with the delay it adds, and each virtual device the
+total delay of the sound arriving there (owner's spec; renders in the plan's artifacts,
+`./run.sh shots latency`).
+
+- **Where the figures come from** (`graph.latency`, pure): a device's capture and playback delay
+  are PipeWire's port Latency figures (block + ALSA headroom; `card["delay"]`). An effect of
+  PipeBoard's adds what `dynamics.latency_ms` knows: the limiter its 5 ms lookahead, Noise
+  Suppression its two 10 ms Speex frames, the rest 0; gains and virtual devices 0. A plugin or
+  Easy Effects shows `?`. PipeWire's own totals are not used: every filter reports 0 and every
+  null sink restarts at 0, so totals are added up along the wires, longest path in.
+- **Totals** start at an app (0) or a device's capture. `up to` when paths of different length
+  meet; `≥` when an unknown delay is on the way. A feedback loop is cut where it closes.
+- Not counted: an app's own buffering, and the extra graph cycle a stream can add (seen with a
+  player feeding an effect, §5.5's peak alignment).
+- **Where a total comes from**: a click on a total opens a panel docked at the bottom (owner's pick
+  L1): the route and total, then the chain, every step a stop on one line in order; a step that
+  delays stretches with its ms and name under it, one that does not is a dot. Pointing at a step
+  lights its card; off-path cards and wires dim. The footer: dropouts since it opened, and what
+  most of the delay is (the interface's buffer: a button to the Audio engine).
+
+## 8c. Audio engine (built 2026-11-05)
+
+Click the clock readout in the bar (`192 kHz · 1024 · 5.3 ms`): a panel under it sets the
+**block size** (128 … 2048); the **safety margin** of the interface clocking the graph (ALSA's
+headroom) follows it, equal (the owner's UR44C, its buffer 3 periods: a smaller margin made the
+input drop out ~100 times a second, a larger one did not fit and the stream restarted endlessly;
+equal ran). It shows the round trip (block + margin, in and out) old → new,
+and under **Advanced** the realtime **priority** of PipeWire's audio thread (1 … 95) and the
+**nice** of its control thread (−19 … 0), with the honest note that those do not shorten the
+delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
+
+- **Where it is kept** (`engine.py`): two files of PipeBoard's own, sorted after the user's
+  so they win, never the user's own files: `~/.config/pipewire/pipewire.conf.d/99-pipeboard-engine.conf`
+  (`default.clock.quantum`, min and max: pinned, so the block never floats away from the ALSA
+  period, the cause of the owner's August pops; `module.rt.args`) and
+  `~/.config/wireplumber/wireplumber.conf.d/99-pipeboard-engine.conf` (the interface's ALSA
+  nodes, matched by name: `api.alsa.period-size` = the block, `api.alsa.headroom` = the margin, 1 to 3 blocks; on
+  interrupts `api.alsa.period-num` = 2 × (blocks + 1): PipeWire fills to block + headroom but
+  clamps that to half the buffer, and a 3-period buffer had cut a 3-block margin to 1.5).
+  The interface is the ALSA node most of the graph follows (`node.driver-id`).
+- **Applied without restarting PipeWire** (`engine.apply`): a PipeWire restart drops every app's
+  stream and most apps never reconnect (owner: they vanished from the board and went silent, yet
+  kept "playing"; the first build did that). The block and the margin need the interface's node
+  made again: its ALSA period is fixed when it is made, and the block must equal it (the owner's
+  UR44C runs on interrupts, `disable-tsched`: the second build changed the block live and ran 512
+  on a 128 period, and the sound cut out for long stretches; a headroom set live as Props was cut
+  down by the old 3-period buffer). So **only WirePlumber restarts** (it makes the device nodes
+  from the rule file just written; apps are PipeWire's clients and keep their streams; WirePlumber
+  links them again), the block goes into the `settings` metadata while the interface is away (min,
+  block, max, in the order that never makes min > max), PipeBoard's own effects are stopped before and
+  started fresh after (WirePlumber setting up their ports anew while they ran put them in error,
+  and PipeWire restarted the interface's stream over and over for ~50 s until they recovered),
+  and then the board's wires are made again from the board as it was (`rewire`, every quarter
+  second until two looks find nothing to make; not the apps', WirePlumber links those): WirePlumber's start sets
+  up every audio node's ports anew, which drops **every** link on them, not only the
+  interface's (owner: Spotify reached Music Mix and went no further). Priority and nice alone restart nothing: `chrt -f -R` on the audio thread (it
+  carries `SCHED_RESET_ON_FORK`; clearing it is not allowed) and `renice`. `pw-cli` exits 0 even
+  when a command failed: its printed errors count as failures.
+- **A minute to keep it**: a bar under the bar shows the seconds left in a ring, what is tried,
+  its round trip and dropouts, and Keep / a red Revert; with no Keep the server goes back by itself (window open or not; if PipeBoard was quit
+  during the minute, at its next start): the files as they were, and the old values applied live
+  the same way. The graph is read again after each change: if it does not run what was asked, the
+  bar says so. The margin shown is the one that runs: the headroom in PipeWire's latency figures
+  for the interface's ports.
+
+- **CPU idle states** (Advanced): one toggle per state the kernel's cpuidle list reports (any
+  CPU vendor, any idle driver; by name and wake time; POLL, the busy-wait, never offered). A
+  change runs one fixed root script through `pkexec` (names checked against what the CPU reports,
+  letters and digits only): exactly those states off on every CPU now, and at boot by PipeBoard's
+  own `/etc/udev/rules.d/99-pipeboard-cpu-idle.rules`; any other rule touching cpuidle (the
+  owner's `99-cpu-cstate-audio.rules`) is set aside as `*.rules.pipeboard-off`, never deleted.
+  Nothing restarts and there is no trial. The scripts are checked on a made-up sysfs and rules
+  folder, a line carrying a command refused by the helper itself; the owner's password prompt
+  appeared from the login service.
+
+- **Clipping is seen by a second capture** (`scope.py`): the 8 kHz live-wires capture filters a
+  full-scale peak away (a clipped 6 kHz burst read 0.34 there), so beside it runs one at 1 kHz in
+  PipeWire's peaks mode (`resample.peaks`: each value the loudest of its stretch; 1.35 for the same
+  burst), linked to the same ports, used only to mark which sources reached full scale. Clipping
+  shows within a frame (20 ms) of happening (owner: "doesn't appear immediately").
 
 ## 9. Preview tooling
 

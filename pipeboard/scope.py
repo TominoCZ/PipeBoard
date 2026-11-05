@@ -186,6 +186,13 @@ class Scope:
         self.total = self.sent = 0  # 1 ms values captured per channel, and how many went out
         self.proc: asyncio.subprocess.Process | None = None
         self.task: asyncio.Task | None = None
+        # A second capture at 1 kHz in PipeWire's peaks mode, for clipping only: the 8 kHz one
+        # filters a full-scale peak away (a clipped 6 kHz burst read 0.34 there, 1.35 in peaks
+        # mode; owner: "a clipping does not appear immediately"). Its channels that hit full scale
+        # since the last frame:
+        self.pproc: asyncio.subprocess.Process | None = None
+        self.ptask: asyncio.Task | None = None
+        self.peak_clip: set[int] = set()
         self.failed = False  # the capture could not start, or died: the user sees plain wires
         self.name = f"{NAME}_{next(_made)}"
         self.dead_since = 0.0  # when the board first saw it dead
@@ -219,12 +226,19 @@ class Scope:
         for i in gone:
             for port, ch in zip(self.sources[i][2], self.groups[i], strict=True):
                 # The port may be gone already, and its link with it: fine.
-                await self._pw_link("-d", str(port), f"{self.name}:input_AUX{ch}")
+                for name in self.names:
+                    await self._pw_link("-d", str(port), f"{name}:input_AUX{ch}")
             self.free += self.groups[i]
             self.sources[i], self.groups[i] = None, []
         for port, ch in self._place(new):
-            await self._pw_link(str(port), f"{self.name}:input_AUX{ch}")
+            for name in self.names:
+                await self._pw_link(str(port), f"{name}:input_AUX{ch}")
         return True
+
+    @property
+    def names(self) -> list[str]:
+        """Both captures' node names: every source is linked into each."""
+        return [self.name, f"{self.name}_peaks"]
 
     async def _pw_link(self, *args: str) -> bool:
         proc = await asyncio.create_subprocess_exec(
@@ -264,7 +278,17 @@ class Scope:
             preexec_fn=_die_with_parent)
         with contextlib.suppress(OSError):  # room for a second of stalls before pw-cat blocks
             fcntl.fcntl(self.proc.stdout._transport.get_extra_info("pipe"), F_SETPIPE_SZ, 1 << 20)
+        self.pproc = await asyncio.create_subprocess_exec(
+            *unbuffered, "pw-cat", "--record", "-", "--raw", "--rate", "1000", "--format", "f32",
+            "--channels", str(n), "--channel-map", ",".join(f"AUX{i}" for i in range(n)),
+            "--latency", "20ms",
+            "-P", f"{{ node.name={self.name}_peaks node.description=\"PipeBoard clipping\" "
+                  "media.class=Stream/Input/Audio/Internal node.virtual=true resample.peaks=true "
+                  "node.autoconnect=false node.passive=true node.async=true }",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            preexec_fn=_die_with_parent)
         self.task = asyncio.create_task(self._guarded(n))
+        self.ptask = asyncio.create_task(self._clips(n))
 
     async def _guarded(self, n: int) -> None:
         try:
@@ -294,28 +318,49 @@ class Scope:
                 self.total += len(rows[0])
 
     async def _link(self, n: int) -> None:
-        """Wire each source port into its channel, once the capture's ports exist."""
+        """Wire each source port into its channel of both captures, once their ports exist."""
         for pid, ch in self.todo:
-            for _ in range(20):
-                if await self._pw_link(str(pid), f"{self.name}:input_AUX{ch}"):
-                    break
-                await asyncio.sleep(0.05)
+            for name in self.names:
+                for _ in range(20):
+                    if await self._pw_link(str(pid), f"{name}:input_AUX{ch}"):
+                        break
+                    await asyncio.sleep(0.05)
         self.ready = True
+
+    async def _clips(self, n: int) -> None:
+        """The peaks capture: each channel that reaches full scale. Never raises: without it
+        clipping is only seen by the 8 kHz capture, as before."""
+        try:
+            frame, buf = n * 4, b""
+            while chunk := await self.pproc.stdout.read(16384):
+                buf += chunk
+                usable = len(buf) - len(buf) % frame
+                if usable:
+                    samples = array("f")
+                    samples.frombytes(buf[:usable])
+                    buf = buf[usable:]
+                    self.peak_clip.update(i % n for i, v in enumerate(samples) if abs(v) >= 0.999)
+        except Exception:  # noqa: BLE001
+            log.exception("live wires: the clipping capture failed")
 
     def frame(self) -> tuple[bytes, set[int]]:
         new, self.sent = self.total - self.sent, self.total
-        return encode(self.rings, self.groups, new, self.total, self.energy)
+        frame, clipping = encode(self.rings, self.groups, new, self.total, self.energy)
+        hit, self.peak_clip = self.peak_clip, set()
+        return frame, clipping | {i for i, g in enumerate(self.groups) if hit & set(g)}
 
     async def stop(self) -> None:
         """Stop and forget the capture; its links go with its node. Never raises."""
-        if self.task:
-            self.task.cancel()
-        with contextlib.suppress(ProcessLookupError, OSError):
-            if self.proc and self.proc.returncode is None:
-                self.proc.kill()
-                await self.proc.wait()
-        with contextlib.suppress(Exception):
-            self.proc._transport.close()  # its unread pipe, or asyncio complains at exit
+        for task in (self.task, self.ptask):
+            if task:
+                task.cancel()
+        for proc in (self.proc, self.pproc):
+            with contextlib.suppress(ProcessLookupError, OSError):
+                if proc and proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+            with contextlib.suppress(Exception):
+                proc._transport.close()  # its unread pipe, or asyncio complains at exit
 
 
 class FakeScope(Scope):

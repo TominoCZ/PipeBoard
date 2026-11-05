@@ -762,7 +762,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -784,7 +806,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -806,7 +850,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -828,7 +894,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -850,7 +938,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -872,7 +982,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "input"
+   "direction": "input",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -893,7 +1025,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX0"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -914,7 +1068,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX1"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -935,7 +1111,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX2"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -956,7 +1154,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX3"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -977,7 +1197,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX4"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -998,7 +1240,29 @@
     "port.monitor": true,
     "port.name": "monitor_AUX5"
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1020,7 +1284,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1042,7 +1328,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1064,7 +1372,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1086,7 +1416,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1108,7 +1460,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1130,7 +1504,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1152,7 +1548,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {
@@ -1174,7 +1592,29 @@
     "port.physical": true,
     "port.terminal": true
    },
-   "direction": "output"
+   "direction": "output",
+   "params": {
+    "Latency": [
+     {
+      "direction": "Input",
+      "minQuantum": 0.0,
+      "maxQuantum": 0.0,
+      "minRate": 0,
+      "maxRate": 0,
+      "minNs": 0,
+      "maxNs": 0
+     },
+     {
+      "direction": "Output",
+      "minQuantum": 1.0,
+      "maxQuantum": 1.0,
+      "minRate": 1024,
+      "maxRate": 1024,
+      "minNs": 0,
+      "maxNs": 0
+     }
+    ]
+   }
   }
  },
  {

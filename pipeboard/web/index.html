@@ -18,23 +18,35 @@
 <header id="bar">
   <span class="brand">PipeBoard</span>
   <span id="status" class="status" title="Connection">connecting…</span>
-  <span id="clock" class="clock" title="The rate and buffer every device in the graph runs at"></span>
+  <!-- The bar (owner's pick W2): every control one height; the engine readout a real button -->
+  <button id="clock" type="button" class="clock" aria-haspopup="dialog" title="Audio engine: block size, safety margin, scheduling">
+    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4"><path d="M2 4h6M11 4h1M2 10h1M6 10h6"/><circle cx="9.5" cy="4" r="1.5"/><circle cx="4.5" cy="10" r="1.5"/></svg><span id="clock-text"></span><svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M4 5.5l3 3 3-3"/></svg>
+  </button>
   <button id="profile" type="button" class="profile" hidden title="Profiles: save, load, load at launch">
-    <span id="profile-name">Default</span><small id="profile-note"></small>
+    <span id="profile-name">Default</span><small id="profile-note"></small><svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M4 5.5l3 3 3-3"/></svg>
   </button>
-  <button id="add" type="button" title="Add to the board (or right-click the board)">+ Add</button>
-  <button id="live" type="button" class="toggle" aria-pressed="true"
-          title="Animate: each wire shows the sound it carries (only while this window is visible)">
-    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 7h2l1.5-4 2 8 2-6 1.2 2h2.3"/></svg>Animate
+  <span class="bar-sep"></span>
+  <button id="add" type="button" class="accent" title="Add to the board (or right-click the board)">
+    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M7 2.5v9M2.5 7h9"/></svg>Add
   </button>
-  <button id="fit" type="button" title="Show everything (F)">Fit</button>
-  <!-- Tidy and its Portals switch, one control (owner: visibly linked) -->
+  <button id="fit" type="button" title="Show everything (F)">
+    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/></svg><span class="lbl">Fit</span>
+  </button>
+  <!-- Tidy, and its one option (Portals) in the menu behind its arrow -->
   <span class="split" role="group" aria-label="Tidy">
-    <button id="tidy" type="button" title="Arrange the cards left to right by signal flow">Tidy</button>
-    <label class="split-check" title="Portals: a long board folds into rows, the wires between them hidden behind lettered portals (hover to see)">
-      <input id="tidy-portals" type="checkbox" checked>Portals
-    </label>
+    <button id="tidy" type="button" title="Arrange the cards left to right by signal flow">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.4"><rect x="1.5" y="2.5" width="4" height="3" rx="0.8"/><rect x="8.5" y="2.5" width="4" height="3" rx="0.8"/><rect x="1.5" y="8.5" width="4" height="3" rx="0.8"/><rect x="8.5" y="8.5" width="4" height="3" rx="0.8"/></svg><span class="lbl">Tidy</span>
+    </button>
+    <button id="tidy-more" type="button" class="more" aria-haspopup="menu" aria-label="Tidy options" title="Tidy options"><svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M4 5.5l3 3 3-3"/></svg></button>
   </span>
+  <span class="bar-sep"></span>
+  <!-- How wires show the sound: Still, Flowing or Instant (was Animate and its Instant switch) -->
+  <button id="wires-btn" type="button" aria-haspopup="menu" title="How the wires show the sound">
+    <svg id="wires-icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"></svg><span class="k">Wires</span><span id="wires-mode"></span><svg class="chev" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M4 5.5l3 3 3-3"/></svg>
+  </button>
+  <label class="bar-check" title="Show each effect's delay and each device's total">
+    <input id="show-latency" type="checkbox">Show latency
+  </label>
 </header>
 <button id="problems-btn" type="button" class="problems-btn" aria-expanded="false"
         aria-controls="problems" title="Problems in the graph">

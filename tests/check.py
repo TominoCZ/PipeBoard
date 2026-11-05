@@ -169,6 +169,293 @@ def check_profiles():
     assert profiles.valid_name("Studio (night)")
 
 
+def check_latency(model):
+    """Show latency: the interface's delays from PipeWire's figures; totals along the longest path."""
+    ui = next(c for c in model["cards"] if c["kind"] == "hardware" and c["key"].startswith("device:"))
+    assert abs(ui["delay"]["capture"] - 2048 / 192000 * 1000) < 0.01, ui["delay"]  # block + headroom
+    found = graph.latency(model, {})
+    assert found["easyeffects:out"] == {"own": None}, "not ours: not known"
+    assert abs(found["mic_mix"]["total"] - 10.667) < 0.01 and not found["mic_mix"]["unsure"], found["mic_mix"]
+    card = lambda k, kind: {"key": k, "kind": kind, "inputs": [], "outputs": []}  # noqa: E731
+    wire = lambda a, b: {"from": [a, "out"], "to": [b, "in"]}  # noqa: E731
+    toy = {"cards": [card("app", "app"), card("lim", "effect"), card("ns", "effect"), card("mix", "virtual"),
+                     card("plug", "plugin"), card("mix2", "virtual"), card("loop", "virtual")],
+           "wires": [wire("app", "lim"), wire("lim", "ns"), wire("ns", "mix"), wire("app", "mix"),
+                     wire("mix", "plug"), wire("plug", "mix2"), wire("mix2", "loop"), wire("loop", "mix2")]}
+    found = graph.latency(toy, {"lim": 5.0, "ns": 20.0})
+    assert found["mix"] == {"total": 25.0, "spread": True, "unsure": False,
+                            "path": ["app", "lim", "ns", "mix"]}, "the longest way in, start to end"
+    assert found["plug"] == {"own": None} and found["mix2"]["unsure"], "after an unknown: at least"
+    assert found["loop"]["total"] == 25.0, "a feedback loop ends, cut where it closes"
+
+
+def check_engine():
+    """The audio engine: the interface clocking the graph, the files' text, what may be asked."""
+    from pipeboard import engine
+    now = engine.read(scenarios.load("machine"))
+    assert now["interface"] == ["alsa_input.usb-Example_Studio_Interface-00.pro-input-0",
+                                "alsa_output.usb-Example_Studio_Interface-00.pro-output-0"], now
+    assert (now["block"], now["period"], now["margin"], now["title"]) == (1024, 1024, 1024, "Studio Interface")
+    v = engine.check({"block": 256, "margin": 256, "prio": 90, "nice": -15})
+    text = engine.texts(v, now["interface"])
+    assert "default.clock.max-quantum = 256" in text["pipewire"] and "rt.prio = 90 nice.level = -15" in text["pipewire"]
+    assert "api.alsa.period-size = 256 api.alsa.headroom = 256" in text["wireplumber"]
+    assert text["wireplumber"].count("node.name") == 2
+    assert "api.alsa.disable-tsched = true" in text["wireplumber"], "interrupts unless asked"
+    timer = engine.check({"block": 256, "margin": 256, "prio": 88, "nice": -11, "tsched": True})
+    assert "api.alsa.disable-tsched = false" in engine.texts(timer, now["interface"])["wireplumber"]
+    assert engine.reopens(timer, {**timer, "tsched": False}) and not engine.reopens(timer, {**timer, "prio": 70})
+    assert not engine.reopens(timer, {**timer, "block": 512, "margin": 512}), "on the timer the block is live"
+    assert engine.reopens({**timer, "tsched": False}, {**timer, "tsched": False, "block": 512, "margin": 512})
+    two = engine.check({"block": 256, "margin": 512, "prio": 88, "nice": -11})  # 2 blocks
+    assert "api.alsa.headroom = 512 api.alsa.period-num = 6" in engine.texts(two, now["interface"])["wireplumber"]
+    assert "period-num" not in engine.texts({**two, "tsched": True}, now["interface"])["wireplumber"], "the timer sizes its own"
+    assert engine.reopens({**two, "tsched": True}, {**timer}), "a margin of more blocks: made again, on the timer too"
+    for bad in (384, 1024 + 256, 256 * 4):  # 1.5 blocks, not whole; 4 blocks: not offered
+        try:
+            engine.check({"block": 256, "margin": bad, "prio": 88, "nice": -11})
+        except ValueError:
+            continue
+        raise AssertionError(f"margin {bad} accepted")
+    for bad in ({"block": 300, "margin": 300, "prio": 88, "nice": -11}, {"block": 256, "margin": 256, "prio": 99, "nice": -11},
+                {"block": 256, "margin": 128, "prio": 88, "nice": -11},
+                {"block": 256}, {"block": "x", "margin": 0, "prio": 88, "nice": 0}):
+        try:
+            engine.check(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {bad}")
+
+
+async def check_engine_apply():
+    """engine.apply's order, the tools faked: WirePlumber restarted, the block set (min first when
+    it goes down) while the interface is away, the interface awaited, then priority and nice; a
+    priority alone restarts nothing."""
+    from pipeboard import engine
+    sent = []
+
+    async def run(*cmd):
+        sent.append(" ".join(cmd))
+
+    async def back(names, wait=15.0):
+        sent.append(f"back {len(names)}")
+        return True
+
+    async def daemon():
+        return "100", ["101"]
+
+    real = engine._run, engine._back, engine._daemon
+    engine._run, engine._back, engine._daemon = run, back, daemon
+    try:
+        was = {"block": 1024, "margin": 1024, "prio": 88, "nice": -11}
+        await engine.apply({**was, "block": 256, "margin": 256}, was, scenarios.load("machine"))
+        assert sent == ["systemctl --user restart wireplumber.service",
+                        "pw-metadata -n settings 0 clock.min-quantum 256",
+                        "pw-metadata -n settings 0 clock.quantum 256",
+                        "pw-metadata -n settings 0 clock.max-quantum 256", "back 2",
+                        "chrt -f -R -p 88 101", "renice -n -11 -p 100"], sent
+        sent.clear()
+        await engine.apply({**was, "prio": 90}, was, scenarios.load("machine"))
+        assert sent == ["chrt -f -R -p 90 101", "renice -n -11 -p 100"], sent
+        sent.clear()  # on the timer a block change is live: no restart, no wait
+        timer = {**was, "block": 256, "margin": 256, "tsched": True}
+        await engine.apply({**timer, "block": 512, "margin": 512}, timer, scenarios.load("machine"))
+        assert sent[:3] == ["pw-metadata -n settings 0 clock.max-quantum 512",
+                            "pw-metadata -n settings 0 clock.quantum 512",
+                            "pw-metadata -n settings 0 clock.min-quantum 512"], sent
+    finally:
+        engine._run, engine._back, engine._daemon = real
+
+
+async def check_engine_effects(tmp):
+    """A block or margin change: PipeBoard's effects stop before WirePlumber restarts and start
+    fresh after (they failed when their ports were set up anew while running), then the board's
+    wires come back; a priority alone touches none of it."""
+    from pipeboard import engine, eq, pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    board.ws.setdefault("devices", {})["pb:deqt"] = {**eq.new("Voice EQ"), "id": "deqt", "node": "pb_eq_deqt"}
+    board.model["present"].append("pb:deqt")
+    calls = []
+
+    def spy(name):
+        async def f(*args):
+            calls.append(f"{name} {args[0] if args and isinstance(args[0], str) else ''}".strip())
+        return f
+    real, real_sound = engine.apply, engine.sound_back
+    engine.apply = spy("apply")
+
+    async def heard(interface):
+        calls.append("listen")
+        return False
+    engine.sound_back = heard  # (the real one records the interface: never in a check)
+    board.eqs.stop, board.make, board.rewire = spy("stop"), spy("make"), spy("rewire")
+    try:
+        was = {"block": 1024, "margin": 1024, "prio": 88, "nice": -11}
+        await board.engine_apply({**was, "block": 256, "margin": 256}, was)
+        await asyncio.sleep(0.01)
+        assert calls == ["stop pb:deqt", "apply", "make pb:deqt", "rewire", "listen"], calls
+        assert board.listen is None and board.starting is None, "no sound heard: the bar goes"
+        assert not board.closing
+        import time
+        assert board.settling > time.monotonic() + 20, "its own dropouts are not counted for a while"
+        calls.clear()
+        await board.engine_apply({**was, "prio": 90}, was)
+        assert calls == ["apply"], calls
+    finally:
+        engine.apply, engine.sound_back = real, real_sound
+
+
+async def check_engine_trial(tmp):
+    """Trying a setting on the fixture: the trial and its countdown, Keep, Go back, the minute
+    running out; nothing written, nothing restarted (only live does that)."""
+    import time
+
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    assert await board.op_engine_try(None, {"block": 9, "margin": 0, "prio": 88, "nice": -11})
+    assert await board.op_engine_try(None, {"block": 256, "margin": 256, "prio": 88, "nice": -11}) is None
+    trial = board.trial_state()
+    assert trial["values"]["block"] == 256 and trial["was"]["block"] == 1024 and 55 <= trial["left"] <= 60, trial
+    assert "A setting is being tried" in await board.op_engine_try(None, {"block": 512, "margin": 512, "prio": 88, "nice": -11})
+    await board.op_engine_keep(None, {})
+    assert board.trial_state() is None and board.trial_task is None
+    await board.op_engine_try(None, {"block": 512, "margin": 512, "prio": 88, "nice": -11})
+    await board.op_engine_back(None, {})
+    assert board.trial_state() is None
+    await board.op_engine_try(None, {"block": 512, "margin": 512, "prio": 88, "nice": -11})
+    board._set(engine_trial={**board.settings["engine_trial"], "until": time.time()})  # the minute is up
+    board.trial_task.cancel()
+    board.watch_trial()
+    await asyncio.sleep(0.05)
+    assert board.settings["engine_trial"] is None, "back by itself"
+    # WirePlumber's restart drops the links on every audio node's ports: the board's wires
+    # between devices are made again from the board as it was (the apps' are WirePlumber's).
+    import copy
+    before = copy.deepcopy(board.ws)
+    kinds = {c["key"]: c["kind"] for c in board.model["cards"]}
+    lost = [w for w in board.model["wires"] if "app" not in (kinds[w["from"][0]], kinds[w["to"][0]])][:3]
+    for w in lost:
+        for link in w["links"]:
+            await board.source.unlink(link)
+    await board.refresh()
+    assert not {w["id"] for w in lost} & {w["id"] for w in board.model["wires"]}, "dropped"
+    assert await board.rewire(before) is None
+    await board.refresh()
+    assert {w["id"] for w in lost} <= {w["id"] for w in board.model["wires"]}, "made again"
+    # A reopened interface coming back: the steps, then its sound; the minute starts only then,
+    # a moment says how long it took, and a new change stops the last wait.
+    heard = asyncio.Event()
+
+    async def sound_back(_interface):
+        await heard.wait()
+        return True
+    real, server.engine.sound_back, server.BACK_SHOWN_S = server.engine.sound_back, sound_back, 0.05
+    try:
+        await board.op_engine_try(None, {"block": 512, "margin": 512, "prio": 88, "nice": -11})
+        board._set(engine_trial={**board.settings["engine_trial"], "until": time.time() + 5})
+        await board.set_starting("reopen")
+        await board.set_starting("wires")
+        board.listen = asyncio.create_task(board.wait_sound(["x"]))
+        await asyncio.sleep(0.02)
+        st = json.loads(board.state())["engine"]["starting"]
+        assert st["step"] == "sound" and st["elapsed"] >= 0, st
+        await board.set_starting("reopen")  # a new change: the last wait stops
+        assert board.listen is None and board.starting["step"] == "reopen"
+        board.listen = asyncio.create_task(board.wait_sound(["x"]))
+        await asyncio.sleep(0.02)
+        heard.set()
+        await asyncio.sleep(0.01)
+        assert json.loads(board.state())["engine"]["starting"] == {"back": 0}
+        assert 55 <= board.trial_state()["left"] <= 60, "the minute starts when the sound is back"
+        await asyncio.sleep(0.1)
+        assert board.starting is None and board.listen is None
+        await board.op_engine_keep(None, {})
+    finally:
+        server.engine.sound_back = real
+    # Show latency: a setting, kept when the launch profile replaces the board at the next start.
+    board.store.write("Default", board.ws)
+    board._set(launch="Default")
+    await board.op_show_latency(None, {"on": True})
+    again = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(again)
+    assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
+
+
+def check_dropouts():
+    """Dropouts in the last minute per card, its nodes summed; a node made again starts over."""
+    from pipeboard import server
+    seen, card = {}, {"key": "ur", "names": ["in", "out"]}
+    assert server.last_minute(seen, card, {"in": 5, "out": 1}, 0) == 0, "the first look: none yet"
+    assert server.last_minute(seen, card, {"in": 8, "out": 1}, 10) == 3
+    assert server.last_minute(seen, card, {"in": 9, "out": 1}, 65) == 1, "older than a minute forgotten"
+    assert server.last_minute(seen, card, {"in": 2}, 70) == 0, "made again: it counts from 0"
+    assert server.last_minute(seen, {"key": "x", "names": ["gone"]}, {"in": 1}, 70) == 0
+    found = problems.dropouts({"cards": [{"key": "ur", "title": "Interface"}]}, {"ur": 3, "nope": 2})
+    assert [p["title"] for p in found] == ["Dropouts"] and "Interface: 3 in the last minute" in found[0]["text"] and found[0]["fix"]
+    both = problems.dropouts({"cards": [{"key": "ur", "title": "Interface"}, {"key": "sp", "title": "Spotify"}]}, {"ur": 3, "sp": 5})
+    assert len(both) == 1 and both[0]["where"] == "Spotify, Interface" and both[0]["what"].startswith("5 "), both
+    assert both[0]["cards"] == ["sp", "ur"]
+
+
+def check_cstates():
+    """CPU idle states, one toggle each, through one root helper: run for real on a made-up sysfs
+    and rules folder (no root); by name, any vendor; the user's own rule set aside, never deleted."""
+    from pipeboard import engine
+    with tempfile.TemporaryDirectory() as tmp:
+        cpus, rules = Path(tmp) / "cpu", Path(tmp) / "rules"
+        for cpu in ("cpu0", "cpu1"):
+            for i, (name, us, off) in enumerate([("POLL", 0, 0), ("C1", 1, 0), ("C2", 18, 0), ("C3", 350, 1)]):
+                d = cpus / cpu / "cpuidle" / f"state{i}"
+                d.mkdir(parents=True)
+                for f, v in (("name", name), ("latency", us), ("disable", off)):
+                    (d / f).write_text(f"{v}\n")
+        rules.mkdir()
+        mine = rules / "99-cpu-cstate-audio.rules"
+        mine.write_text("# the user's own\nRUN+=... cpuidle ...\n")
+        real = engine.CPUS, engine.RULES
+        engine.CPUS, engine.RULES = cpus, rules
+        try:
+            now = engine.cstates()
+            assert [(s["name"], s["us"], s["off"]) for s in now["states"]] == [("C1", 1, False), ("C2", 18, False), ("C3", 350, True)]
+            assert now["rules"] == [str(mine)], "POLL is never offered; the user's rule is found"
+            asyncio.run(_idle_session(engine, cpus, rules, mine))
+            known = ["C1", "C2", "C3"]
+            assert engine.check_off(["C3", "C3"], known) == ["C3"]
+            for bad in (["C9"], ["POLL"], ["C3; reboot"], "C3", [3]):
+                try:
+                    engine.check_off(bad, known)
+                except ValueError:
+                    continue
+                raise AssertionError(f"accepted {bad!r}")
+        finally:
+            engine.CPUS, engine.RULES = real
+
+
+async def _idle_session(engine, cpus, rules, mine):
+    """One helper, several changes (one password prompt in real life), and a line no request can
+    make refused by the helper itself."""
+    helper = engine.IdleHelper(("sh", "-c"))
+    states = lambda: {s["name"]: s["off"] for s in engine.cstates()["states"]}  # noqa: E731
+    assert await helper.set(["C2"]) is None
+    first = helper.proc
+    assert states() == {"C1": False, "C2": True, "C3": False}, "exactly the ones asked, on every CPU"
+    assert (cpus / "cpu1/cpuidle/state2/disable").read_text().strip() == "1"
+    assert (cpus / "cpu1/cpuidle/state0/disable").read_text().strip() == "0", "POLL left alone"
+    assert not mine.exists() and (rules / (mine.name + engine.ASIDE)).read_text().startswith("# the user's own")
+    assert (rules / engine.OWN_RULE).read_text() == engine.own_rule(["C2"]), "PipeBoard's rule, exactly"
+    assert await helper.set(["C1", "C3"]) is None and helper.proc is first, "the same helper"
+    assert (rules / engine.OWN_RULE).read_text() == engine.own_rule(["C1", "C3"])
+    assert await helper.set([]) is None and states() == {"C1": False, "C2": False, "C3": False}
+    assert not (rules / engine.OWN_RULE).exists()
+    helper.proc.stdin.write(b"C3; touch /tmp/pipeboard-pwned\n")
+    await helper.proc.stdin.drain()
+    assert (await helper.proc.stdout.readline()).decode().strip() == "bad"
+    assert not Path("/tmp/pipeboard-pwned").exists()
+    await helper.stop()
+
+
 def check_missing():
     """The Pedal unplugged: still on the board, its wires kept, and it can be swapped for another."""
     pedal_board = profiles.snapshot(graph.build(scenarios.load("pedal")), {"cards": {}})
@@ -178,7 +465,7 @@ def check_missing():
     assert [m["title"] for m in gone] == ["Pedal"], gone
     pedal = gone[0]["key"]
     found = problems.missing_devices(gone, board["wires"])
-    assert "Its 3 connections are kept" in found[0]["text"], found
+    assert "its 3 connections wait" in found[0]["text"], found
     hidden = {**board, "cards": {**board["cards"], pedal: {**board["cards"][pedal], "hidden": True}}}
     assert profiles.missing(hidden, model) == [], "a card removed from the board is never missing"
     idle = {**model, "cards": [c for c in model["cards"] if c["key"] != "mic_mix"]}
@@ -394,6 +681,26 @@ async def check_scope_follows():
     assert not await cap.update([("big", "out", list(range(100, 100 + scope.MAX_CHANNELS)))]), \
         "what does not fit asks for a fresh capture"
     await cap.stop()
+
+
+async def check_scope_remade(tmp):
+    """A card made again with the very port ids it had (PipeWire reuses ids): the capture's links
+    died with the old node, so it must start fresh, not take the same sources as unchanged."""
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    board.visible.add("page")
+    await board.sync_scope()
+    first = board.scope
+    assert first is not None
+    await board.sync_scope()
+    assert board.scope is first, "nothing changed: the same capture"
+    key = first.sources[0][0]
+    card = next(c for c in board.model["cards"] if c["key"] == key)
+    card["serials"] = [n + 100000 for n in card["serials"]]  # its node made again, same ports
+    await board.sync_scope()
+    assert board.scope is not first, "made again: a fresh capture"
+    await board.stop_scope()
 
 
 async def check_scope_failures():
@@ -1041,11 +1348,11 @@ def check_portals():
              "wires": [{"from": ["d", "out"], "to": ["e", "in"], "pairs": [], "links": []}]}
     snap = profiles.snapshot(model, {**ws, "portals": {**ws["portals"], "gone:out>x:in": "hand"}})
     assert snap["portals"] == {"d:out>e:in": ws["portals"]["d:out>e:in"]}, snap["portals"]
-    assert snap["tidy_portals"] is True  # the bar's switch: on unless turned off
+    assert snap["tidy_portals"] is False  # Tidy's Portals: off unless turned on (owner)
     workspace.apply(ws, {"op": "tidy", "cards": {"d": {"x": 70, "y": 84}}, "set": {"e:out>f:in": tidy}})
     assert ws["cards"]["d"] == {"x": 70, "y": 84} and set(ws["portals"]) == {"e:out>f:in"}  # one message
-    workspace.apply(ws, {"op": "tidy-portals", "on": False})
-    assert profiles.snapshot(model, ws)["tidy_portals"] is False
+    workspace.apply(ws, {"op": "tidy-portals", "on": True})
+    assert profiles.snapshot(model, ws)["tidy_portals"] is True
 
 
 def check_aligned():
@@ -1498,6 +1805,10 @@ def main():
     check_gain_math()
     check_virtual_source()
     check_profiles()
+    check_latency(model)
+    check_dropouts()
+    check_cstates()
+    check_engine()
     check_missing()
     check_scope_math()
     check_eq_math()
@@ -1511,9 +1822,16 @@ def main():
     check_create_errors()
     asyncio.run(check_rename_stale())
     asyncio.run(check_scope_follows())
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_scope_remade(Path(tmp)))
     asyncio.run(check_scope_failures())
     asyncio.run(check_takeover())
     asyncio.run(check_server())
+    asyncio.run(check_engine_apply())
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_engine_effects(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_engine_trial(Path(tmp)))
     asyncio.run(check_plugin_startup())
     asyncio.run(check_own_devices())
     asyncio.run(check_settings_revert())

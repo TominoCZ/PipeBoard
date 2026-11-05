@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import logging
+import os
+import re
 import secrets
 import time
+from collections import Counter
 from pathlib import Path
 
 from aiohttp import WSCloseCode, WSMsgType, web
@@ -17,6 +21,7 @@ from pipeboard import (
     autostart,
     devices,
     dynamics,
+    engine,
     eq,
     gain,
     graph,
@@ -35,6 +40,9 @@ SETTLE_S = 0.15  # wait this long after a change before taking a snapshot
 # ends with PipeBoard and is started again at launch.
 FILTERS = ("eq", *dynamics.KINDS)
 RUNS_WITH = ("plugin", *FILTERS)
+SETTLE_DROPS_S = 30  # dropouts right after an engine change are its own, not counted
+TRIAL_S = 60  # a new audio engine setting is kept only if Keep is pressed within this
+BACK_SHOWN_S = 2.5  # how long the bar says the interface is back, before the trial's own
 GONE_S = 5.0  # how long a deleted device's nodes are looked past while PipeWire removes them
 NOT_MADE = "A device name is up to 40 characters, without quotes, brackets, braces or =."
 
@@ -83,8 +91,8 @@ class Board:
         self.visible: set[web.WebSocketResponse] = set()
         self.scope: scopes.Scope | None = None
         self.scope_key: tuple = ()
-        self.scope_tries = 0
-        self.scope_seen = (0, 0.0)
+        # (scope_serials: the node serials of the cards recorded, to see one made again)
+        self.scope_tries, self.scope_seen, self.scope_serials = 0, (0, 0.0), {}
         # One restart at a time: overlapping ones each started a capture and forgot all but the
         # last (20 quick wire changes left 12 captures running).
         self.scope_lock = asyncio.Lock()
@@ -105,7 +113,23 @@ class Board:
                     "rename-device": self.op_rename_device,
                     "delete-device": self.op_delete_device,
                     "create-missing": self.op_create_missing,
-                    "live-setting": self.op_live_setting}
+                    "live-setting": self.op_live_setting,
+                    "engine-try": self.op_engine_try, "engine-keep": self.op_engine_keep,
+                    "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
+                    "live-instant": self.op_live_instant, "drops": self.op_drops,
+                    "cstates": self.op_cstates}
+        # The audio engine as it runs (engine.read), and the task that goes back when a trial's
+        # minute is up with no Keep.
+        # (trial_drops: the interface's dropout count when the trial's setting began, and now)
+        # Pages showing the path panel, and the task counting its cards' dropouts meanwhile;
+        # dropped: each card's dropouts in the last minute, for the Dropouts problem; settling:
+        # until when dropouts are not counted, an engine change's own burst (owner: Spotify 666).
+        # idle: the root helper for CPU idle states (one password prompt per run).
+        # starting: while a reopened interface comes back, its step and since when (then for a
+        # moment how long it took); listen: the task waiting for its sound.
+        (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
+         self.dropped, self.settling, self.idle, self.starting, self.listen) = (
+            {}, None, (None, None), set(), None, {}, 0.0, engine.IdleHelper(), None, None)
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -134,6 +158,7 @@ class Board:
         found = problems.find(self.model)
         found += problems.missing_devices(prof["missing"], self.ws["wires"])
         found += problems.clipping(self.model, list(self.clipped))
+        found += problems.dropouts(self.model, self.dropped)
         found.sort(key=lambda p: problems.ORDER[p["severity"]])
         return json.dumps({"type": "state", "model": self.model, "workspace": self.ws,
                            "profile": prof, "problems": found, "mode": self.source.mode,
@@ -141,7 +166,26 @@ class Board:
                            "takeover": {u: [c["title"] for c in cards]
                                         for u, cards in self.offer.items()},
                            "live": {"on": self.settings["live"],
-                                    "sources": self.scope_sources_sent()}})
+                                    "instant": self.settings["live_instant"],
+                                    "sources": self.scope_sources_sent()},
+                           "engine": {**self.engine, "trial": self.trial_state(),
+                                      "starting": self.starting_state()},
+                           "show_latency": self.settings["show_latency"]})
+
+    def read_engine(self, dump: list[dict]) -> None:
+        """The audio engine as it runs, and the CPU idle states (their attempts counted on)."""
+        tries = self.engine.get("cstates", {}).get("tries", 0)
+        self.engine = {**engine.read(dump), "cstates": {**engine.cstates(), "tries": tries}}
+
+    def dress(self) -> None:
+        """PipeBoard's own cards get the names it gave them (a plugin's node is pb-<id>), and every
+        card its latency (Show latency): PipeBoard knows its own effects' delays, not a plugin's."""
+        devs = self.ws.get("devices", {})
+        for card in self.model["cards"]:
+            if dev := devs.get(card["key"]):
+                card["title"] = dev["name"]
+        self.model["latency"] = graph.latency(self.model, {
+            k: dynamics.latency_ms(d["type"]) for k, d in devs.items() if d["type"] != "plugin"})
 
     async def refresh(self) -> None:
         self.pending = False
@@ -153,9 +197,8 @@ class Board:
             self.node_names = {o["info"]["props"].get("node.name") for o in dump
                                if o["type"].endswith("Node")}
             self.model = self.own(graph.build(dump), dump)
-            for card in self.model["cards"]:  # PipeBoard's own: the name it was given (a
-                if dev := self.ws.get("devices", {}).get(card["key"]):  # plugin's node is pb-<id>)
-                    card["title"] = dev["name"]
+            self.dress()
+            self.read_engine(dump)
             self.offer = takeover.find(dump, self.model, self.unit_of)
         except Exception:
             log.exception("could not read the graph")
@@ -223,8 +266,9 @@ class Board:
         workspace.save(self.store.board, self.ws)  # the board itself, not a profile
 
     def changed(self) -> None:
-        """The graph moved: take one snapshot once it settles, however many events arrive."""
-        if not self.pending:
+        """The graph moved: take one snapshot once it settles, however many events arrive. Not
+        while quitting: its own processes ending would be saved as the board."""
+        if not self.pending and not self.closing:
             self.pending = True
             asyncio.get_running_loop().call_later(SETTLE_S, self.settled)
 
@@ -889,6 +933,10 @@ class Board:
                 found[(key, sock)] = (key, sock, list(ports))
         return sorted(found.values())
 
+    def recorded_serials(self, sources: list) -> dict[str, tuple]:
+        cards = {c["key"]: c for c in self.model["cards"]}
+        return {k: tuple(cards[k]["serials"]) for k, _, _ in sources if k in cards}
+
     def scope_sources_sent(self) -> list:
         return [src and [src[0], src[1]] for src in self.scope.sources] if self.scope else []
 
@@ -906,9 +954,15 @@ class Board:
             sources = self.scope_sources() if want else []
             key = tuple((k, s, tuple(p)) for k, s, p in sources)
             dead = self.scope is not None and not self.scope.alive
-            if key == self.scope_key and not dead:
+            serials = self.recorded_serials(sources)
+            # A card made again (WirePlumber's restart, an effect started fresh) can come back with
+            # the very port ids it had: the same key, but the capture's links died with the old
+            # node, and its wires went still until Animate was toggled (owner). A fresh capture.
+            remade = any(self.scope_serials.get(k, v) != v for k, v in serials.items())
+            if key == self.scope_key and not dead and not remade:
                 return
-            if not dead and await self.follow_scope(key, sources):
+            self.scope_serials = serials
+            if not dead and not remade and await self.follow_scope(key, sources):
                 return
             if dead and key == self.scope_key:
                 if self.scope_tries >= 5 or time.monotonic() - self.scope.dead_since < 1:
@@ -917,18 +971,21 @@ class Board:
             else:
                 self.scope_tries = 0
             await self.stop_scope()
-            self.scope_key = key
-            kind = scopes.FakeScope if self.source.mode == "fixture" else scopes.Scope
-            fresh = kind(sources) if sources else None
-            # The page learns the new sources before the first frame that uses them.
-            sent = [src and [src[0], src[1]] for src in fresh.sources] if fresh else []
-            await self.broadcast(json.dumps({"type": "scope", "sources": sent, "fresh": True}))
-            if fresh:
-                self.scope, self.scope_seen = fresh, (0, time.monotonic())
-                self.scope_started = time.monotonic()
-                await fresh.start()
+            await self.start_scope(key, sources)
         except Exception:  # noqa: BLE001
             log.exception("live wires: could not set up the capture")
+
+    async def start_scope(self, key: tuple, sources: list) -> None:
+        self.scope_key = key
+        kind = scopes.FakeScope if self.source.mode == "fixture" else scopes.Scope
+        fresh = kind(sources) if sources else None
+        # The page learns the new sources before the first frame that uses them.
+        sent = [src and [src[0], src[1]] for src in fresh.sources] if fresh else []
+        await self.broadcast(json.dumps({"type": "scope", "sources": sent, "fresh": True}))
+        if fresh:
+            self.scope, self.scope_seen = fresh, (0, time.monotonic())
+            self.scope_started = time.monotonic()
+            await fresh.start()
 
     async def follow_scope(self, key: tuple, sources: list) -> bool:
         """The running capture takes the new sources in: its count runs on, so the page keeps
@@ -991,6 +1048,7 @@ class Board:
 
     async def forget(self, page: web.WebSocketResponse) -> None:
         self.pages.discard(page)
+        self.drop_pages.discard(page)
         self.visible.discard(page)
         self.watching.pop(page, None)
         await self.sync_scope()
@@ -1029,6 +1087,94 @@ class Board:
         if errors:
             return f"{unit} is stopped, but {errors[0]}"
         await toast(page, f"PipeBoard now makes the {len(keys)} devices {unit} made.", "info")
+        return None
+
+    async def op_cstates(self, page, op) -> str | None:
+        """Which CPU idle states are off (Audio engine › Advanced): as root through pkexec, in the
+        background so a password prompt never holds the board up; the panel shows the outcome."""
+        if self.source.mode != "live":
+            return "CPU idle states can only be changed on the real system."
+        try:
+            off = engine.check_off(op.get("off"), [s["name"] for s in engine.cstates()["states"]])
+        except ValueError as e:
+            return str(e)
+
+        async def change() -> None:
+            error = await self.idle.set(off)
+            # (each attempt counted: a closed password prompt changes nothing, and the page must
+            # still learn it is over)
+            tries = self.engine.get("cstates", {}).get("tries", 0) + 1
+            self.engine["cstates"] = {**engine.cstates(), "tries": tries}
+            await self.broadcast(self.state())
+            if error:
+                await toast(page, error)
+        asyncio.create_task(change())
+        return None
+
+    async def op_drops(self, page, op) -> str | None:
+        """A page opens or closes the path panel: its cards' dropouts are counted meanwhile."""
+        (self.drop_pages.add if op.get("on") else self.drop_pages.discard)(page)
+        if self.drop_pages and not self.drops_task:
+            self.drops_task = asyncio.create_task(self.watch_drops())
+        return None
+
+    async def watch_errors(self) -> None:
+        """Every second each card's dropout count, a minute of it kept: the Dropouts problem (owner:
+        it must show as they happen; pw-top takes ~3 ms). A node made again counts from 0: its
+        history starts over. Never raises."""
+        seen: dict[str, list] = {}
+        tick = 0
+        while True:
+            await asyncio.sleep(1)
+            tick += 1
+            if tick % 60 == 0:
+                note_open_files()
+            if self.source.mode != "live" or self.closing:
+                continue
+            try:
+                errors, now = await engine.node_errors(), time.monotonic()
+                if now < self.settling:  # an engine change's own burst: counted afresh after
+                    seen.clear()
+                recent = {} if now < self.settling else {
+                    c["key"]: n for c in self.model["cards"]
+                    if (n := last_minute(seen, c, errors, now))}
+                if recent != self.dropped:
+                    self.dropped = recent
+                    await self.broadcast(self.state())
+                    self.tell_tray()
+            except Exception:  # noqa: BLE001 - a count failing must never touch the board
+                log.exception("dropouts: could not count")
+
+    async def watch_drops(self) -> None:
+        """Every 2 s, each card's dropouts since the panel opened (summed over its nodes), sent to
+        the pages that show it (owner: a live drop counter on devices). Nothing runs while no
+        panel is open. A node made again starts its count afresh: the start follows it down."""
+        start: dict[str, int] = {}
+        try:
+            while self.drop_pages:
+                errors = await engine.node_errors() if self.source.mode == "live" else {}
+                if time.monotonic() < self.settling:  # (an engine change's own burst: not counted)
+                    start.clear()
+                counts = {}
+                for c in self.model["cards"]:
+                    mine = [errors[n] for n in c["names"] if n in errors]
+                    if mine:
+                        start[c["key"]] = min(start.get(c["key"], sum(mine)), sum(mine))
+                        counts[c["key"]] = sum(mine) - start[c["key"]]
+                text = json.dumps({"type": "drops", "counts": counts})
+                for page in list(self.drop_pages):
+                    with contextlib.suppress(ConnectionError, RuntimeError):
+                        await page.send_str(text)
+                await asyncio.sleep(2.0)
+        finally:
+            self.drops_task = None
+
+    async def op_live_instant(self, _page, op) -> str | None:
+        self._set(live_instant=bool(op.get("on")))
+        return None
+
+    async def op_show_latency(self, _page, op) -> str | None:
+        self._set(show_latency=bool(op.get("on")))
         return None
 
     async def op_live_setting(self, _page, op) -> str | None:
@@ -1095,6 +1241,220 @@ class Board:
         self.mark(src, dst)
         return None
 
+    # ---- the audio engine (§8c): block size, safety margin, priority; tried for a minute -------
+    def trial_state(self) -> dict | None:
+        """The setting being tried: its values, what it replaced, seconds left, and whether the
+        graph now runs what was asked (PipeWire may not have taken a file's setting)."""
+        trial = self.settings.get("engine_trial")
+        if not trial:
+            return None
+        v, now = trial["values"], self.engine
+        # (on the timer PipeWire pads the margin itself: only the block and the mode are asked)
+        keys = ("block", "tsched") if v.get("tsched") else ("block", "margin", "tsched")
+        took = self.source.mode != "live" or all(now.get(k) == v.get(k) for k in keys)
+        return {"values": v, "was": trial["was"], "took": took,
+                "left": max(0, round(trial["until"] - time.time())),
+                "dropouts": self.trial_drops[1] - self.trial_drops[0]
+                if None not in self.trial_drops else None}
+
+    async def op_engine_try(self, _page, op) -> str | None:
+        """New engine settings for a minute: written, and put into the running PipeWire."""
+        if self.settings.get("engine_trial"):
+            return "A setting is being tried: keep or revert it first."
+        if not self.engine.get("interface"):
+            return "No audio interface clocks the graph: there is nothing to set."
+        try:
+            values = engine.check(op)
+        except ValueError as e:
+            return str(e)
+        live = self.source.mode == "live"
+        was = {k: self.engine.get(k) for k in values}
+        # the margin asked for, in blocks (on the timer PipeWire reports a padded one)
+        was["margin"] = self.engine.get("margin_blocks", 1) * (was["block"] or 1)
+        self._set(engine_trial={
+            "values": values, "was": was,
+            "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
+        if not live:  # the fixture: the bar and its countdown, nothing written or restarted
+            self.watch_trial()
+            return None
+        engine.write(engine.texts(values, self.engine["interface"]))
+        self.watch_trial()
+        return await self.engine_apply(values, self.settings["engine_trial"]["was"])
+
+    async def engine_apply(self, values: dict, was: dict) -> str | None:
+        """Apply engine values (engine.apply). When that restarts WirePlumber, the board's wires
+        are made again: its start sets up every audio node's ports anew, which drops every link
+        on them, not only the interface's (owner: Spotify reached Music Mix and went no further;
+        16 wires between PipeBoard's own nodes were gone, their ports far newer than the nodes)."""
+        before = copy.deepcopy(self.ws)
+        restart = engine.reopens(values, was)
+        self.settling = time.monotonic() + SETTLE_DROPS_S
+        # PipeBoard's effects are stopped first and started fresh after: WirePlumber's restart
+        # sets their ports up anew while they run, they fail ("error changing node state"), and
+        # PipeWire restarted the interface's stream over and over until they recovered, ~50 s
+        # of silence (owner: "can we make the sound come back a lot sooner").
+        present = self.model.get("present", [])
+        effects = [k for k, d in self.ws.get("devices", {}).items()
+                   if d["type"] in FILTERS and k in present] if restart else []
+        if restart:
+            await self.set_starting("reopen")
+        self.closing = True  # (stopped on purpose: no "it stopped" warning)
+        for key in effects:
+            await self.eqs.stop(key)
+        self.closing = False
+        error = await engine.apply(values, was, await self.source.snapshot())
+        if restart:
+            await self.set_starting("wires")
+        for key in effects:
+            error = await self.make(key) or error
+        if restart:
+            error = await self.rewire(before, set(present)) or error
+            self.listen = asyncio.create_task(self.wait_sound(self.engine.get("interface", [])))
+        self.changed()  # read the engine again: the trial bar says if it did not take
+        if error:
+            log.warning("audio engine: %s", error)
+            return f"Not all of it could be set: {error}"
+        return None
+
+    async def set_starting(self, step: str) -> None:
+        """A step of a reopened interface coming back (reopen, wires, sound), shown in the bar
+        (owner: no sound for a while after a change, and nothing said why). A new change
+        stops the wait for the last one's sound."""
+        if step == "reopen" and self.listen:
+            self.listen.cancel()
+            self.listen = None
+        since = self.starting["since"] if self.starting and step != "reopen" else time.monotonic()
+        self.starting = {"step": step, "since": since}
+        await self.broadcast(self.state())
+
+    def starting_state(self) -> dict | None:
+        s = self.starting
+        if not s:
+            return None
+        if "back" in s:
+            return {"back": s["back"]}
+        return {"step": s["step"], "elapsed": round(time.monotonic() - s["since"], 1)}
+
+    async def wait_sound(self, interface: list[str]) -> None:
+        """Until the interface's sound is back (engine.sound_back; how long differs per device:
+        the owner's UR44C ~13 s). The trial's minute and its dropouts start then; for a moment
+        the bar says how long it took."""
+        await self.set_starting("sound")
+        back = await engine.sound_back(interface)
+        trial = self.settings.get("engine_trial")
+        if trial:
+            self._set(engine_trial={**trial, "until": time.time() + TRIAL_S})
+            self.trial_drops = (None, None)
+        self.starting = {"back": round(time.monotonic() - self.starting["since"])} if back else None
+        await self.broadcast(self.state())
+        if back:
+            await asyncio.sleep(BACK_SHOWN_S)
+            self.starting = None
+            await self.broadcast(self.state())
+        self.listen = None
+
+    async def op_engine_keep(self, _page, _op) -> str | None:
+        if self.trial_task:
+            self.trial_task.cancel()
+            self.trial_task = None
+        self._set(engine_trial=None)
+        return None
+
+    async def op_engine_back(self, _page, _op) -> str | None:
+        return await self.engine_back()
+
+    async def rewire(self, board: dict, back: set | None = None) -> str | None:
+        """Make a board's wires again (not the apps' own: WirePlumber links those), as soon as
+        their ports are there: looked at every quarter second, done after two looks in a row
+        found nothing to make (WirePlumber may still be setting up ports and drop a link just
+        made; a fixed second's wait first made the sound come back that much later: owner).
+        The marks of wires the user made, lost while they were gone, come back with them.
+        `back`: the cards there before; not done until each is back with its sockets (the effects
+        are new processes: their wires, skipped while they were not up yet, waited for an
+        ordinary refresh behind the live-wires capture, and the sound came 14 s later: owner)."""
+        mine = {**board, "wires": [w for w in board["wires"] if not profiles.routed(board, w)]}
+        ends = [w for w in mine["wires"] if {w["from"][0], w["to"][0]} <= (back or set())]
+        clean = 0
+        for _ in range(40):  # 10 s at most
+            await asyncio.sleep(0.25)
+            # Its own look at the graph, not a refresh(): that waited behind the live-wires
+            # capture, restarting every 3 s while its links were gone, and a quarter second
+            # became 14 s (owner: "still taking long").
+            dump = await self.source.snapshot()
+            model = self.own(graph.build(dump), dump)
+            make = profiles.plan(mine, model)["make"]
+            waiting = [w for w in ends if profiles.ports(model, w["from"], "outputs") is None
+                       or profiles.ports(model, w["to"], "inputs") is None]
+            if not make and not waiting:
+                clean += 1
+                if clean == 2:
+                    break
+                continue
+            clean = 0
+            log.info("audio engine: making %d links of the board again", len(make))
+            await self.apply({"make": make, "remove": []})
+        else:
+            return "Some of the board's wires could not be made again: Revert brings them back."
+        self.ws["made"] = sorted(set(self.ws.get("made", [])) | set(board.get("made", [])))
+        self.changed()
+        return None
+
+    async def engine_back(self) -> str | None:
+        """Go back: the files as they were before the trial (none, or the last kept), and the
+        values that ran then, at once."""
+        trial = self.settings.get("engine_trial")
+        if self.trial_task:
+            self.trial_task.cancel()
+            self.trial_task = None
+        self._set(engine_trial=None)
+        if trial and self.source.mode == "live":
+            engine.write(trial["before"])
+            return await self.engine_apply(trial["was"], trial["values"])
+        return None
+
+    def watch_trial(self) -> None:
+        """Back when the minute is up, with or without a window open (the server keeps time);
+        meanwhile the interface's dropouts counted, so the bar shows them (owner: a bad setting
+        should be plain before Keep)."""
+        trial = self.settings.get("engine_trial")
+
+        async def wait() -> None:
+            self.trial_drops = (None, None)
+            # (the minute starts again when a reopened interface's sound is back: wait_sound)
+            while time.time() < (self.settings.get("engine_trial") or trial)["until"]:
+                await asyncio.sleep(2.0)
+                if self.source.mode == "live" and not self.closing:
+                    await self.count_drops()
+            self.trial_task = None  # (engine_back must not cancel the task it runs in)
+            log.info("audio engine: no Keep within the minute; going back")
+            await self.engine_back()
+        if trial:
+            self.trial_task = asyncio.create_task(wait())
+
+    async def count_drops(self) -> None:
+        count = await engine.dropouts(self.engine.get("interface", []))
+        if count is None:
+            return
+        first = self.trial_drops[0] if self.trial_drops[0] is not None else count
+        if (first, count) != self.trial_drops:
+            self.trial_drops = (first, count)
+            await self.broadcast(self.state())
+
+    async def stop_children(self, around: bool = True) -> None:
+        """Stop what PipeBoard runs: the capture, the gains' pw-cli, plugins, EQs and effects
+        (first, when quitting, the sound routed around them)."""
+        await self.stop_scope()  # the capture never outlives the app
+        if around:
+            await self.route_around()  # before the EQs and plugins stop: the sound keeps going
+        await self.gains.stop()
+        await self.plugins.stop_all()
+        await self.eqs.stop_all()
+        await self.idle.stop()  # (the root helper ends with PipeBoard)
+        if self.listen:  # (its capture ends with PipeBoard too)
+            self.listen.cancel()
+        if self.spectrum:
+            await self.spectrum.stop()
+
     # ---- quitting: sound goes around the EQ and plugins, which stop with PipeBoard (M12) --------
     async def route_around(self) -> None:
         """Before they stop: link what feeds each running EQ/plugin straight to where its sound
@@ -1134,8 +1494,50 @@ class Board:
         return f"PipeWire refused to disconnect: {errors[0]}" if errors else None
 
 
+FD_WARN = [200, 400, 800]  # open files at which the log says what they are (left to warn at)
+
+
+def note_open_files() -> None:
+    """PipeBoard's open files, looked at once a minute: past 200, 400 and 800 the log says what
+    kinds they are and which processes it runs (2026-11-06: it ran out of files after ~20 min,
+    "Too many open files", and could not quit; the leak was not found by reading the code)."""
+    kinds = Counter()
+    for fd in os.listdir("/proc/self/fd"):
+        with contextlib.suppress(OSError):  # (the listing's own, gone by now)
+            kinds[re.sub(r"\d+", "N", os.readlink(f"/proc/self/fd/{fd}"))] += 1
+    n = sum(kinds.values())
+    if FD_WARN and n >= FD_WARN[0]:
+        while FD_WARN and n >= FD_WARN[0]:
+            FD_WARN.pop(0)
+        me = os.getpid()
+        kids = Counter(_comm(c) for c in Path(f"/proc/{me}/task/{me}/children").read_text().split())
+        log.warning("open files: %d %s; processes %s", n, dict(kinds.most_common(6)), dict(kids))
+
+
+def _comm(pid: str) -> str:
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except OSError:
+        return "?"
+
+
+def last_minute(seen: dict, card: dict, errors: dict, now: float) -> int:
+    """A card's dropouts in the last minute, its count history in `seen` kept up to date (a node
+    made again counts from 0: its history starts over)."""
+    mine = [errors[n] for n in card["names"] if n in errors]
+    if not mine:
+        return 0
+    hist = seen.setdefault(card["key"], [])
+    if hist and sum(mine) < hist[-1][1]:
+        hist.clear()
+    hist.append((now, sum(mine)))
+    hist[:] = [h for h in hist if now - h[0] <= 60]
+    return sum(mine) - hist[0][1]
+
+
 async def startup(board: Board) -> None:
-    """Read the system, then load the profile chosen to load at launch, if there is one."""
+    """Read the system, then load the profile chosen to load at launch, if there is one; an audio
+    engine trial still running (PipeBoard was quit during it) keeps counting, or goes back."""
     board.autostart = await autostart.enabled()
     await board.refresh()
     board.first_profile()
@@ -1148,6 +1550,7 @@ async def startup(board: Board) -> None:
         log.info("loading %s: %s", board.settings["launch"],
                  await board.load(board.settings["launch"]) or "ok")
         await board.refresh()
+    board.watch_trial()  # (a trial whose minute ran out while PipeBoard was down: back at once)
 
 
 async def frames(board: Board) -> None:
@@ -1166,6 +1569,21 @@ async def toast(page: web.WebSocketResponse | None, text: str, level: str = "err
         log.warning("%s", text)
         return
     await page.send_str(json.dumps({"type": "toast", "text": text, "level": level}))
+
+
+async def index(_request: web.Request) -> web.Response:
+    """The page, each script and style asked for under its file's date: a copy Chrome cached
+    before an update is never used with the new page (owner: Show latency was an unstyled box
+    that did nothing: a new index.html with the old board.css and board.js)."""
+    page = re.sub(r'(src|href)="(\w+\.(?:js|css))"',
+                  lambda m: f'{m[1]}="{m[2]}?v={(WEB / m[2]).stat().st_mtime_ns}"',
+                  (WEB / "index.html").read_text())
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+async def revalidate(_request: web.Request, response: web.StreamResponse) -> None:
+    """Every file asked for again each time (a 304 when unchanged), never kept on a guess."""
+    response.headers.setdefault("Cache-Control", "no-cache")
 
 
 def app(board: Board, port: int) -> web.Application:
@@ -1188,10 +1606,8 @@ def app(board: Board, port: int) -> web.Application:
         await board.forget(page)
         return page
 
-    async def index(_request: web.Request) -> web.FileResponse:
-        return web.FileResponse(WEB / "index.html", headers={"Cache-Control": "no-store"})
-
     application = web.Application()
+    application.on_response_prepare.append(revalidate)
     application.router.add_get("/", index)
     # The window opens /pipeboard/: Chrome names an app window after its address, so this path
     # gives PipeBoard its own window id (KDE matches it to pipeboard's desktop entry and icon).
@@ -1220,20 +1636,15 @@ def lifecycle(application: web.Application, board: Board) -> None:
         _app["watch"] = asyncio.create_task(board.source.watch(board.changed))
         _app["frames"] = asyncio.create_task(frames(board))
         _app["listing"] = asyncio.create_task(board.plugins.installed())  # warms the picker
+        _app["dropouts"] = asyncio.create_task(board.watch_errors())
 
     async def stop(_app: web.Application) -> None:
         board.closing = True
-        tasks = [_app[k] for k in ("watch", "frames", "listing") if k in _app]
+        tasks = [_app[k] for k in ("watch", "frames", "listing", "dropouts") if k in _app]
         for task in tasks:  # PipeBoard's own background work ends before the loop does
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await board.stop_scope()  # the capture never outlives the app
-        await board.route_around()  # before the EQs and plugins stop: the sound keeps going
-        await board.gains.stop()
-        await board.plugins.stop_all()
-        await board.eqs.stop_all()
-        if board.spectrum:
-            await board.spectrum.stop()
+        await board.stop_children()
 
     application.on_shutdown.append(lambda _app: close_pages(board))
     application.on_startup.append(start)

@@ -54,6 +54,16 @@ def _studio(folder: Path, saved_from: list, board: dict | None = None) -> None:
     workspace.save(store.board, board or store.read("Studio"))
 
 
+def trying(folder: Path, dump: list) -> list:
+    """A block of 256 and a margin of 256 on trial, 47 s left of its minute."""
+    import time
+    workspace.Store(folder).save_settings({"engine_trial": {
+        "values": {"block": 256, "margin": 256, "prio": 88, "nice": -11, "tsched": True},
+        "was": {"block": 256, "margin": 256, "prio": 88, "nice": -11, "tsched": False}, "before": {},
+        "until": time.time() + 47}})
+    return dump
+
+
 def missing(folder: Path, dump: list) -> list:
     """Studio was saved with the Pedal plugged in; today it is not."""
     _studio(folder, scenarios.load("pedal"))
@@ -195,6 +205,8 @@ def chained(folder: Path, dump: list) -> list:
     for a, b in zip(chain, chain[1:]):
         for i in (0, 1):
             asyncio.run(fixture.link(cards[a]["outputs"][0]["ports"][i], cards[b]["inputs"][0]["ports"][i]))
+    ws = workspace.load(folder / "workspace.json")  # Portals on: the shots on this board fold it
+    workspace.save(folder / "workspace.json", {**ws, "tidy_portals": True})
     return fixture.dump
 
 
@@ -225,6 +237,7 @@ SHOTS = {
     "small": ("machine", SMALL, None, ""),
     "pedal": ("pedal", BIG, None, ""),
     "problems": ("problems", BIG, None, "PB.debug.openProblems()"),
+    "problems-away": ("problems", BIG, None, "PB.debug.problemsAway()"),
     "connecting": ("machine", BIG, None, "PB.debug.pending('music_player', 'out', 700, 640)"),
     "connecting-mono": ("machine", BIG, None, f"PB.debug.dragTo('music_player', 'out', '{UR}', 'in3')"),
     "connecting-held": ("machine", BIG, None, "PB.debug.dragFree('music_player', 'out', 760, 640)"),
@@ -237,9 +250,38 @@ SHOTS = {
     "tidy-echo": ("machine", BIG, chained, "PB.debug.tidyEcho()"),
     "tidy-zoom": ("machine", BIG, chained, "PB.debug.tidyZoom()"),
     "tidy-no-portals": ("machine", BIG, chained, "PB.debug.noPortals() || PB.debug.tidy()"),
+    "tidy-any-zoom": ("machine", BIG, chained, "PB.debug.tidyAnyZoom()"),
     "portal-hover": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.portalHover(0)"),
+    "latency": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.showLatency()"),
+    "latency-near": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.dynFlag('pb:dcomp01', 'bypass') || "
+                     "PB.debug.showLatency() || PB.debug.zoom(0.9)"),
+    "latency-plugin": ("machine", BIG, plugged, "PB.debug.showLatency()"),
+    "latency-path": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.showLatency() || PB.debug.zoom(0.9) || "
+                     "PB.debug.openPath('desktop_mix')"),
+    "latency-path-hw": ("machine", BIG, None, "PB.debug.showLatency() || PB.debug.openPath('mic_mix')"),
+    "latency-path-hover": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.showLatency() || PB.debug.zoom(0.9) || "
+                           "PB.debug.openPath('desktop_mix') || PB.debug.pathHover(0)"),
+    "latency-path-stays": ("machine", BIG, None, "PB.debug.showLatency() || PB.debug.openPath('mic_mix') || "
+                           "PB.debug.pathStays()"),
+    "latency-path-drops": ("machine", BIG, None, "PB.debug.showLatency() || PB.debug.openPath('mic_mix') || "
+                           f"PB.debug.pathDrops({{'{UR}': 3, mic_mix: 0}})"),
+    "latency-path-away": ("machine", BIG, None, "PB.debug.showLatency() || PB.debug.openPath('mic_mix') || "
+                          "PB.debug.clickBoard(760, 820)"),
+    "engine": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, margin: 256})"),
+    "engine-advanced": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, margin: 256, prio: 90, tsched: true}, true)"),
+    "engine-same": ("machine", BIG, None, "PB.debug.engineOpen()"),
+    "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
+    "engine-margin": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, blocks: 2})"),
+    "engine-priority": ("machine", BIG, None, "PB.debug.engineOpen({prio: 90}, true)"),
+    "engine-small": ("machine", SMALL, None, "PB.debug.engineOpen({block: 512}, true)"),
+    "engine-trial": ("machine", BIG, trying, ""),
+    "engine-trial-stays": ("machine", BIG, trying, "PB.debug.trialStays()"),
+    "engine-starting": ("machine", BIG, trying, "PB.debug.starting('sound')"),
+    "engine-starting-back": ("machine", BIG, trying, "PB.debug.starting(null, 13)"),
+    "engine-starting-revert": ("machine", BIG, None, "PB.debug.starting('wires')"),
     "portal-toggle": ("machine", BIG, None, "PB.debug.portalToggle()"),
     "appear-free": ("machine", BIG, None, "PB.debug.appearOver('music_player', 'mic_mix')"),
+    "appear-back": ("machine", BIG, None, "PB.debug.comeBackOver('music_player', 'mic_mix')"),
     "menu-edge": ("machine", BIG, None, "PB.debug.menu(1380, 760, ['Add node', 'Effects'])"),
     "card-menu": ("machine", BIG, renamed, "PB.debug.cardMenu('mic_mix')"),
     "renaming": ("machine", BIG, renamed, "PB.debug.rename('instrument_mix')"),
@@ -303,6 +345,9 @@ SHOTS = {
     "dragging": ("machine", BIG, None, "PB.debug.drag('desktop_mix', 23, -37)"),
     "live": ("machine", BIG, None, "PB.debug.fakeLive()"),
     "live-frame": ("machine", BIG, None, _frame()),
+    "live-instant": ("machine", BIG, None, "PB.debug.liveInstant() || PB.debug.fakeLive()"),  # (off by default: this turns it on)
+    "bar-wires": ("machine", BIG, None, "PB.debug.wiresMenu()"),
+    "bar-tidy": ("machine", BIG, None, "PB.debug.tidyMenu()"),
     "live-pedal": ("pedal", BIG, None, "PB.debug.fakeLive()"),
     "zoomed-out": ("machine", SMALL, None, "PB.debug.zoom(0.55)"),
     "empty": ("empty", SMALL, None, ""),

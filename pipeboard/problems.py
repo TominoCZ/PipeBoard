@@ -12,8 +12,12 @@ def _passes(card: dict) -> bool:
     return card["kind"] not in ("hardware", "app")
 
 
-def _problem(severity: str, title: str, text: str, cards=(), wires=()) -> dict:
-    return {"severity": severity, "title": title, "text": text,
+def _problem(severity: str, title: str, said: tuple[str, str, str], cards=(), wires=()) -> dict:
+    """said: (where, what, fix) — short, the key facts only (owner: concise, laid out): the page
+    shows them on their own lines; "text" joins them for the tray and tooltips."""
+    where, what, fix = said
+    return {"severity": severity, "title": title, "where": where, "what": what, "fix": fix,
+            "text": " ".join(x for x in (f"{where}:" if where else "", what, fix) if x),
             "cards": list(cards), "wires": list(wires)}
 
 
@@ -48,8 +52,8 @@ def _loops(cards: dict, wires: list[dict]) -> list[dict]:
             loop_wires = [w["id"] for w in wires if (w["from"][0], w["to"][0]) in steps]
             found.append(_problem(
                 "error", "Feedback loop",
-                " → ".join(_name(cards, k) for k in ring) + ". Sound comes back into itself "
-                "and builds up into a howl. Remove one of these wires.", path, loop_wires))
+                (" → ".join(_name(cards, k) for k in ring), "Sound feeds back into itself.",
+                 "Remove one of these wires."), path, loop_wires))
     return found
 
 
@@ -70,8 +74,9 @@ def _cycle_from(start: str, edges: dict) -> list[str] | None:
 def _failed(cards: dict, wires: list[dict]) -> list[dict]:
     return [_problem(
         "error", "Connection failed",
-        f"PipeWire could not connect {_name(cards, w['from'][0])} to {_name(cards, w['to'][0])}. "
-        "Often a format the two ends cannot agree on. Try removing and re-making the wire.",
+        (f"{_name(cards, w['from'][0])} → {_name(cards, w['to'][0])}",
+         "PipeWire could not connect them (often a format mismatch).",
+         "Remove the wire and make it again."),
         (w["from"][0], w["to"][0]), [w["id"]]) for w in wires if w["failed"]]
 
 
@@ -90,9 +95,8 @@ def _one_sided(cards: dict, wires: list[dict]) -> list[dict]:
             side, other = ("left", "right") if 0 in used else ("right", "left")
             found.append(_problem(
                 "warning", "Only one side of a stereo input",
-                f"{card['title']} ({socket['label']}) gets sound on the {side} channel only; "
-                f"the {other} is silent. Wire a source to the {other} too, or a mono source to "
-                "the whole socket.", [key], into[(key, sock)]))
+                (f"{card['title']} {socket['label']}", f"Sound on the {side} only.",
+                 f"Wire the {other} too, or a mono source to both."), [key], into[(key, sock)]))
     return found
 
 
@@ -128,12 +132,13 @@ def _doubled(cards: dict, wires: list[dict]) -> list[dict]:
                 else {tuple(w["from"])}
             for origin in starts:
                 counts[origin].append(w["id"])
-        found += [_problem(
-            "warning", "Same sound arrives twice",
-            f"{_name(cards, okey)} {_socket_label(cards, okey, osock)} reaches "
-            f"{_name(cards, key)} by {len(ids)} routes, so it is louder than expected and may "
-            "sound hollow or echo. Keep one.", [key, okey], ids)
-            for (okey, osock), ids in counts.items() if len(ids) > 1]
+        for (okey, osock), ids in counts.items():
+            if len(ids) > 1:
+                source = f"{_name(cards, okey)} {_socket_label(cards, okey, osock)}".strip()
+                found.append(_problem(
+                    "warning", "Same sound arrives twice",
+                    (f"{source} → {_name(cards, key)}", f"{len(ids)} routes: louder, may echo.",
+                     "Keep one."), [key, okey], ids))
     return found
 
 
@@ -149,8 +154,8 @@ def _same_names(cards: dict) -> list[dict]:
         if c["kind"] == "virtual" and not c["hidden"]:
             by[c["title"]].append(c["key"])
     return [_problem("info", "Two devices with one name",
-                     f"There are {len(keys)} devices called {title}. Apps list them by name, so "
-                     "it is easy to pick the wrong one.", keys)
+                     (title, f"{len(keys)} devices share it: easy to pick the wrong one.",
+                      "Rename one."), keys)
             for title, keys in by.items() if len(keys) > 1]
 
 
@@ -158,8 +163,8 @@ def _resampled(cards: dict, clock: dict) -> list[dict]:
     rate = clock.get("rate")
     return [_problem(
         "info", "Converted to another sample rate",
-        f"{c['title']} runs at {c['rate'] / 1000:g} kHz and the rest at {rate / 1000:g} kHz. "
-        "PipeWire converts automatically, at the cost of a little CPU and latency.", [c["key"]])
+        (c["title"], f"{c['rate'] / 1000:g} kHz, the rest {rate / 1000:g} kHz: converted "
+         "(a little CPU and delay).", ""), [c["key"]])
         for c in cards.values() if c["rate"] and rate and c["rate"] != rate and not c["hidden"]]
 
 
@@ -179,9 +184,8 @@ def _two_clocks(cards: dict, wires: list[dict]) -> list[dict]:
                 seen.add(pair)
                 found.append(_problem(
                     "info", "Two clocks in one chain",
-                    f"Sound goes from {other['title']} to {c['title']}, which each keep their own "
-                    "time. PipeWire keeps them in step by resampling, which works and adds a few "
-                    "milliseconds.", [okey, c["key"]]))
+                    (f"{other['title']} → {c['title']}", "Two clocks, kept in step by "
+                     "resampling (a few ms).", ""), [okey, c["key"]]))
     return found
 
 
@@ -204,12 +208,28 @@ def missing_devices(gone: list[dict], wires: list[dict]) -> list[dict]:
         n = sum(m["key"] in (w["from"][0], w["to"][0]) for w in wires)
         if not n:
             continue  # nothing waits for it: dimmed on the board, no problem
-        kept = "Its connection is kept" if n == 1 else f"Its {n} connections are kept"
+        kept = "its connection waits" if n == 1 else f"its {n} connections wait"
         found.append(_problem(
             "warning", "Device missing",
-            f"{m['title']} is not on the system. {kept} for when it does. "
-            "Right-click it to use another device instead.", [m["key"]]))
+            (m["title"], f"Not on the system; {kept}.", "Right-click it to use another device."),
+            [m["key"]]))
     return found
+
+
+def dropouts(model: dict, recent: dict[str, int]) -> list[dict]:
+    """Dropouts (xruns) logged in the last minute, as one problem: a glitch of the interface shows
+    on every app it reaches too (owner: "always duplicate"). The count is the highest of them."""
+    # ponytail: the highest card's count, as if the others saw the same glitches; an app late on
+    # its own is folded in. Telling them apart would need the cycle each was logged in.
+    cards = {c["key"]: c for c in model["cards"]}
+    hit = sorted((k for k, n in recent.items() if k in cards and n > 0), key=lambda k: -recent[k])
+    if not hit:
+        return []
+    return [_problem(
+        "warning", "Dropouts",
+        (", ".join(cards[k]["title"] for k in hit),
+         f"{recent[hit[0]]} in the last minute (clicks or gaps).",
+         "Raise the block or safety margin (Audio engine)."), hit)]
 
 
 def clipping(model: dict, sources: list[tuple]) -> list[dict]:
@@ -224,5 +244,5 @@ def clipping(model: dict, sources: list[tuple]) -> list[dict]:
         where = f"{card['title']} ({label})" if len(card["outputs"]) > 1 else card["title"]
         found.append(_problem(
             "warning", "Clipping",
-            f"{where} reaches full scale, so it distorts. Turn it down at its source.", [key]))
+            (where, "Reaches full scale: distorts.", "Turn it down at its source."), [key]))
     return found
