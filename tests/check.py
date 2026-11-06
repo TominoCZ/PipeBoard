@@ -397,6 +397,8 @@ def check_dropouts():
     both = problems.dropouts({"cards": [{"key": "ur", "title": "Interface"}, {"key": "sp", "title": "Spotify"}]}, {"ur": 3, "sp": 5})
     assert len(both) == 1 and both[0]["where"] == "Spotify, Interface" and both[0]["what"].startswith("5 "), both
     assert both[0]["cards"] == ["sp", "ur"]
+    kinds = {"cards": [{"key": "sp", "kind": "app"}, {"key": "ur", "kind": "hardware"}, {"key": "mix", "kind": "virtual"}]}
+    assert [c["key"] for c in server.heard(kinds)] == ["ur", "mix"], "an app's own gaps (a song change) are not dropouts"
 
 
 def check_cstates():

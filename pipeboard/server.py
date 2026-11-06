@@ -1147,7 +1147,7 @@ class Board:
                 if now < self.settling:  # an engine change's own burst: counted afresh after
                     seen.clear()
                 recent = {} if now < self.settling else {
-                    c["key"]: n for c in self.model["cards"]
+                    c["key"]: n for c in heard(self.model)
                     if (n := last_minute(seen, c, errors, now))}
                 if recent != self.dropped:
                     self.dropped = recent
@@ -1167,7 +1167,7 @@ class Board:
                 if time.monotonic() < self.settling:  # (an engine change's own burst: not counted)
                     start.clear()
                 counts = {}
-                for c in self.model["cards"]:
+                for c in heard(self.model):
                     mine = [errors[n] for n in c["names"] if n in errors]
                     if mine:
                         start[c["key"]] = min(start.get(c["key"], sum(mine)), sum(mine))
@@ -1530,6 +1530,13 @@ def _comm(pid: str) -> str:
         return Path(f"/proc/{pid}/comm").read_text().strip()
     except OSError:
         return "?"
+
+
+def heard(model: dict) -> list[dict]:
+    """The cards whose dropouts count: not apps. An app's stream logs one whenever the app itself
+    is late (owner: Spotify each time it changes songs, nothing else did): its own gap, not the
+    sound path's, and no block or margin would change it."""
+    return [c for c in model["cards"] if c["kind"] != "app"]
 
 
 def last_minute(seen: dict, card: dict, errors: dict, now: float) -> int:
