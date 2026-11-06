@@ -685,7 +685,7 @@ button { font: inherit; color: inherit; }
 .hr-plot path { fill: none; stroke-linejoin: round; }
 .hr-plot .hr-out { stroke: var(--hardware); stroke-width: 1.6; }
 .hr-plot .hr-in { stroke: var(--muted); stroke-width: 1.2; opacity: 0.7; }
-.hr-plot .hr-red { fill: var(--red); opacity: 0.18; }
+.hr-plot stop { stop-color: var(--red); }  /* (the glow: strongest at 0 ms, gone by half a block) */
 .hr-plot .hr-zero { fill: var(--red); opacity: 0.7; }
 .hr-plot .hr-low { fill: var(--text); }
 .hr-axis { position: absolute; left: 286px; font-size: 9.5px; color: var(--faint); white-space: nowrap; }

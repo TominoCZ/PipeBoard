@@ -301,6 +301,7 @@ SHOTS = {
     "engine-headroom": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom()"),
     "engine-headroom-close": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('close')"),
     "engine-headroom-wait": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('wait')"),
+    "engine-headroom-128": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('saw', {block: 128, margin: 128, margin_blocks: 1})"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
     "engine-margin": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, blocks: 2})"),
     "engine-priority": ("machine", BIG, None, "PB.debug.engineOpen({prio: 90}, true)"),

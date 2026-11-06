@@ -2363,7 +2363,10 @@ const PB = (() => {
   // Buffer headroom (owner's pick G, always open): how close the interface's buffers came to
   // running out, sampled by the server while the panel is open (headroom.py). The line: each
   // side's lowest in the last minute; the graph: that minute, 0 ms (a click) red at the bottom.
-  const HEAD_RED = 0.5, HEAD_WARN = 1.0, HEAD_W = 280, HEAD_H = 64;  // ms, ms, px, px
+  // Red under a quarter block, amber under half (owner: a fixed 0.5 ms filled a third of the graph
+  // at block 128). ponytail: a stand-in for this machine's real wake-up lateness, which
+  // pw-profiler could measure; the glow fades from 0 ms up to half a block, not a solid band.
+  const HEAD_RED_BLOCK = 0.25, HEAD_WARN_BLOCK = 0.5, HEAD_W = 280, HEAD_H = 64;
   function headroomBlock() {
     if (!S.headroomOn) { S.headroomOn = true; S.headroom = null; send({ op: "headroom", on: true }); }
     const el = h("div", { id: "headroom", class: "headroom" });
@@ -2374,20 +2377,26 @@ const PB = (() => {
   function fillHeadroom(el) {
     const d = S.headroom, e = S.engine, every = d?.every || 0.5, n = Math.round(60 / every);
     const top = (e.block + e.margin) / e.rate * 1000;  // the graph's scale: one half of the round trip
+    const blockMs = e.block / e.rate * 1000, red = blockMs * HEAD_RED_BLOCK, warn = blockMs * HEAD_WARN_BLOCK;
     const sides = [["out", "Output"], ["in", "Input"]].map(([k, name]) => {
       const xs = (d?.[k] || []).slice(-n);
       let low = null;
       xs.forEach((v, i) => { if (v != null && (low == null || v < xs[low])) low = i; });
       return { k, name, xs, low: low == null ? null : xs[low], ago: low == null ? null : (xs.length - 1 - low) * every, at: low };
     });
-    const level = (v) => (v < HEAD_RED ? "bad" : v < HEAD_WARN ? "warn" : "ok");
+    const level = (v) => (v < red ? "bad" : v < warn ? "warn" : "ok");
     const line = h("div", { class: "hr-line" }, ...sides.map((x) => x.low == null
       ? h("span", { class: "wait" }, `${x.name} measuring…`)
       : h("span", { "data-tip": `${x.name}: ${x.low.toFixed(2)} ms at its lowest, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}` },
         h("i", { class: `hr-dot ${level(x.low)}` }), `${x.name} `, h("b", { text: x.low.toFixed(1) }), " ms")));
     const X = (i, len) => ((i + n - len) / (n - 1)) * HEAD_W, Y = (v) => HEAD_H - (Math.min(v, top) / top) * HEAD_H;
     const svg = s("svg", { width: HEAD_W, height: HEAD_H, viewBox: `0 0 ${HEAD_W} ${HEAD_H}`, class: "hr-plot", "aria-hidden": "true" });
-    svg.append(s("rect", { class: "hr-red", x: 0, y: Y(HEAD_RED), width: HEAD_W, height: HEAD_H - Y(HEAD_RED) }),
+    const fade = s("linearGradient", { id: "hr-fade", x1: 0, y1: 1, x2: 0, y2: 0 });
+    fade.append(s("stop", { offset: 0, "stop-opacity": 0.4 }), s("stop", { offset: HEAD_RED_BLOCK / HEAD_WARN_BLOCK, "stop-opacity": 0.14 }),
+                s("stop", { offset: 1, "stop-opacity": 0 }));
+    const defs = s("defs");
+    defs.append(fade);
+    svg.append(defs, s("rect", { class: "hr-red", x: 0, y: Y(warn), width: HEAD_W, height: HEAD_H - Y(warn), fill: "url(#hr-fade)" }),
                s("rect", { class: "hr-zero", x: 0, y: HEAD_H - 1, width: HEAD_W, height: 1 }));
     for (const x of [...sides].reverse()) {  // (the output, the tight one, drawn on top)
       const dpath = x.xs.map((v, i) => (v == null ? "" : `${i && x.xs[i - 1] != null ? "L" : "M"}${X(i, x.xs.length).toFixed(1)},${Y(v).toFixed(1)}`)).join("");
@@ -2970,8 +2979,13 @@ const PB = (() => {
       if ($("latpath")) S.errors.push("a click on the board left the path panel open");
     },
     // Buffer headroom made up: "ok" (the owner's, at block 512), "close" (dips near 0), "wait" (none yet).
-    fakeHeadroom: (kind = "ok") => {
+    fakeHeadroom: (kind = "ok", engine = null) => {
+      if (engine) { Object.assign(S.engine, engine); if ($("engine")) drawEngine(); }
       const wob = (base, amp, dips, len = 120) => Array.from({ length: len }, (_, i) => +(base + amp * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)) - (dips[i] || 0)).toFixed(2));
+      // "saw": the owner's at block 128, one block of margin: the output creeping up for ~38 s and
+      // dropping back (the interface's clock 6.5 ppm slow against USB's), the input spiking.
+      const saw = (i) => +(0.2 + 0.25 * (((i + 26) % 76) / 75) + 0.01 * Math.sin(i * 2.3)).toFixed(2);
+      if (kind === "saw") { S.headroom = { every: 0.5, out: Array.from({ length: 120 }, (_, i) => saw(i)), in: Array.from({ length: 120 }, (_, i) => +(0.8 + (i % 9 === 4 ? 0.35 : 0.03 * Math.sin(i))).toFixed(2)) }; showHeadroom(); return; }
       S.headroom = kind === "wait" ? null : kind === "close"
         ? { every: 0.5, out: wob(0.9, 0.35, { 70: 0.62, 71: 0.4, 101: 0.3 }), in: wob(4.2, 0.5, {}) }
         : { every: 0.5, out: wob(1.6, 0.18, { 88: 0.3, 89: 0.15, 30: 0.12 }), in: wob(7.3, 0.6, { 40: 0.25 }) };

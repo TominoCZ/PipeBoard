@@ -998,9 +998,14 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
 
 - **Buffer headroom** (`headroom.py`, built 2026-11-06; the owner's pick G of eleven renders, always
   open): under Safety margin, how close the interface's buffers came to running out in the last
-  minute. The line "● Output 1.3 ms ● Input 7.0 ms" (each side's lowest; green ≥ 1 ms, amber < 1,
-  red < 0.5), the minute as a graph from 0 ms (red: a click) to block + margin, its lowest point
-  labelled with when. Read from the kernel's status files (`/proc/asound/cardN/pcmD{p,c}/sub0`,
+  minute. The line "● Output 1.3 ms ● Input 7.0 ms" (each side's lowest; red under a quarter
+  block, amber under half: a fixed 0.5 ms filled a third of the graph at block 128), the minute as
+  a graph from 0 ms to block + margin over a red glow that fades out by half a block (owner: not a
+  solid band), its lowest point labelled with when. At block 128 the output's low creeps up and
+  drops back about every 38 s: the UR44C's clock runs 6.5 ppm slow against the PC's, so the
+  graph's wake-ups slide against USB's transfer slots until a whole transfer (~0.25 ms) wraps. A
+  beat, not a glitch; its bottom is the real worst case. The quarter block stands in for this
+  machine's real wake-up lateness, which pw-profiler could measure. Read from the kernel's status files (`/proc/asound/cardN/pcmD{p,c}/sub0`,
   found from the nodes' `alsa.card` / `alsa.device`): the output is what PipeWire wrote and USB has
   not taken yet (`appl_ptr − hw_ptr`), not ALSA's `delay`, which counts the ~2 ms already in USB
   transfers that cannot cover a late block (the first figure did and looked 2 ms safer than it
