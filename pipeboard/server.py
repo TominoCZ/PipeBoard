@@ -196,6 +196,10 @@ class Board:
         self.engine = {**engine.read(dump),
                        "cstates": {**engine.cstates(), "tries": tries("cstates")},
                        "kernel": {**engine.kernel(), "tries": tries("kernel")}}
+        e = self.engine  # (the blocks this interface's USB transfers line up with: engine.blocks)
+        live = self.source.mode == "live"
+        e["blocks"], e["usb_step"] = (engine.blocks(e.get("card"), e["rate"]) if live
+                                      else (None, None))
 
     def dress(self) -> None:
         """PipeBoard's own cards get the names it gave them (a plugin's node is pb-<id>), and every
@@ -1514,7 +1518,7 @@ class Board:
         if not self.engine.get("interface"):
             return "No audio interface clocks the graph: there is nothing to set."
         try:
-            values = engine.check(op)
+            values = engine.check(op, self.engine.get("blocks") or engine.BLOCKS)
         except ValueError as e:
             return str(e)
         live = self.source.mode == "live"

@@ -25,6 +25,14 @@ from pathlib import Path
 from pipeboard import graph, headroom
 
 BLOCKS = (64, 128, 256, 512, 1024, 2048)
+# An interface with implicit feedback (its playback follows its capture's packets, the UR44C)
+# moves sound in USB transfers of 1 ms: snd-usb-audio makes capture URBs, and the playback that
+# follows them, at most 1 ms (endpoint.c, data_ep_set_params). A block that is not whole
+# transfers saws the output buffer against them, and the clocks' drift pushes PipeWire's check
+# over the edge: a resync, silence written, a click (owner: every power of two at 192 kHz did).
+# Such an interface is offered whole milliseconds only.
+STEP_MS = (1, 2, 4, 8, 16)
+ASOUND = Path("/proc/asound")
 # The safety margin in whole blocks (owner's UR44C: under one block the input dropped out ~100
 # times a second; over one it did not fit its buffer of 3 periods). The buffer is made to fit:
 # twice the block and the margin: PipeWire steers the fill to block + headroom but clamps that
@@ -76,6 +84,7 @@ def read(dump: list[dict]) -> dict:
     return {"rate": clock["rate"], "block": clock["quantum"],
             "interface": sorted(p["node.name"] for p in iface),
             "pcms": headroom.folders(iface),  # (its buffers' status, for Buffer headroom)
+            "card": next((p["alsa.card"] for p in iface if p.get("alsa.card") is not None), None),
             "title": (names.get(driver.get("device.id")) or driver.get("node.description"))
             if driver else None,
             "period": max((int(p.get("api.alsa.period-size") or 0) for p in iface), default=0),
@@ -110,14 +119,33 @@ def _timer(dump: list[dict], ids: set) -> bool:
     return False
 
 
-def check(op: dict) -> dict:
+def usb_step(stream0: str, rate: int) -> int | None:
+    """Frames per USB transfer when they must line up with the block (implicit feedback: 1 ms);
+    None for any other interface (its playback transfers are fitted to the block) or a rate
+    that is no whole number of samples a millisecond (44.1 kHz)."""
+    if "Implicit Feedback Mode: Yes" not in stream0 or not rate or rate % 1000:
+        return None
+    return rate // 1000
+
+
+def blocks(card: int | None, rate: int) -> tuple[list[int] | None, int | None]:
+    """The block sizes to offer for the interface on this ALSA card and its transfer step, or
+    (None, None) when any size lines up (the panel's own list then)."""
+    try:
+        step = usb_step((ASOUND / f"card{card}" / "stream0").read_text(), rate)
+    except OSError:  # (not USB, or no card)
+        step = None
+    return ([step * m for m in STEP_MS], step) if step else (None, None)
+
+
+def check(op: dict, allowed=BLOCKS) -> dict:
     """A request's values, or ValueError: only the steps the panel offers, in the allowed range."""
     try:
         v = {k: int(op[k]) for k in ("block", "margin", "prio", "nice")}
         v["tsched"] = bool(op.get("tsched", False))
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError("The audio engine needs a block size, a margin and priorities.") from e
-    if v["block"] not in BLOCKS:
+    if v["block"] not in allowed:
         raise ValueError("That block size is not one PipeBoard offers.")
     if v["margin"] % v["block"] or v["margin"] // v["block"] not in MARGIN_BLOCKS:
         raise ValueError("The safety margin is 1, 2 or 3 blocks.")

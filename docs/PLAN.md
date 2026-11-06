@@ -1010,6 +1010,16 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   (audio threads are SCHED_FIFO, which preempt in every mode); dropouts at small blocks are
   PipeWire's resync, not the kernel.
 
+- **Block sizes the interface lines up with** (`engine.blocks`, built 2026-11-06): an interface
+  with implicit feedback (`/proc/asound/cardN/stream0`: "Implicit Feedback Mode: Yes", the UR44C)
+  moves sound in 1 ms USB transfers (snd-usb-audio caps capture URBs, and the playback that
+  follows them, at 1 ms). A block that is not whole transfers saws the output buffer, and the
+  clocks' drift (the UR44C 6.5 ppm slow) eventually pushes PipeWire's follower check past its
+  tolerance (`max_resync`, 256 samples under 512): silence written, a click. Every power of two
+  at 192 kHz did. Such an interface is offered whole milliseconds only (192, 384, 768, 1536, 3072
+  at 192 kHz); the running block stays shown, with a warning, if it is not one of them. Any other
+  interface keeps 128…2048. Root cause and measurements: the session's dropout_root_cause.md.
+
 - **Buffer headroom** (`headroom.py`, built 2026-11-06; the owner's pick G of eleven renders, always
   open): under Safety margin, how close the interface's buffers came to running out in the last
   minute. The line "● Output 1.3 ms ● Input 7.0 ms" (each side's lowest; red under a quarter

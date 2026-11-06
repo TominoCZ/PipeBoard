@@ -2460,6 +2460,9 @@ const PB = (() => {
     // The round trip compares only when the block changes (owner: a priority shown as a new
     // round trip); otherwise it is what runs (on the timer PipeWire pads the margin itself).
     const e = S.engine, p = S.pick, rate = e.rate, resized = p.block !== e.block || p.blocks !== (e.margin_blocks || 1), shown = resized ? p : e;
+    // The sizes to offer (engine.blocks): an interface with implicit feedback (1 ms USB transfers)
+    // whole transfers only; the one running stays shown even when it is not one of them.
+    const offered = [...new Set([...(e.blocks?.length ? e.blocks : BLOCKS), e.block])].sort((a, b) => a - b);
     const scale = Math.max(roundTrip(e, rate), roundTrip(shown, rate));
     const w = (samples) => `${(samples / rate * 1000) / scale * 100}%`;  // a part of the round trip, as wide as its share
     const bar = (v, cls) => h("div", { class: `bar${cls}` }, ...[v.block, v.margin, v.block, v.margin].map((x, i) =>
@@ -2503,8 +2506,12 @@ const PB = (() => {
           h("span", { class: "new", text: next.toFixed(1) }, h("small", { text: "ms" }))),
         h("div", { class: "bars" }, resized ? bar(e, " ghost") : null, bar(shown, "")),
         h("div", { class: "legend" }, h("span", { text: "block, in and out" }), h("span", { class: "m", text: "safety margin" }))),
-      row("Block size", seg(BLOCKS, "block", "Block size"), msOf(p.block)),
-      h("p", { class: "hint", text: "Smaller: less delay, more CPU." }),
+      row("Block size", seg(offered, "block", "Block size"), msOf(p.block)),
+      h("p", { class: "hint", text: e.usb_step
+        ? `Whole ${msOf(e.usb_step).replace(".0 ", " ")} USB transfers of this interface. Smaller: less delay, more CPU.`
+        : "Smaller: less delay, more CPU." }),
+      e.usb_step && !(e.blocks || []).includes(e.block)
+        ? h("p", { class: "hint warn", text: `${e.block} (running) splits them: the buffer saws, PipeWire can click.` }) : null,
       row("Safety margin", marginSeg(p, e), msOf(p.margin)),
       h("p", { class: "hint", text: "More: fewer dropouts, more delay." }),
       Object.keys(e.pcms || {}).length ? headroomBlock() : null,
@@ -3012,7 +3019,7 @@ const PB = (() => {
     },
     // Buffer headroom made up: "ok" (the owner's, at block 512), "close" (dips near 0), "wait" (none yet).
     fakeHeadroom: (kind = "ok", engine = null) => {
-      if (engine) { Object.assign(S.engine, engine); if ($("engine")) drawEngine(); }
+      if (engine) { Object.assign(S.engine, engine); if ($("engine")) { closeEngine(); openEngine(); } }
       const wob = (base, amp, dips, len = 120) => Array.from({ length: len }, (_, i) => +(base + amp * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)) - (dips[i] || 0)).toFixed(2));
       // "saw": the owner's at block 128, one block of margin: the output creeping up for ~38 s and
       // dropping back (the interface's clock 6.5 ppm slow against USB's), the input spiking.

@@ -659,15 +659,16 @@ button { font: inherit; color: inherit; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hardware) 45%, transparent); }
 .eng-row { display: grid; grid-template-columns: 100px auto 1fr; align-items: center; gap: 8px; padding: 10px 16px 0; }
 .eng-row label { color: var(--muted); font-size: 12px; }
-.eng-row .val { text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.eng-row .val { text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .eng .segmented { margin: 0; }
 .eng .segmented.words button { padding: 4px 12px; }  /* (Interrupts | Timer: words, not numbers) */
 /* A short window: the panel scrolls rather than run off (its pointer is clipped then). */
 @media (max-height: 760px) { .eng { max-height: calc(100vh - 70px); overflow-y: auto; } }
-.eng .segmented button { padding: 4px 0; min-width: 47px; position: relative; font-variant-numeric: tabular-nums; font-size: 12px; cursor: pointer; }
+.eng .segmented button { padding: 4px 0; min-width: 43px; position: relative; font-variant-numeric: tabular-nums; font-size: 12px; cursor: pointer; }
 .eng .segmented button.cur::after { content: ""; position: absolute; left: 50%; bottom: 1px; width: 4px; height: 4px; margin-left: -2px;
   border-radius: 50%; background: var(--hardware); }
 .eng p.hint { margin: 5px 16px 0 124px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.eng p.hint.warn { color: #e8a060; }  /* (the running block splits the interface's USB transfers) */
 /* Buffer headroom (owner's pick G): the minute's lowest per side, the minute itself, 0 ms red. */
 .headroom { --red: #e5534b; margin: 12px 16px 0 124px; }
 .hr-top { display: flex; align-items: baseline; margin-bottom: 6px; }

@@ -384,6 +384,33 @@ async def check_engine_trial(tmp):
     assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
 
 
+def check_usb_blocks():
+    """An interface with implicit feedback (1 ms USB transfers) is offered whole milliseconds at
+    its rate, and only those are accepted; any other, or 44.1 kHz, keeps the usual list."""
+    from pipeboard import engine
+    fb = "Playback:\n  Status: Running\n    Implicit Feedback Mode: Yes\n"
+    assert engine.usb_step(fb, 192000) == 192 and engine.usb_step(fb, 48000) == 48
+    assert engine.usb_step(fb, 44100) is None, "no whole samples a millisecond"
+    assert engine.usb_step(fb.replace("Yes", "No"), 192000) is None
+    with tempfile.TemporaryDirectory() as tmp:
+        real, engine.ASOUND = engine.ASOUND, Path(tmp)
+        try:
+            (Path(tmp) / "card2").mkdir()
+            (Path(tmp) / "card2" / "stream0").write_text(fb)
+            assert engine.blocks(2, 192000) == ([192, 384, 768, 1536, 3072], 192)
+            assert engine.blocks(5, 192000) == (None, None), "no USB card: the panel's own list"
+        finally:
+            engine.ASOUND = real
+    op = {"block": 384, "margin": 768, "prio": 95, "nice": -19}
+    assert engine.check(op, [192, 384])["block"] == 384
+    for allowed in (engine.BLOCKS, [192]):
+        try:
+            engine.check(op, allowed)
+        except ValueError:
+            continue
+        raise AssertionError(f"384 accepted from {allowed}")
+
+
 def check_headroom():
     """Buffer headroom: the output's frames written but not yet sent, the input's room before it
     overflows, None while closed; sampled over made-up status files; found from the fixture's
@@ -2080,6 +2107,7 @@ def main():
     check_dropouts()
     check_moment()
     check_headroom()
+    check_usb_blocks()
     check_cstates()
     check_kernel()
     check_engine()
