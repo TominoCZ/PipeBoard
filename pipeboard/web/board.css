@@ -448,13 +448,14 @@ button { font: inherit; color: inherit; }
 
 /* The EQ (M11). On the card: a small curve (56 px, two grid rows) above Bypass and Edit. */
 .eq-row { margin: -14px 12px 12px; }
-.eq-mini-wrap { height: 56px; border-radius: 6px; background: #1c1c1c; cursor: pointer;
+.eq-mini-wrap { height: 50px; border-radius: 6px; background: #1c1c1c; cursor: pointer;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); overflow: hidden; }
 .eq-mini-wrap:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
 .eq-mini { display: block; }
 .eq-mini .eq-line { stroke-width: 1.6; }
 .eq-mini .eq-dot { stroke: #1c1c1c; stroke-width: 1; }
-.eq-row .card-foot { margin: 2px 0 0; }  /* (2 px under the curve: the card stays on the grid) */
+.eq-row .card-foot { margin: 8px 0 0; }  /* (8 px under the curve, as the diagnostic cards (owner); the curve 6 px
+   shorter for it, so the card stays on the grid) */
 .card-foot .card-btn:not(.glyph) { height: 28px; padding: 0 11px; font-size: 12px; }  /* a word beside them (Soft) lines up */
 .eq-grid { stroke: rgba(255, 255, 255, 0.06); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .eq-grid.minor { stroke: rgba(255, 255, 255, 0.025); }
@@ -783,7 +784,7 @@ button { font: inherit; color: inherit; }
 .diag-edge { x: 1px; y: 1px; width: calc(100% - 2px); height: calc(100% - 2px); rx: 11px; fill: none;
   stroke: url(#diag-edge-grad); stroke-width: 2px; stroke-dasharray: 7 5; }
 .tip.k-diag, .tip-end.k-diag { --c: var(--diag); }
-.diag-row { margin: 0 12px 12px; }
+.diag-row { margin: -14px 12px 12px; }  /* (up under IN as the EQ's curve: owner, a smaller gap) */
 .diag-row .card-foot { margin: 8px 0 0; }
 /* The Waveform's Stereo | Mono switch: two small joined buttons, the chosen one lit. */
 .diag-mode { display: inline-flex; height: 22px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; overflow: hidden; flex: none; }

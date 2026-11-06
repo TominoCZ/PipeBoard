@@ -182,7 +182,8 @@ const PB = (() => {
     // (a diagnostic card's height too: its display grows to the next whole cell, so the power
     // button keeps its place in the corner, as on every effect card; owner saw a gap under it)
     for (const el of cardsEl.querySelectorAll(".card.k-diag")) {
-      const d = el.querySelector(".diag-display"), extra = Math.ceil(el.offsetHeight / GRID) * GRID - el.offsetHeight;
+      // (a card's picture takes it; the Counter has none: its tiles do, the buttons stay in the corner)
+      const d = el.querySelector(".diag-display, .count-tiles"), extra = Math.ceil(el.offsetHeight / GRID) * GRID - el.offsetHeight;
       if (d && extra) d.style.height = `${d.offsetHeight + extra}px`;
       else if (extra) el.style.minHeight = `${el.offsetHeight + extra}px`;
     }
@@ -424,9 +425,9 @@ const PB = (() => {
 
   // ---- the EQ (M11): a small curve on the card; the gear opens the panel (eq.js) -------------
   const rateNow = () => S.model.clock?.rate || 48000;
-  const eqMini = (wrap, key) => wrap?.replaceChildren(EQ.mini(S.ws.devices[key], rateNow(), wrap.clientWidth || undefined));
+  const eqMini = (wrap, key) => wrap?.replaceChildren(EQ.mini(S.ws.devices[key], rateNow(), wrap.clientWidth || undefined, 50));
   function eqRow(key, dev) {
-    const curve = h("div", { class: "eq-mini-wrap", "data-tip": "Click to edit the EQ" }, EQ.mini(dev, rateNow()));
+    const curve = h("div", { class: "eq-mini-wrap", "data-tip": "Click to edit the EQ" }, EQ.mini(dev, rateNow(), undefined, 50));
     curve.addEventListener("click", () => openEq(key));
     const open = EQ.isOpen(key);
     const box = h("div", { class: "eq-row" }, curve, h("div", { class: "card-foot" },
