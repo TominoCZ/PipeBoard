@@ -1088,7 +1088,8 @@ wire dropped from an input.
 python scripts/readme.py [name ...]`): the shots' fixture boards and, for the overview, the
 owner's board read-only (a snapshot of the live graph, a copy of the board file: diagnostic cards
 hidden, Portals on, tidied). Animations step the page's fake wire sound through exact moments
-(`PB.debug.liveAt`), so the motion is even. The diagnostic pictures play a few seconds of real
+(`PB.debug.liveAt`), so the motion is even. The latency picture uses the owner's board with plain names
+(`PLAIN` in the script: the interface, the pedal, games and apps renamed) and Show latency on. The diagnostic pictures play a few seconds of real
 music recorded passively from the owner's Waveform card (`.dev/readme-sound.raw`, not kept in
 git). The owner's `diag.mp4` gets a GIF preview: GitHub does not play a video file from the
 repository, so the README links the preview to it.

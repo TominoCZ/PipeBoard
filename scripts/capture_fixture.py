@@ -25,6 +25,8 @@ for o in dump:
                                                "input-node-id", "input-port-id", "state")})
     if o["type"].endswith("Port"):
         info["direction"] = o["info"].get("direction")
+        # (its latency figures: a hardware card's delay, Show latency)
+        info["params"] = {"Latency": (o["info"].get("params") or {}).get("Latency", [])}
     trimmed.append({"id": o["id"], "type": o["type"], "info": info})
 json.dump(trimmed, open(out, "w"), indent=1)
 print(f"{out}: {len(trimmed)} objects")

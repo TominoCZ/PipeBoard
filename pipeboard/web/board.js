@@ -2862,6 +2862,16 @@ const PB = (() => {
     wiresMenu: () => $("wires-btn").click(),
     tidyMenu: () => $("tidy-more").click(),
     openPath: (key) => openPath(key),
+    // The path panel open and the view on its cards, room left for the panel (README picture).
+    pathView: (key) => {  // (key: a card's key, or its title)
+      key = S.model.cards.find((c) => c.key === key || titleOf(c) === key)?.key || key;
+      openPath(key);
+      const keys = S.model.latency?.[key]?.path;
+      if (!keys) { S.errors.push(`pathView: no path into ${key}`); return; }
+      fit(false, keys, 1.1);
+      S.view.y -= 70; applyView(false);
+      if (S.mode === "preview") { S.drops = Object.fromEntries(keys.map((k) => [k, 0])); showDrops(); }  // (no server: none counted)
+    },
     // A new state arriving with the panel open: the same panel stays (no redraw, no animation).
     pathStays: () => {
       const before = $("latpath");

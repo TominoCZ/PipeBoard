@@ -58,6 +58,24 @@ def mine(folder: Path, _dump: list) -> list:
     return json.loads(snap.read_text())
 
 
+# The owner's own names, swapped for plain ones in the pictures that show them up close.
+PLAIN = {"Steinberg": "Audio Interface", "Nucleo": "USB Pedal", "CutWire": "Game", "spotify": "Music Player",
+         "WEBRTC VoiceEngine": "Voice Chat"}
+
+
+def mine_plain(folder: Path, dump: list) -> list:
+    """The owner's board (as mine), its devices and apps given plain names, Show latency on."""
+    snap = mine(folder, dump)
+    board = json.loads((folder / "workspace.json").read_text())
+    for key, card in board.get("cards", {}).items():
+        for part, nick in PLAIN.items():
+            if part.lower() in key.lower():
+                card["nick"] = nick
+    (folder / "workspace.json").write_text(json.dumps(board))
+    (folder / "settings.json").write_text(json.dumps({"show_latency": True}))
+    return snap
+
+
 # name: (scenario, setup, the page's own steps, what to take)
 # take: ("still", size) the window · ("panel", size, selector) one element · ("gif", size,
 # seconds, fps) the window over time · ("crop", size, (x0, y0, x1, y1)) part of the window
@@ -73,6 +91,9 @@ SHOTS = {
     "effects/gate": ("machine", shots.equalized, shots.SHOTS["gate"][3], ("panel", WIDE, ".eq-panel")),
     "effects/deesser": ("machine", shots.equalized, shots.SHOTS["deesser"][3], ("panel", WIDE, ".eq-panel")),
     "effects/denoise": ("machine", shots.equalized, shots.SHOTS["denoise"][3], ("panel", WIDE, ".eq-panel")),
+    "engine": ("machine", None, "PB.debug.engineOpen({block: 256, blocks: 2, prio: 90, tsched: true}, true)",
+               ("panel", WIDE, ".eng")),
+    "latency-path": ("machine", mine_plain, "PB.debug.pathView('Voice Mix')", ("still", WIDE)),
     "diagnostics": ("machine", shots.diagnosed, "PB.debug.tidy() || PB.debug.fakeLive(99, null, false) || "
                     "PB.debug.fit(['music_player', 'pb:dwave01', 'pb:dster01', 'pb:dcount01', 'pb:dmeter01', 'pb:dspec01'])",
                     ("still", (1650, 1100))),

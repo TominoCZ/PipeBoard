@@ -52,6 +52,21 @@ sound still goes straight from A to B.
 Amber is what an effect turned down. Every effect card has a power button (bypass) and a gear
 that opens its panel.
 
+## Latency and the audio engine
+
+Tick **Show latency** to see what each effect adds and the total delay arriving at each device.
+Click a total to see where it comes from: every step on the way, the delay of each, and whether
+anything dropped out while the panel was open.
+
+![The path into a voice mix: the interface's buffer 9.3 ms, a limiter 5 ms, the rest nothing; 14.3 ms in all](docs/images/latency-path.png)
+
+The clock readout in the bar opens the **Audio engine**: the block size and the interface's safety
+margin, with the round trip they make, and under Advanced the scheduling (interrupts or timer),
+the CPU's deep idle states, and PipeWire's priorities. A change is tried for a minute and goes
+back by itself unless you keep it.
+
+<img src="docs/images/engine.png" alt="The Audio engine panel, Advanced open: block 256, a 2-block margin, 8.0 ms round trip, timer scheduling, idle states, priorities" width="460">
+
 ## Diagnostics
 
 Add › Diagnostic. These cards only listen: wire any output into one beside its usual path and
