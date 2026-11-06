@@ -11,6 +11,8 @@
   --app: #a68cf0;
   --effect: #e57a9a;
   --plugin: #8ccf6a;
+  --diag: #eef0f3;  /* diagnostic cards: near white (owner: the wires into one end white) */
+  --diag-l: #f84fcc; --diag-r: #0fbb7c;  /* L magenta, R green (owner's pick G); diag.js reads them */
   --on: #5fd38a;  /* an effect switched on (its power icon) */
   --font: "Inter", "Cantarell", "Noto Sans", system-ui, sans-serif;
 }
@@ -82,11 +84,13 @@ button { font: inherit; color: inherit; }
 .landing.k-app { --c: var(--app); }
 .landing.k-effect { --c: var(--effect); }
 .landing.k-plugin { --c: var(--plugin); }
+.landing.k-diag { --c: var(--diag); }
 .card.k-hardware { --c: var(--hardware); }
 .card.k-virtual { --c: var(--virtual); }
 .card.k-app { --c: var(--app); }
 .card.k-effect { --c: var(--effect); }
 .card.k-plugin { --c: var(--plugin); }
+.card.k-diag { --c: var(--diag); min-width: 280px; max-width: 280px; }  /* (20 cells: the Waveform's foot holds four controls) */
 /* Devices, virtual and physical, stand out (owner's pick, C2): a thicker outline and a glow in
    their colour. A missing one stays plain (.card.missing, later, wins). */
 .card.k-virtual, .card.k-hardware { --bw: 2.5px; }
@@ -769,3 +773,83 @@ button { font: inherit; color: inherit; }
 .eng .chip-state:hover { border-color: rgba(255, 255, 255, 0.2); }
 .eng .chip-state:disabled { cursor: progress; }
 .eng .chip-state.pending { border-style: dashed; border-color: var(--hardware); }
+
+/* Diagnostic cards (PLAN §8d; owner's pick D): a dashed edge in the app icon's teal to orange, the
+   outline itself faint; the display a canvas on its own layer (contain + will-change), drawn by
+   diag.js alone, so a frame repaints that canvas only, never the board (owner). */
+.card.k-diag::before { border-color: rgba(255, 255, 255, 0.07); border-width: 1px; }
+.diag-frame { position: absolute; left: -1px; top: -1px; width: calc(100% + 2px); height: calc(100% + 2px);
+  overflow: visible; pointer-events: none; z-index: 1; }  /* (the outline's layer: under the socket dots, 2) */
+.diag-edge { x: 1px; y: 1px; width: calc(100% - 2px); height: calc(100% - 2px); rx: 11px; fill: none;
+  stroke: url(#diag-edge-grad); stroke-width: 2px; stroke-dasharray: 7 5; }
+.tip.k-diag, .tip-end.k-diag { --c: var(--diag); }
+.diag-row { margin: 0 12px 12px; }
+.diag-row .card-foot { margin: 8px 0 0; }
+/* The Waveform's Stereo | Mono switch: two small joined buttons, the chosen one lit. */
+.diag-mode { display: inline-flex; height: 22px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; overflow: hidden; flex: none; }
+.diag-mode button { border: 0; padding: 0 8px; background: #2a2a2a; color: var(--muted); font: 11px var(--font); cursor: pointer; }
+.diag-mode button + button { border-left: 1px solid rgba(255, 255, 255, 0.08); }
+.diag-mode button[aria-pressed="true"] { background: #3a3d42; color: var(--text); }
+.diag-mode button:hover { color: var(--text); }
+.diag-panel .eq-head .diag-mode, .diag-panel .eq-head .diag-toggle { margin-right: 8px; }
+/* Smooth: one toggle button, lit while on (as a pressed switch half). */
+.diag-toggle { height: 22px; padding: 0 8px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; background: #2a2a2a;
+  color: var(--muted); font: 11px var(--font); cursor: pointer; flex: none; }
+.diag-toggle[aria-pressed="true"] { background: #3a3d42; color: var(--text); }
+.diag-toggle:hover { color: var(--text); }
+/* The Waveform's peak (and zoom) in its display's top right corner. */
+.diag-peak { position: absolute; top: 4px; right: 7px; flex: none; font-size: 10px; color: var(--muted);
+  background: rgba(27, 29, 33, 0.75); padding: 1px 4px; border-radius: 4px; pointer-events: none; }
+.diag-panel .diag-peak { font-size: 12px; top: 8px; right: 10px; }
+.diag-info { flex: 1; text-align: right; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diag-display { position: relative; height: 84px; border-radius: 6px; background: #1b1d21; overflow: hidden; contain: strict; cursor: pointer; }
+.diag-display.stereo { height: 112px; }
+.diag-display.meter { height: 48px; }
+.diag-display.spectrum { height: 98px; }
+.diag-panel.meter .diag-display { height: auto; min-height: 72px; }
+.diag-panel.meter .diag-big, .diag-panel.spectrum .diag-big { display: grid; grid-template-columns: 1fr 240px; gap: 22px; align-items: end; }
+/* The large Meter (owner: clumsy, bars floating in a tall box): the two tiles side by side, the
+   bars' box exactly their height, the bars filling it. */
+.diag-panel.meter .diag-big { grid-template-columns: 1fr 380px; align-items: stretch; }
+.diag-panel.meter .stereo-tiles { grid-template-columns: 1fr 1fr; margin-top: 0; }
+.diag-panel.spectrum .diag-big { grid-template-columns: 1fr; }
+.diag-display:not(.off):hover { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22); }
+.diag-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; }
+.diag-guides { position: absolute; left: 6px; right: 6px; top: 4px; bottom: 2px; width: calc(100% - 12px); height: calc(100% - 6px); }
+.diag-display.off { cursor: default; }
+.diag-display.off .diag-guides { opacity: 0.3; }
+.diag-off { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+/* The Stereo card's two tiles (owner's pick D, as the Counter's): the number, what it is, what it
+   means, and a small bar that glides (scaleX: the compositor only). */
+.stereo-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.stereo-tile { background: #1b1d21; border-radius: 6px; padding: 7px 10px 9px; font-variant-numeric: tabular-nums; }
+.stereo-tile b { display: block; font-size: 19px; font-weight: 650; line-height: 1.15; color: var(--text); }
+.stereo-tile b.ok { color: #7fcf98; } .stereo-tile b.wide { color: #e0c050; } .stereo-tile b.bad { color: #ef7a72; }
+.stereo-tile small { display: block; font-size: 11px; color: var(--muted); }
+.stereo-tile em { display: block; font-style: normal; font-size: 10px; color: var(--faint); margin-top: 1px; min-height: 13px; }
+.stereo-tile .mini { position: relative; display: block; height: 4px; margin-top: 6px; border-radius: 2px; background: #2c2f35; overflow: hidden; contain: strict; }
+.stereo-tile .mini i { position: absolute; top: 0; bottom: 0; border-radius: 2px; will-change: transform; transform: scaleX(0); }
+.stereo-tile.corr .mini i { left: 50%; width: 50%; transform-origin: left center; background: #5fd38a; }
+.stereo-tile.corr .mini i.wide { background: #e0c050; } .stereo-tile.corr .mini i.bad { background: #ef7a72; }
+.stereo-tile .mini .zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, 0.25); }
+/* Width: the colours painted across the whole bar, still (owner: not stretching), green to white to
+   magenta, the red-ish end for too wide (owner); a cover in the bar's own colour slides off it. */
+.stereo-tile.width .mini { background: linear-gradient(90deg, var(--diag-r), #e2e6ec 50%, var(--diag-l)); }
+.stereo-tile.width .mini i.cover { left: 0; width: 100%; transform-origin: right center; transform: scaleX(1); background: #2c2f35; border-radius: 0; }
+.diag-panel .stereo-tiles { grid-template-columns: 1fr; margin-top: 0; }
+.diag-panel .stereo-tile b { font-size: 26px; }
+/* The Counter: two tiles, the number large (green at none, amber once there are any). */
+.count-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.count-tile { background: #1b1d21; border-radius: 6px; padding: 8px 10px 7px; }
+.count-tile b { display: block; font-size: 24px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.count-tile.ok b { color: #7fcf98; } .count-tile.bad b { color: #e8a060; }
+.count-tile small { display: block; font-size: 11px; color: var(--muted); margin-top: 1px; }
+.count-tile em { display: block; font-style: normal; font-size: 10px; color: var(--faint); margin-top: 2px; }
+.count-tiles.off { opacity: 0.4; filter: saturate(0.3); }
+/* Its big panel: docked like the EQ's, the same view drawn large. */
+.eq-panel.diag-panel { --c: var(--diag); width: min(980px, calc(100vw - 28px)); }
+.diag-big { padding: 0 16px 16px; }
+.diag-panel .diag-display { height: 260px; cursor: default; }
+.diag-panel.stereo .diag-big { display: grid; grid-template-columns: 1fr 240px; gap: 22px; align-items: end; }
+.diag-panel.stereo .diag-display { height: 300px; }
+.diag-panel .eq-head .diag-info { flex: none; margin-right: 10px; font-size: 12px; }

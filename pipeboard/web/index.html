@@ -7,6 +7,8 @@
 <link rel="icon" href="icon.svg">
 </head>
 <body>
+<!-- the diagnostic cards' dashed edge: L's colour to R's (board.css --diag-l, --diag-r), across each card -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><linearGradient id="diag-edge-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--diag-l)"/><stop offset="1" style="stop-color:var(--diag-r)"/></linearGradient></defs></svg>
 <main id="board" aria-label="Audio routing board">
   <div id="grid"></div>
   <div id="world">
@@ -75,6 +77,7 @@
 <script src="field.js"></script>
 <script src="eq.js"></script>
 <script src="dynamics.js"></script>
+<script src="diag.js"></script>
 <script src="board.js"></script>
 </body>
 </html>

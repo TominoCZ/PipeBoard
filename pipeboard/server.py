@@ -20,6 +20,7 @@ from aiohttp import WSCloseCode, WSMsgType, web
 from pipeboard import (
     autostart,
     devices,
+    diag,
     dynamics,
     engine,
     eq,
@@ -118,7 +119,8 @@ class Board:
                     "engine-try": self.op_engine_try, "engine-keep": self.op_engine_keep,
                     "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
-                    "cstates": self.op_cstates}
+                    "cstates": self.op_cstates, "diag-on": self.op_diag_on,
+                    "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
         # minute is up with no Keep.
         # (trial_drops: the interface's dropout count when the trial's setting began, and now)
@@ -127,10 +129,17 @@ class Board:
         # until when dropouts are not counted, an engine change's own burst (owner: Spotify 666).
         # idle: the root helper for CPU idle states (one password prompt per run).
         # starting: while a reopened interface comes back, its step and since when (then for a
-        # moment how long it took); listen: the task waiting for its sound.
+        # moment how long it took); listen: the task waiting for its sound. taps: the diagnostic
+        # cards' capture, and each card's monitor ports (diag.monitors).
+        # tallies: each Counter's cards' error totals a second ago; clipping: the Counters whose
+        # sound was at full scale in the last frame (a new clipping moment counts once); counted:
+        # a Counter's totals changed (saved and sent once a second).
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
-         self.dropped, self.settling, self.idle, self.starting, self.listen) = (
-            {}, None, (None, None), set(), None, {}, 0.0, engine.IdleHelper(), None, None)
+         self.dropped, self.settling, self.idle, self.starting, self.listen, self.taps,
+         self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
+         self.diag_keys, self.err_seen) = ({}, None, (None, None), set(), None, {}, 0.0,
+                                           engine.IdleHelper(), None, None, None, {}, {}, set(),
+                                           False, 0.0, {}, {})
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -215,7 +224,7 @@ class Board:
         self.ws["wires"] += [w for w in coming if (tuple(w["from"]), tuple(w["to"])) not in have]
         await self.sync_scope()
         await self.sync_eqs(dump)
-        await self.sync_spectrum()
+        await self.sync_taps(dump)
         text = self.state()
         if text != self.last:
             self.last = text
@@ -679,6 +688,153 @@ class Board:
         await self.sync_spectrum()
         return None
 
+    async def sync_taps(self, dump: list[dict] | None = None) -> None:
+        """The diagnostic cards' capture (diag.Taps): every card that is on and has its monitor,
+        while a window shows the board (owner: only then, and off saves the work). The EQ's
+        spectrum follows the same windows, so it is kept current here too. Never raises."""
+        await self.sync_spectrum()
+        try:
+            devs = self.ws.get("devices", {})
+            if dump is not None:
+                nodes = {d["node"]: k for k, d in devs.items() if d["type"] in devices.DIAG}
+                self.diag_ports = diag.monitors(dump, nodes)
+            want = [(k, ports) for k, ports in sorted(self.diag_ports.items())
+                    if k in devs and not devs[k].get("bypass") and len(ports) >= 2]
+            want = want if self.visible else []
+            if want == (self.taps.cards if self.taps else []):
+                return
+            if self.taps:
+                await self.taps.stop()
+            self.taps = (diag.FakeTaps if self.source.mode == "fixture" else diag.Taps)(want) \
+                if want else None
+            if self.taps:
+                self.settle(SETTLE_CAPTURE_S)
+                await self.taps.start()
+        except Exception:  # noqa: BLE001 - a picture failing must never touch the board
+            log.exception("diagnostics: could not set up the capture")
+
+    async def send_taps(self) -> None:
+        """What the diagnostic cards heard since the last frame, to the windows that show them."""
+        taps = self.taps
+        data = taps.take() if taps else b""
+        if not data:
+            return
+        self.count_clips(data, taps)
+        if self.counted and time.monotonic() - self.shown_counts > 0.25:  # (a clip shown at once;
+            self.shown_counts = time.monotonic()  # saved with the next second's tally)
+            await self.broadcast(self.state())
+        # Raw floats, binary (owner: the visualizers' load; base64 in JSON cost both ends): the
+        # cards' order told once per page, and again when it changes.
+        keys, frame = [k for k, _ in taps.cards], diag.MARK + data
+        for page in list(self.visible):
+            with contextlib.suppress(Exception):
+                if self.diag_keys.get(page) != keys:
+                    await page.send_str(json.dumps({"type": "diag-keys", "keys": keys}))
+                    self.diag_keys[page] = keys
+                await page.send_bytes(frame)
+
+    async def op_diag_on(self, _page, op) -> str | None:
+        """A diagnostic card's power button: off, nothing is captured or drawn for it."""
+        dev = self.ws.get("devices", {}).get(op.get("key"))
+        if not dev or dev["type"] not in devices.DIAG:
+            return None
+        dev["bypass"] = not op.get("on")
+        await self.sync_taps()
+        return None
+
+    def tally(self, errors: dict[str, int], settling: bool) -> bool:
+        """Each Counter's dropouts this second (owner): the most new errors any card on its path,
+        or the interface clocking the graph, logged (one glitch reaches them all: counted once),
+        apps left out (heard), nothing while
+        PipeBoard's own change settles. Counted window or not (owner: it costs nothing). A node
+        made again (its total lower) starts over. True if a Counter's totals changed."""
+        changed = False
+        for key, dev in self.ws.get("devices", {}).items():
+            if dev["type"] != "counter" or dev.get("bypass"):
+                continue
+            base, new = self.tallies.setdefault(key, {}), 0
+            for card in upstream(self.model, key) + self.clocking(key):
+                total = listed(card, errors)
+                if total is None:
+                    continue  # (not listed now: its last count stands, see listed)
+                was, base[card["key"]] = base.get(card["key"], total), total
+                new = max(new, total - was)
+            if new > 0 and not settling:
+                counts = dev.setdefault("counts", devices.counts())
+                counts["drops"] += new
+                counts["last_drop"] = round(time.time())
+                changed = True
+        return changed
+
+    def count_second(self, errors: dict[str, int], settling: bool) -> bool:
+        """This second's errors: the Counters' tallies (saved when they changed) and the log line.
+        True if a Counter's totals changed."""
+        before = {k: d.get("counts", {}).get("drops", 0)
+                  for k, d in self.ws.get("devices", {}).items() if d.get("type") == "counter"}
+        counted = self.tally(errors, settling) or self.counted
+        self.note_drops(errors, settling, before)
+        if counted:
+            self.counted = False
+            self.persist()
+        return counted
+
+    def note_drops(self, errors: dict[str, int], settling: bool, before: dict[str, int]) -> None:
+        """One log line a second when any card logged new errors: which, how many, and what each
+        Counter added (owner: "some don't get counted"; a mismatch can be read back exactly)."""
+        new = []
+        for card in heard(self.model):
+            if (total := listed(card, errors)) is None:
+                continue
+            was, self.err_seen[card["key"]] = self.err_seen.get(card["key"], total), total
+            if total > was:
+                new.append(f"{card['title']} +{total - was}")
+        if new:
+            devs = self.ws.get("devices", {})
+            added = [f"{devs[k]['name']} +{devs[k].get('counts', {}).get('drops', 0) - n}"
+                     for k, n in before.items() if k in devs]
+            log.info("dropouts: %s%s; counters: %s", ", ".join(new),
+                     " (settling: not counted)" if settling else "", ", ".join(added) or "none")
+
+    def clocking(self, key: str) -> list[dict]:
+        """The interface clocking the graph, for a Counter it does not already feed: when it drops
+        out every sound stops for a moment, this one too (owner: the Problems list had 2 dropouts
+        the Counter on the Bass EQ chain never counted; the UR44C was downstream of it)."""
+        names = set(self.engine.get("interface") or ())
+        path = {c["key"] for c in upstream(self.model, key)}
+        return [c for c in heard(self.model) if names & set(c["names"]) and c["key"] not in path]
+
+    def count_clips(self, data: bytes, taps: diag.Taps) -> None:
+        """A Counter's clipping in this frame: a new clipping moment counts once (sound held at
+        full scale for a second is one, not fifty)."""
+        devs = self.ws.get("devices", {})
+        for i, (key, _) in enumerate(taps.cards):
+            if devs.get(key, {}).get("type") != "counter":
+                continue
+            hit = diag.clips(data, taps.channels, i)
+            if hit and key not in self.clipping:
+                counts = devs[key].setdefault("counts", devices.counts())
+                counts["clips"] += 1
+                counts["last_clip"] = round(time.time())
+                self.counted = True
+            (self.clipping.add if hit else self.clipping.discard)(key)
+
+    async def op_diag_reset(self, _page, op) -> str | None:
+        """A Counter's Reset: its totals from now."""
+        dev = self.ws.get("devices", {}).get(op.get("key"))
+        if dev and dev["type"] == "counter":
+            dev["counts"] = devices.counts()
+            self.tallies.pop(op["key"], None)
+        return None
+
+    async def op_diag_set(self, _page, op) -> str | None:
+        """A diagnostic card's own setting: the Waveform's Stereo/Mono, Smooth and Zoom (owner),
+        kept with it (profiles count them: profiles._settings)."""
+        dev = self.ws.get("devices", {}).get(op.get("key"))
+        for field in ("mono", "smooth", "zoom"):
+            if dev and dev["type"] == "waveform" and field in op:
+                dev[field] = bool(op[field])
+        return None
+
     async def sync_spectrum(self) -> None:
         """One capture, for the EQ, limiter or compressor a visible page has open; none
         otherwise. A dynamics one follows what is wired into it. Never raises."""
@@ -784,7 +940,11 @@ class Board:
         saved = self.store.read(name)
         if saved is None:
             return f"There is no profile called {name}."
+        counted = {k: d["counts"] for k, d in self.ws.get("devices", {}).items()
+                   if "counts" in d}
         self.ws = {**saved, "cards": saved.get("cards", {}), "wires": saved.get("wires", [])}
+        for key, counts in counted.items():  # (a Counter's totals run on, not the profile's)
+            self.ws.get("devices", {}).get(key, {})["counts"] = counts
         self._set(active=name)
         present = set(self.model.get("present", []))
         errors = [e for key in self.ws.get("devices", {}) if key not in present
@@ -1062,14 +1222,15 @@ class Board:
         self.drop_pages.discard(page)
         self.visible.discard(page)
         self.watching.pop(page, None)
+        self.diag_keys.pop(page, None)
         await self.sync_scope()
-        await self.sync_spectrum()
+        await self.sync_taps()
 
     async def op_live(self, page, op) -> str | None:
         """A page says whether it is visible: nothing is captured for a hidden window."""
         (self.visible.add if op.get("visible") else self.visible.discard)(page)
         await self.sync_scope()
-        await self.sync_spectrum()
+        await self.sync_taps()
         return None
 
     async def op_autostart(self, _page, op) -> str | None:
@@ -1149,7 +1310,8 @@ class Board:
                 recent = {} if now < self.settling else {
                     c["key"]: n for c in heard(self.model)
                     if (n := last_minute(seen, c, errors, now))}
-                if recent != self.dropped:
+                counted = self.count_second(errors, now < self.settling)
+                if recent != self.dropped or counted:
                     self.dropped = recent
                     await self.broadcast(self.state())
                     self.tell_tray()
@@ -1463,6 +1625,8 @@ class Board:
         await self.idle.stop()  # (the root helper ends with PipeBoard)
         if self.listen:  # (its capture ends with PipeBoard too)
             self.listen.cancel()
+        if self.taps:
+            await self.taps.stop()
         if self.spectrum:
             await self.spectrum.stop()
 
@@ -1532,6 +1696,29 @@ def _comm(pid: str) -> str:
         return "?"
 
 
+def listed(card: dict, errors: dict[str, int]) -> int | None:
+    """A card's error count now, or None when pw-top does not list any of its nodes: it lists only
+    the active ones. Taken as 0, a node idle for a while and back with its old count looked like
+    that many new dropouts at once (owner: a Counter jumped by 1495 when the window came back)."""
+    mine = [errors[n] for n in card["names"] if n in errors]
+    return sum(mine) if mine else None
+
+
+def upstream(model: dict, key: str) -> list[dict]:
+    """The cards whose sound reaches this one, through any number of wires (a Counter's path),
+    apps left out (heard)."""
+    feeds: dict[str, set] = {}
+    for w in model["wires"]:
+        feeds.setdefault(w["to"][0], set()).add(w["from"][0])
+    found, todo = set(), [key]
+    while todo:
+        for k in feeds.get(todo.pop(), ()):
+            if k not in found and k != key:
+                found.add(k)
+                todo.append(k)
+    return [c for c in heard(model) if c["key"] in found]
+
+
 def heard(model: dict) -> list[dict]:
     """The cards whose dropouts count: not apps. An app's stream logs one whenever the app itself
     is late (owner: Spotify each time it changes songs, nothing else did): its own gap, not the
@@ -1580,6 +1767,20 @@ async def frames(board: Board) -> None:
             await board.send_spectrum()
         except Exception:  # noqa: BLE001
             log.exception("live wires: a frame failed")
+
+
+async def taps(board: Board) -> None:
+    """The diagnostic cards' sound, sent every 8 ms on its own (owner: their picture lagged as
+    the live wires do). The capture delivers a block every ~3 ms; waiting for the 20 ms frame
+    tick added up to 20 ms. Nothing is sent while no card captures. A failing send is logged,
+    never fatal."""
+    while True:
+        await asyncio.sleep(0.008)
+        if board.taps:
+            try:
+                await board.send_taps()
+            except Exception:  # noqa: BLE001
+                log.exception("diagnostics: a frame failed")
 
 
 async def toast(page: web.WebSocketResponse | None, text: str, level: str = "error") -> None:
@@ -1653,12 +1854,13 @@ def lifecycle(application: web.Application, board: Board) -> None:
         await startup(board)
         _app["watch"] = asyncio.create_task(board.source.watch(board.changed))
         _app["frames"] = asyncio.create_task(frames(board))
+        _app["taps"] = asyncio.create_task(taps(board))
         _app["listing"] = asyncio.create_task(board.plugins.installed())  # warms the picker
         _app["dropouts"] = asyncio.create_task(board.watch_errors())
 
     async def stop(_app: web.Application) -> None:
         board.closing = True
-        tasks = [_app[k] for k in ("watch", "frames", "listing", "dropouts") if k in _app]
+        tasks = [_app[k] for k in ("watch", "frames", "taps", "listing", "dropouts") if k in _app]
         for task in tasks:  # PipeBoard's own background work ends before the loop does
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

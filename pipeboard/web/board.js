@@ -10,7 +10,7 @@ const PB = (() => {
   const board = $("board"), grid = $("grid"), world = $("world"), cardsEl = $("cards"), layer = $("wire-layer");
   const SVG = "http://www.w3.org/2000/svg";
   const KIND = { hardware: "Hardware", virtual: "Virtual device", app: "App", effect: "Effect",
-                 plugin: "Plugin" };
+                 plugin: "Plugin", diag: "Diagnostic" };
   const ROLE = { interface: "audio interface", mic: "microphone", speaker: "speaker",
                  playback: "playing sound", recording: "recording" };
   const ICON = {
@@ -20,6 +20,11 @@ const PB = (() => {
     app: '<rect x="1.5" y="2.5" width="11" height="9" rx="1.5"/><path d="M1.5 5h11"/>',
     effect: '<path d="M3 2v10M7 2v10M11 2v10"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="4.5" r="1.4"/><circle cx="11" cy="9" r="1.4"/>',
     plugin: '<rect x="2" y="4" width="10" height="8" rx="1.5"/><path d="M5 4V2.2h4V4"/>',
+    waveform: '<path d="M1.5 7c1.2-4 2.3-4 3.5 0s2.3 4 3.5 0 2.3-4 3.5 0"/>',
+    stereo: '<path d="M1.5 11.5a5.5 5.5 0 0 1 11 0"/><path d="M7 11.5V4M7 11.5 3.5 6M7 11.5l3.5-5.5"/>',
+    counter: '<rect x="1.5" y="3" width="11" height="8" rx="1.5"/><path d="M4.5 5.5v3M7 5.5v3M9.5 5.5v3"/>',
+    meter: '<path d="M2 12.5h10"/><path d="M3.5 12V8M6 12V4M8.5 12V6M11 12V2.5"/>',
+    spectrum: '<path d="M1.5 12.5h11"/><path d="M1.5 10.5c1.5-6 2.5-7 3.5-4s1.8 2 3 0.5 2.5-5 4.5-3.5"/>',
   };
   const S = {
     model: { cards: [], wires: [], clock: null }, problems: [], ws: { cards: {} }, mode: "connecting",
@@ -68,7 +73,8 @@ const PB = (() => {
     socket = new WebSocket(`ws://${location.host}/ws`);
     socket.binaryType = "arraybuffer";
     socket.onopen = () => { retry = 500; sayVisible(); };
-    socket.onmessage = (e) => (e.data instanceof ArrayBuffer ? liveFrame(e.data) : receive(JSON.parse(e.data)));
+    socket.onmessage = (e) => (!(e.data instanceof ArrayBuffer) ? receive(JSON.parse(e.data))
+      : DIAG.isFrame(e.data) ? DIAG.frame(e.data) : liveFrame(e.data));
     socket.onclose = () => {
       if (S.bye) return setStatus("down", "PipeBoard has quit");
       setStatus("down", "reconnecting…");
@@ -86,6 +92,7 @@ const PB = (() => {
     if (msg.type === "scope") { newSources(msg.sources, msg.fresh); return; }
     if (msg.type === "plugins") { S.pluginList = msg.list; S.picker?.(); return; }
     if (msg.type === "eq-pcm") { EQ.pcm(msg.key, msg.pcm); return; }
+    if (msg.type === "diag-keys") { DIAG.keys(msg.keys); return; }
     if (msg.type === "dyn-peaks") { DYN.peaks(msg.key, msg.peaks); return; }
     if (msg.type === "drops") { S.drops = msg.counts; showDrops(); return; }
     if (msg.type !== "state") return;
@@ -172,6 +179,13 @@ const PB = (() => {
     for (const c of visible()) cardsEl.append(S.els[c.key] = cardEl(c, wired, flagged[c.key]));
     // Widths round up to the grid too (heights already are, by the CSS's 28/14 px rhythm).
     for (const el of Object.values(S.els)) el.style.width = `${Math.ceil(el.offsetWidth / GRID) * GRID}px`;
+    // (a diagnostic card's height too: its display grows to the next whole cell, so the power
+    // button keeps its place in the corner, as on every effect card; owner saw a gap under it)
+    for (const el of cardsEl.querySelectorAll(".card.k-diag")) {
+      const d = el.querySelector(".diag-display"), extra = Math.ceil(el.offsetHeight / GRID) * GRID - el.offsetHeight;
+      if (d && extra) d.style.height = `${d.offsetHeight + extra}px`;
+      else if (extra) el.style.minHeight = `${el.offsetHeight + extra}px`;
+    }
     // An EQ's curve fills its box: the card snapped to the grid can be wider than the curve was
     // drawn (owner: a gap on the right).
     for (const wrap of cardsEl.querySelectorAll(".eq-mini-wrap")) eqMini(wrap, wrap.closest(".card").dataset.key);
@@ -182,7 +196,12 @@ const PB = (() => {
     // the owner's own arrangement is never moved.
     const back = visible().filter((c) => !S.shown.has(c.key) && S.pos[c.key] && (S.shown.size || c.kind === "app")
                                          && covered(c.key)).map((c) => c.key);
-    for (const k of back) delete S.pos[k];
+    // An app back at an old spot: a fresh layout's spot (by its wires, with the other sources).
+    // A card the user put somewhere (a device made from a dropped wire, one shown again from a
+    // menu): kept there, only moved to the nearest free spot (owner: it landed far away).
+    const isApp = (k) => byKey()[k]?.kind === "app";
+    for (const k of back.filter(isApp)) delete S.pos[k];
+    if (back.some((k) => !isApp(k))) placeNew(back.filter((k) => !isApp(k)), true);
     const missing = visible().filter((c) => !S.pos[c.key]).map((c) => c.key);
     if (missing.length) placeNew(missing);
     S.shown = new Set(visible().map((c) => c.key));
@@ -315,7 +334,7 @@ const PB = (() => {
   }
 
   function cardEl(c, wired, flags) {
-    const role = c.role || (c.kind === "effect" ? "effect" : c.kind === "app" ? "app" : "");
+    const role = c.kind === "diag" ? S.ws.devices?.[c.key]?.type : c.role || (c.kind === "effect" ? "effect" : c.kind === "app" ? "app" : "");
     const icon = ICON[role] || ICON[c.kind] || "";
     const title = h("span", { class: "title", text: titleOf(c) });
     const head = h("header", {},
@@ -327,12 +346,14 @@ const PB = (() => {
       ...socks.map((sk) => sockEl(c, sk, side, wired.has(`${c.key}|${sk.id}`))));
     const body = h("div", { class: "body" }, col("in", c.inputs), col("out", c.outputs));
     const dev = S.ws.devices?.[c.key];
-    const editing = EQ.isOpen(c.key) || DYN.isOpen(c.key);  // its panel is open: the card glows
+    const editing = EQ.isOpen(c.key) || DYN.isOpen(c.key) || DIAG.isOpen(c.key);  // its panel is open: the card glows
     const el = h("div", { class: `card k-${c.kind}${c.missing ? " missing" : ""}${editing ? " editing" : ""}`, "data-key": c.key }, head, body,
                  dev?.type === "gain" && !c.missing ? gainRow(c.key, dev) : null,
                  DYN.KINDS[dev?.type] && !c.missing ? dynRow(c.key, dev) : null,
                  dev?.type === "plugin" && !c.missing ? pluginFoot(c.key, dev) : null,
-                 dev?.type === "eq" && !c.missing ? eqRow(c.key, dev) : null);
+                 dev?.type === "eq" && !c.missing ? eqRow(c.key, dev) : null,
+                 DIAG.TYPES[dev?.type] && !c.missing ? diagRow(c.key, dev) : null,
+                 c.kind === "diag" ? diagFrame() : null);
     if (flags && !c.missing) {
       // Above the card, never inside it: a problem must not resize what it points at.
       el.append(h("div", { class: `badge sev-${flags.severity}`, "data-tip": flags.tip },
@@ -421,10 +442,73 @@ const PB = (() => {
     if (EQ.isOpen(key)) EQ.sync(key, dev, true);  // the card's own change: never an echo
     render();
   }
+  // ---- diagnostic cards (PLAN §8d): Waveform, Stereo; drawn by diag.js, on their own -------
+  // Their edge: a dashed line in the app icon's teal-to-orange (owner's pick D), an SVG over the
+  // card sized by CSS (the gradient is #diag-edge in index.html, spanning each card).
+  function diagFrame() {
+    const svg = s("svg", { class: "diag-frame", "aria-hidden": "true" });
+    svg.append(s("rect", { class: "diag-edge" }));
+    return svg;
+  }
+  function diagRow(key, dev) {
+    DIAG.setMono(key, dev.mono);
+    DIAG.setSmooth(key, dev.smooth);
+    DIAG.setZoom(key, dev.zoom);
+    const on = !dev.bypass;
+    const power = cardBtn({ icon: "bypass", cls: "bypass", label: on ? "Turn off" : "Turn on", pressed: !on,
+      tip: on ? "On · click to turn it off (it stops measuring, saving the work)" : "Off: not measuring · click to turn it on",
+      action: () => { dev.bypass = on; send({ op: "diag-on", key, on: !on }); if (on) DIAG.close(); render(); } });
+    if (dev.type === "counter") return counterRow(key, dev, power);
+    const v = DIAG.view(key, dev.type, on);
+    v.display.addEventListener("click", () => on && openDiag(key));
+    const wave = dev.type === "waveform";
+    const box = h("div", { class: "diag-row" }, v.display, v.extra, h("div", { class: "card-foot" }, power,
+      wave ? DIAG.modeSwitch(key, (m) => setDiag(key, "mono", m)) : null,
+      wave ? DIAG.toggle("smooth", key, (m) => setDiag(key, "smooth", m)) : null,
+      wave ? DIAG.toggle("zoom", key, (m) => setDiag(key, "zoom", m)) : null, v.info));
+    box.addEventListener("mousedown", (e) => e.stopPropagation());  // working it never drags the card
+    return box;
+  }
+  // The Counter (owner): dropouts on the way here and clipping arriving here, since a reset. The
+  // server counts (Board.tally, Board.clipped); times shown as clock times, so nothing ticks.
+  const clockTime = (t) => {
+    const d = new Date(t * 1000), today = d.toDateString() === new Date().toDateString();
+    return d.toLocaleString([], today ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
+  function counterRow(key, dev, power) {
+    const c = dev.counts || {}, on = !dev.bypass;
+    const tile = (n, label, last, tip) => h("div", { class: `count-tile ${n ? "bad" : "ok"}`, "data-tip": tip },
+      h("b", { text: String(n || 0) }), h("small", { text: label }), h("em", { text: last ? `last at ${clockTime(last)}` : "none yet" }));
+    const reset = cardBtn({ text: "Reset", label: "Reset", tip: "Count from now", action: () => send({ op: "diag-reset", key }) });
+    const box = h("div", { class: "diag-row" },
+      h("div", { class: `count-tiles${on ? "" : " off"}` },
+        tile(c.drops, "Dropouts", c.last_drop, "Clicks or gaps on the way here: the cards wired into it (their apps left out) and the interface that clocks everything (when it drops out, all sound does). Counted all the time."),
+        tile(c.clips, "Clipping", c.last_clip, "Sound arriving here at full scale. Counted while a PipeBoard window shows the board.")),
+      h("div", { class: "card-foot" }, power, h("span", { class: "diag-info", text: on ? `since ${c.since ? clockTime(c.since) : "now"}` : "off: not counting" }), reset));
+    box.addEventListener("mousedown", (e) => e.stopPropagation());
+    return box;
+  }
+  function setDiag(key, field, on) {  // the Waveform's Stereo/Mono or Smooth (card or panel): saved with the card
+    const dev = S.ws.devices?.[key];
+    if (!dev) return;
+    dev[field] = on;
+    ({ mono: DIAG.setMono, smooth: DIAG.setSmooth, zoom: DIAG.setZoom })[field](key, on);
+    send({ op: "diag-set", key, [field]: on });
+    render();
+  }
+  function openDiag(key) {
+    const dev = S.ws.devices?.[key], c = byKey()[key];
+    if (!dev) return;
+    closeMenu(); hideTip(); EQ.close(false); S.eqOpen = null; DYN.close(false); S.dynOpen = null;
+    movable(DIAG.open(key, { type: dev.type, title: titleOf(c || { key, title: dev.name }), done: () => render(),
+                             setMono: (m) => setDiag(key, "mono", m), set: (field, on) => setDiag(key, field, on) }), key);
+    render();
+  }
+
   function openEq(key) {
     const dev = S.ws.devices?.[key], c = byKey()[key];
     if (!dev) return;
-    closeMenu(); hideTip(); DYN.close(false); S.dynOpen = null;
+    closeMenu(); hideTip(); DYN.close(false); S.dynOpen = null; DIAG.close(false);
     EQ.open(key, { dev, title: titleOf(c || { key, title: dev.name }), rate: rateNow(), send, menu: openMenu,
                    changed: (k) => eqMini(S.els[k]?.querySelector(".eq-mini-wrap"), k),
                    done: () => { S.eqOpen = null; render(); } });
@@ -506,7 +590,7 @@ const PB = (() => {
   function openDyn(key) {
     const dev = S.ws.devices?.[key], c = byKey()[key];
     if (!dev) return;
-    closeMenu(); hideTip(); EQ.close(false); S.eqOpen = null;
+    closeMenu(); hideTip(); EQ.close(false); S.eqOpen = null; DIAG.close(false);
     DYN.open(key, { dev, title: titleOf(c || { key, title: dev.name }), send,
                     changed: (k) => {
                       const el = S.els[k], f = el?.querySelector(".gain-field"), d = S.ws.devices[k];
@@ -714,7 +798,7 @@ const PB = (() => {
     const cards = visible(), wires = visibleWires(), d = regroup(cards, wires, depths(cards, wires));
     const cols = [];
     for (const c of cards) (cols[d[c.key]] = cols[d[c.key]] || []).push(c);
-    const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4 };
+    const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4, diag: 5 };
     // All in whole cells: every card lands exactly, a column's rows evenly spaced (owner).
     const ROW_GAP = 2, COL_GAP = 9;
     const list = cols.filter(Boolean), at = {};
@@ -824,8 +908,19 @@ const PB = (() => {
     });
   }
 
-  function placeNew(keys) {
-    layout(keys);
+  // keep: each card's own spot is the one wanted (a card dropped where the user chose, an app back
+  // at its old place), only moved to the nearest free spot if it lands on another card; without,
+  // the wanted spot is a fresh layout's (owner: a node made from a dropped wire landed far away).
+  // Places sent to the server, held on the page until it has saved them (or 3 s): a board update
+  // it sent just before carried the old spots, and a card dropped after a drag jumped back, then
+  // forward again (owner: "teleport back and forth" after letting go). Tidy had the same guard.
+  function sendPlaces(cards) {
+    const still = S.placing && performance.now() - S.placing.at < 3000 ? S.placing.cards : {};
+    S.placing = { cards: { ...still, ...cards }, at: performance.now() };
+    send({ op: "place", cards });
+  }
+  function placeNew(keys, keep = false) {
+    if (!keep) layout(keys);
     const want = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
     for (const k of keys) delete S.pos[k];
     const boxes = Object.keys(S.pos).filter((k) => S.sizes[k]).map((k) => ({ ...S.pos[k], ...S.sizes[k] }));
@@ -848,7 +943,7 @@ const PB = (() => {
       S.pos[k] = at;
       boxes.push({ ...at, ...s });
     }
-    send({ op: "place", cards: Object.fromEntries(keys.map((k) => [k, S.pos[k]])) });
+    sendPlaces(Object.fromEntries(keys.map((k) => [k, S.pos[k]])));
   }
 
   // Tidy: everything worked out first, then shown in one go and sent as one message, so no
@@ -856,7 +951,7 @@ const PB = (() => {
   function tidy() {
     const keys = layout(visible().map((c) => c.key)), cards = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
     const portals = foldPortals();
-    S.placing = { cards, at: performance.now() };
+    S.placing = { cards, at: performance.now() };  // (Tidy's own: replaced whole)
     keys.forEach(placeCard);
     setPortals(portals, true, false);  // (redraws the wires)
     send({ op: "tidy", cards, set: portals });
@@ -1498,7 +1593,7 @@ const PB = (() => {
     board.classList.remove("panning");
     // A click on empty board (pressed, let go, the view not moved) closes an open effect panel
     // (owner). Panning keeps it open; a card or a wire never gets here.
-    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); closePath(); }  // a click on the board (owner)
+    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); DIAG.close(); closePath(); }  // a click on the board (owner)
     if (d.kind === "card") {
       S.els[d.key]?.classList.remove("dragging");
       $("landing").hidden = true;
@@ -1506,7 +1601,7 @@ const PB = (() => {
         S.pos[d.key] = d.to;
         placeCard(d.key);
         placeWires(new Set([d.key]));
-        send({ op: "place", cards: { [d.key]: S.pos[d.key] } });
+        sendPlaces({ [d.key]: S.pos[d.key] });
       }
     }
     if (d.kind === "wire") finishWire(d);
@@ -1569,6 +1664,12 @@ const PB = (() => {
   // ---- menus: cascading, like the desktop's own right-click menu -----------------------------
   // An item: {label, icon, hint, off, action, sub: [items], forget} · {sep: true} · {head: "text"}
   const MI = {
+    diag: '<circle cx="6" cy="6" r="4"/><path d="M9 9l3.5 3.5M4 6h1l1-1.5 1 3 1-1.5"/>',
+    waveform: '<path d="M1.5 7c1.2-4 2.3-4 3.5 0s2.3 4 3.5 0 2.3-4 3.5 0"/>',
+    stereo: '<path d="M1.5 11.5a5.5 5.5 0 0 1 11 0"/><path d="M7 11.5V4M7 11.5 3.5 6M7 11.5l3.5-5.5"/>',
+    counter: '<rect x="1.5" y="3" width="11" height="8" rx="1.5"/><path d="M4.5 5.5v3M7 5.5v3M9.5 5.5v3"/>',
+    meter: '<path d="M2 12.5h10"/><path d="M3.5 12V8M6 12V4M8.5 12V6M11 12V2.5"/>',
+    spectrum: '<path d="M1.5 12.5h11"/><path d="M1.5 10.5c1.5-6 2.5-7 3.5-4s1.8 2 3 0.5 2.5-5 4.5-3.5"/>',
     add: '<path d="M7 2.5v9M2.5 7h9"/>',
     fit: '<path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/>',
     still: '<path d="M1.5 7h11"/>',
@@ -1749,6 +1850,13 @@ const PB = (() => {
         ...physical,
       ] },
       ...(ctx.insert ? [] : [{ label: "Apps", icon: "app", sub: bringBack(of("app"), "All playing apps are on the board", ctx) }]),
+      ...(ctx.insert || ctx.connect?.to ? [] : [{ label: "Diagnostic", icon: "diag", sub: [
+        { label: "Waveform", icon: "waveform", hint: "the sound's shape, live", action: () => makeDevice({ type: "waveform", name: "Waveform", channels: 2 }, ctx) },
+        { label: "Stereo", icon: "stereo", hint: "width, balance, phase", action: () => makeDevice({ type: "stereo", name: "Stereo", channels: 2 }, ctx) },
+        { label: "Counter", icon: "counter", hint: "dropouts and clipping, since a reset", action: () => makeDevice({ type: "counter", name: "Counter", channels: 2 }, ctx) },
+        { label: "Meter", icon: "meter", hint: "levels and loudness (LUFS)", action: () => makeDevice({ type: "meter", name: "Meter", channels: 2 }, ctx) },
+        { label: "Spectrum", icon: "spectrum", hint: "frequency content", action: () => makeDevice({ type: "spectrum", name: "Spectrum", channels: 2 }, ctx) },
+        ...(of("diag").length ? [{ sep: true }, ...bringBack(of("diag"), "", ctx)] : [])] }]),
     ];
   }
 
@@ -1918,7 +2026,7 @@ const PB = (() => {
   function showAt(key) {
     const p = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
     S.pos[key] = { x: cell(p.x), y: cell(p.y) };
-    send({ op: "place", cards: { [key]: S.pos[key] } });
+    sendPlaces({ [key]: S.pos[key] });
     setHidden(key, false);
   }
 
@@ -2544,6 +2652,7 @@ const PB = (() => {
       if (r && (r.right > innerWidth + 0.5 || r.bottom > innerHeight + 0.5 || r.left < -0.5 || r.top < -0.5)) faults.push(`#${id} leaves the window`);
     }
     faults.push(...EQ.selftest());
+    faults.push(...DIAG.selftest());
     for (const wrap of document.querySelectorAll(".eq-mini-wrap")) {  // a gap beside the card's curve (owner saw one)
       const svg = wrap.querySelector("svg");
       if (svg && Math.abs(svg.getBoundingClientRect().width - wrap.getBoundingClientRect().width) > 1) faults.push(`an EQ card's curve does not fill its box (${Math.round(svg.getBoundingClientRect().width)} of ${Math.round(wrap.getBoundingClientRect().width)})`);
@@ -2557,8 +2666,14 @@ const PB = (() => {
       const z = (el) => parseInt(getComputedStyle(el).zIndex, 10) || 0;
       for (const m of document.querySelectorAll(".menu")) if (z(m) <= z(eqp)) faults.push("a menu opens under the EQ panel");
       const st = eqp.querySelector(".eq-strip");
-      if (st.scrollWidth > st.clientWidth + 1) faults.push(`the EQ's band strip overflows (${st.scrollWidth} > ${st.clientWidth})`);
+      if (st && st.scrollWidth > st.clientWidth + 1) faults.push(`the EQ's band strip overflows (${st.scrollWidth} > ${st.clientWidth})`);
       for (const p of eqp.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("an EQ curve has NaN in it");
+    }
+    // Diagnostic displays that are on and have heard sound: drawn (some pixel lit).
+    for (const c of document.querySelectorAll(".diag-display:not(.off) canvas")) {
+      if (!DIAG.heard(c.closest("[data-key]")?.dataset.key || DIAG.openKey())) continue;
+      const px = c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      if (!px || !px.some((v, i) => i % 4 === 3 && v > 0)) faults.push(`a diagnostic display drew nothing: ${c.closest("[data-key], .eq-panel")?.dataset?.key || "the panel"}`);
     }
     const bar = rect($("bar")), pb = rect($("problems-btn"));
     if (bar && pb && bar.right > pb.left - 8) faults.push("the bar runs into the problems button");
@@ -2673,6 +2788,28 @@ const PB = (() => {
     // it was (owner: one moved), and none may overlap another.
     // Tidy is the same at any zoom (owner: zoom is only how it looks): positions, portals and
     // socket offsets laid out at six zooms, every one compared with zoom 1.
+    // Diagnostic cards fed made-up sound (no server in the shots); one opened large; one off.
+    fakeDiag: (wide = 1) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide); },
+    openDiag: (key) => { openDiag(key); if (!DIAG.isOpen(key)) S.errors.push("the diagnostic panel did not open"); },
+    diagMono: (key) => {
+      [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();
+      if (!S.ws.devices[key].mono) S.errors.push("the Mono switch did not take");
+    },
+    // The card's Mono clicked while its panel is open: the panel's switch shows Mono too.
+    diagSync: (key) => {
+      openDiag(key);
+      [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();
+      const lit = document.querySelector(".diag-panel .diag-mode button[aria-pressed=\"true\"]")?.textContent;
+      if (lit !== "Mono") S.errors.push(`the panel's switch shows ${lit}, the card's Mono`);
+    },
+    diagSmooth: (key) => {
+      [...(S.els[key]?.querySelectorAll(".diag-toggle") || [])].find((b) => b.textContent === "Smooth")?.click();
+      if (!S.ws.devices[key].smooth) S.errors.push("the Smooth toggle did not take");
+    },
+    diagOff: (key) => {
+      S.els[key]?.querySelector(".diag-row .bypass")?.click();
+      if (!S.ws.devices[key].bypass) S.errors.push("the power button did not turn it off");
+    },
     tidyAnyZoom: () => {
       const run = (z) => {
         S.view = { ...S.view, z }; applyView(false); measure();
@@ -2784,6 +2921,25 @@ const PB = (() => {
       S.pos[other] = { ...slot };
       delete S.pos[key];
       render();
+    },
+    // A device made where a wire was dropped, the spot overlapping a card: it lands right there or
+    // at the nearest free spot, never at a layout spot across the board (owner).
+    // A card dropped after a drag, then a board update from before the drop arrives (its old spot):
+    // the card stays where it was dropped (owner: it jumped back and forth).
+    staleAfterDrop: (key) => {
+      const from = { ...S.pos[key] }, to = { x: from.x + 6, y: from.y + 2 };
+      S.pos[key] = to; placeCard(key); sendPlaces({ [key]: to });
+      load({ ...S.lastState, workspace: { ...S.lastState.workspace, cards: { ...S.lastState.workspace.cards, [key]: { ...S.lastState.workspace.cards?.[key], ...from } } } });
+      if (S.pos[key].x !== to.x || S.pos[key].y !== to.y) S.errors.push(`a stale update moved the dropped card back to ${S.pos[key].x},${S.pos[key].y}`);
+    },
+    dropOver: (key, other) => {
+      S.shown.delete(key);
+      S.pos[key] = { x: S.pos[other].x + 2, y: S.pos[other].y + 1 };
+      const want = { ...S.pos[key] };
+      render();
+      const got = S.pos[key], far = Math.abs(got.x - want.x) + Math.abs(got.y - want.y);
+      if (far > 30) S.errors.push(`a device dropped at ${want.x},${want.y} landed at ${got.x},${got.y}`);
+      if (covered(key)) S.errors.push("the dropped device lies on another card");
     },
     askDeleteDevice: (key) => askDeleteDevice(byKey()[key]),
     // A new wire from a socket, let go on empty board at x, y.

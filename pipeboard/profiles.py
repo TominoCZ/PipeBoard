@@ -177,12 +177,15 @@ WHAT = {"mic": "the virtual microphone", "speaker": "the virtual speaker", "gain
 
 
 def _settings(dev: dict) -> tuple:
-    """What a gain, EQ, limiter, compressor or plugin is set to: its level, its bands, its
-    dynamics settings, its controls' values, bypass. (EQ bands were left out: an EQ edit never
-    showed as a change, so nothing could revert it.)"""
+    """What a gain, EQ, limiter, compressor, plugin or diagnostic card is set to: its level, its
+    bands, its dynamics settings, its controls' values, bypass, a Waveform's Stereo/Mono, Smooth
+    and Zoom (owner: saved and revertible; Smooth is the same field as a limiter's Soft). (EQ
+    bands were left out: an EQ edit never showed as a change, so nothing could revert it.) A
+    Counter's totals are not settings: Revert never resets them."""
     return (dev.get("gain_db"), dev.get("bands"), [dev.get(k) for k in dynamics.SETTINGS],
             bool(dev.get("smooth")),
-            [(p["i"], p.get("value")) for p in dev.get("params", [])], bool(dev.get("bypass")))
+            [(p["i"], p.get("value")) for p in dev.get("params", [])], bool(dev.get("bypass")),
+            bool(dev.get("mono")), dev.get("zoom", True))
 
 
 def _moved(a: dict, b: dict) -> bool:

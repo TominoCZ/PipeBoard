@@ -210,7 +210,10 @@ from its partner; a stereo-to-stereo wire with one link missing is dashed.
 **Watching.** `pw-dump --monitor` is only a "something changed" trigger. 150 ms after the first
 change the server takes one full `pw-dump`, rebuilds the model and pushes it only if it differs.
 A dump of this machine is ~0.5 MB and takes milliseconds; simpler and harder to get wrong than
-applying incremental updates.
+applying incremental updates. Only a change to what the board is made of counts (a node, port,
+link, device or metadata; `pipewire.matters`): a client connecting does not. PipeBoard's own
+`pw-dump` and `pw-top` are clients, and before this each read caused the next, ~13 full reads a
+second around the clock (2026-11-06, found chasing the owner's report of load and clicks).
 
 **Acting.** `pw-link <out-port-id> <in-port-id>`, `pw-link -d <link-id>`. Links made this way
 outlive the tool but **not a PipeWire restart**: M9 re-makes them.
@@ -281,6 +284,12 @@ cascade already turned, and flips left at the screen edge. Arrow keys, Enter and
   node › and Disconnect. Inserting turns A → B into A → new → B, each channel on its own path (a
   left-only wire stays left-only); the old link is removed only once the new path is made, so the
   sound does not drop.
+
+**Landing on another card.** A card appearing for the first time on top of another is placed
+again: an app (back at an old spot) at a fresh layout's spot, by its wires with the other
+sources; a card the user put somewhere (a device made from a dropped wire, one shown again from
+a menu) kept there, only moved to the nearest free spot (owner: a node made from a dropped wire
+landed far away, at a layout spot; shot drop-over).
 
 **Grid.** Positions are whole **cells** (a cell is 14 px; the dot grid is every 28 px, so corners
 land on a dot or halfway), and card sizes whole cells too (widths rounded up when drawn; the page
@@ -983,6 +992,88 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   PipeWire's peaks mode (`resample.peaks`: each value the loudest of its stretch; 1.35 for the same
   burst), linked to the same ports, used only to mark which sources reached full scale. Clipping
   shows within a frame (20 ms) of happening (owner: "doesn't appear immediately").
+
+## 8d. Diagnostic cards (built 2026-11-06)
+
+A **Diagnostic** group in Add (owner): **Waveform** and **Stereo**. A diagnostic card is a tap: it
+has an input only; wire any output into it beside its usual path and PipeWire copies the sound
+there, nothing in the sound changes. Not offered in the middle of a wire (no output) or for a
+wire dropped from an input.
+
+- **The device** (`devices.py`): each card is a null sink, `Audio/Sink/Internal` like a Gain (no
+  app or desktop list shows it), tagged `pipeboard.kind=diag` and `pipeboard.type`; always there,
+  so its wires are real links that profiles keep. The board shows its input only
+  (`graph.build`); `adopt` reads the type tag, so it is never taken for a Gain.
+- **What it hears** (`diag.py`): one capture (`Taps`) for every card that is on, two channels
+  each from its sink's monitor, 48 kHz, and only while a window shows the board (owner: only
+  then; off saves the work). Under the live wires' rules: async, passive, /Internal, a
+  `pipeboard_scope_*` name (plumbing, never drawn). The server only forwards what came in each
+  20 ms frame (`diag-pcm`); the page does all the drawing.
+- **The look** (owner's pick D of seven): a dashed edge from L's colour to R's, the pin and
+  socket near white, a wire into one ending white. L magenta `#f84fcc`, R green `#0fbb7c`
+  (owner's pick G after four rounds: opposite hues, strong, as a special category should be),
+  in one place: board.css `--diag-l`, `--diag-r`. A power button: off, nothing is captured or
+  drawn for it (saved, as `bypass`).
+- **Drawing on its own** (`diag.js`; owner): each display is a canvas on its own compositor layer
+  (`contain`, `will-change`), drawn in diag.js's own animation loop, so a frame repaints that
+  canvas only. Readouts change four times a second; the correlation marker moves by transform.
+  Smooth (owner): what is drawn follows a playhead 40 ms behind the newest sound, moving with
+  real time, so each refresh shows a little more instead of a jump per 20 ms lump.
+- **Waveform**: L and R, 50 ms, steady (each frame starts at a rising zero crossing of the mid),
+  each pixel column's lowest and highest sample, L and R the same weight and added (white where
+  they agree; owner: green was lost under magenta); the peak, in the display's corner. Triggered on
+  the mid filtered below ~150 Hz, with hysteresis (owner saw it jump half a wave: a ripple at the
+  bottom of a bass wave crossing zero; simulated, 251 of 260 frames jumped before, 0 after).
+  Controls (owner; on the card and its panel; saved, and a profile counts them): **Stereo |
+  Mono** (Mono: one trace of the two combined); **Smooth** (two passes of a centred 0.67 ms average,
+  a soft filter fading from ~600 Hz up, and one line through each column's average: crests
+  round off, the shape stays, nothing shifts; owner: at half a millisecond spikes still showed); **Zoom**,
+  on unless turned off (fitted to the loudest recent peak of what is drawn, up at once, down over
+  1.5 s, at most ×250; owner: a song at −12 dB used a third of the box; off: the edge is 0 dB).
+  The cards are 20 cells wide for these four controls.
+- **Silence is silence**: a card with nothing plugged in sleeps and sends nothing; after 0.3 s
+  without sound the pictures draw nothing new and the readouts say "silent". A card drawn anew
+  (every state) keeps its canvas, so it never replays the last sound (owner saw "blips").
+- **Stereo** (as Ozone's Imager, polar sample): each sample a dot, its angle how far it leans
+  (mono straight up, L and R on the 45° lines, out of phase flat), its distance its level against
+  the loudest of the last second (zoomed to fit, down over ~1.5 s; owner: a song at −12 dB was a
+  small blob, and a dB scale looked inverted, loud near-mono piled at the rim); dots
+  fade by time (0.15 s constant, owner: a little longer than first; in steps of at least a
+  quarter, or faint pixels round back up and leave a grey ghost), coloured by side, white only
+  near mono itself. Below it two tiles (owner's pick D, as the Counter's): **correlation**, how
+  alike L and R are (+1 mono, +0.3 … +0.9 normal music, around 0 very wide, below 0 parts cancel
+  in mono), with what it means in words ("fine in mono", "very wide", "cancels in mono"; only clearly below 0, −0.05, cancels;
+  owner: the number alone meant nothing); **width**, how far the picture fans out against its
+  guide lines: 2·atan(side/mid RMS) as a share of 90°, so 0 % a vertical line (mono), 100 % out
+  to the L and R lines (unrelated), 200 % flat (fully out of phase), never more; a sine with L
+  and R φ apart reads φ/90° (checked at 0, 45, 90, 135, 180°: 0, 50, 100, 150, 200 %). Owner:
+  the dots' spread (faint noise counted as much as sound) read 168 % beside a narrow picture,
+  and a plain side/mid ratio is unbounded ("what am I supposed to imagine under 240 %"). The
+  width bar's colours stay put (green, white at the L/R tick, magenta for too wide; owner) and a
+  cover slides off them; both small bars glide every frame (scaleX, the compositor only).
+- **Counter**: dropouts on its path (the cards wired into it, through any number of wires, apps
+  left out) and on the interface clocking the graph wherever it sits (when it drops out, every
+  sound does; owner: 2 dropouts in Problems the Counter on the Bass EQ chain missed); one glitch counted once, as the highest card's new errors each second; none while
+  PipeBoard's own change settles), counted all the time (owner's pick: it costs nothing); and
+  clipping arriving here (a full-scale sample; a moment held at full scale counts once), only
+  while a window shows the board. Totals, the clock time of the last of each, since when;
+  Reset; saved with the card (`counts`).
+  Correlation (−1 … +1) and width (the side's share of the energy).
+- **Large**: a click on the display opens it in a panel docked at the bottom, as the EQ's (one
+  at a time, moved by its header, closed by ✕, Esc or a click on the board).
+- **Meter** (owner's pick B of four, both card and panel): segmented LED bars for L and R across
+  the whole width, no numbers beside them (owner): −60 … 0 dB, green, yellow from −12, red from
+  −3; lit to the RMS (300 ms), dimmer on to the peak (falling 20 dB/s), the peak held 1.5 s as one
+  white segment (red at full scale). Loudness as streaming platforms measure it (ITU-R BS.1770:
+  K-weighting with the standard's 48 kHz coefficients, 100 ms blocks): momentary (0.4 s) and
+  short-term (3 s) LUFS in two tiles, with a word (quiet / moderate / streaming loud / very
+  loud). Checked on every page audit against the standard's reference: a 997 Hz sine at −20 dBFS
+  in both channels reads −20.0 LUFS, full scale in one −3.01 (DIAG.selftest).
+- **Spectrum**: the EQ analyser's own picture (eq.js `analyser.binsOf`, shared: 4096-point FFT,
+  240 log bins 20 Hz–20 kHz, +4.5 dB/octave tilt, peaks falling) of the two channels combined,
+  coloured by level as a meter (green low, yellow, red near the top; owner); the loudest frequency (its real level, the tilt taken off) in the
+  corner.
+- Not built yet (from the owner's list): Silence watch.
 
 ## 9. Preview tooling
 

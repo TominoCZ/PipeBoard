@@ -608,10 +608,17 @@ const EQ = (() => {
   }
 
   function analyse(withMoves = true) {
+    const x = new Float64Array(N);
+    for (let i = 0; i < N; i++) x[i] = ring[(ringAt + i) % N];
+    return binsOf(x, withMoves ? measure : null);
+  }
+  // N samples in (48 kHz, oldest first), BINS dB values out: the analyser's whole picture, shared
+  // with the diagnostic Spectrum card (diag.js). after(re, im): a look at the FFT on the way.
+  function binsOf(x, after = null) {
     const re = new Float64Array(N), im = new Float64Array(N);
-    for (let i = 0; i < N; i++) re[i] = ring[(ringAt + i) % N] * hann[i];
+    for (let i = 0; i < N; i++) re[i] = x[i] * hann[i];
     fft(re, im);
-    if (withMoves) measure(re, im);
+    after?.(re, im);
     const hz = RATE / N, db = (k) => 20 * Math.log10(Math.max(Math.hypot(re[k], im[k]) * norm, 1e-9));
     return Array.from({ length: BINS }, (_, i) => {
       const f = 10 ** (lf0 + (i / (BINS - 1)) * lspan), lo = f * 2 ** (-0.5 * lspan * 3.32 / BINS), hi = f * 2 ** (0.5 * lspan * 3.32 / BINS);
@@ -855,5 +862,6 @@ const EQ = (() => {
   }
 
   return { open, close, sync, pcm, mini, selftest, isOpen: (key) => P.key === key,
-           math: { biquad, coefs, level, slotsUsed }, COLORS, debug };
+           math: { biquad, coefs, level, slotsUsed }, COLORS, debug,
+           analyser: { binsOf, N, BINS, F0, F1, GRID_F, FALL } };
 })();

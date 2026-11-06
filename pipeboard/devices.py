@@ -12,14 +12,21 @@ from __future__ import annotations
 import math
 import re
 import secrets
+import time
 import unicodedata
 
 from pipeboard import graph
 
 # A gain is a null sink too: its volume is the gain on its monitor outputs. /Internal keeps it
-# out of apps' lists of outputs.
-CLASS = {"mic": "Audio/Source/Virtual", "speaker": "Audio/Sink", "gain": "Audio/Sink/Internal"}
-WORD = {"mic": "microphone", "speaker": "speaker", "gain": "gain"}
+# out of apps' lists of outputs. A diagnostic card (owner: Waveform, Stereo) is one as well: a
+# tap that only listens; its card shows the input only, and PipeBoard reads its monitor.
+DIAG = ("waveform", "stereo", "counter", "meter", "spectrum")
+CLASS = {"mic": "Audio/Source/Virtual", "speaker": "Audio/Sink", "gain": "Audio/Sink/Internal",
+         **dict.fromkeys(DIAG, "Audio/Sink/Internal")}
+WORD = {"mic": "microphone", "speaker": "speaker", "gain": "gain", "waveform": "waveform",
+        "stereo": "stereo imager", "counter": "counter", "meter": "level meter",
+        "spectrum": "spectrum analyser"}
+KIND = {"gain": "effect", **dict.fromkeys(DIAG, "diag")}  # the card's kind (else virtual)
 # Which board made a node: set once by the server (a hash of its config folder). A PipeBoard
 # with another config (a test run, a second user setup) never shows or takes another's devices.
 # ponytail: one module-level value; one Board per process is all the app ever runs.
@@ -50,7 +57,16 @@ def new(kind: str, name: str, channels: int, taken: set[str]) -> dict:
            "node": _slug(name, taken), "channels": channels}
     if kind == "gain":
         dev["gain_db"] = 0.0
+    if kind == "counter":
+        dev["counts"] = counts()
     return dev
+
+
+def counts() -> dict:
+    """A Counter's totals from now (since: when it was made or reset; last_*: when the last one
+    was, or None), times in seconds since the epoch."""
+    return {"drops": 0, "clips": 0, "since": round(time.time()),
+            "last_drop": None, "last_clip": None}
 
 
 def props(dev: dict) -> str:
@@ -61,7 +77,7 @@ def props(dev: dict) -> str:
             f"media.class={CLASS[dev['type']]} audio.position={position} "
             "object.linger=true node.virtual=true monitor.channel-volumes=true "
             f"pipeboard.owned=true pipeboard.id={dev['id']} pipeboard.board={BOARD or 'none'} "
-            f"pipeboard.kind={'effect' if dev['type'] == 'gain' else 'virtual'} }}")
+            f"pipeboard.kind={KIND.get(dev['type'], 'virtual')} pipeboard.type={dev['type']} }}")
 
 
 def adopt(dump: list[dict]) -> dict[str, dict]:
@@ -70,7 +86,7 @@ def adopt(dump: list[dict]) -> dict[str, dict]:
     saved before the device was made replaced the board, and the device lingered on, a card with
     no level box that nothing could remove (user). Nodes made before boards were
     tagged count as this board's."""
-    kinds = {cls: kind for kind, cls in CLASS.items()}
+    kinds = {cls: kind for kind, cls in CLASS.items() if kind not in DIAG}  # (from before the tag)
     found = {}
     for o in dump:
         info = o.get("info") or {}
@@ -79,7 +95,8 @@ def adopt(dump: list[dict]) -> dict[str, dict]:
         if not o["type"].endswith("Node") or not p.get("pipeboard.owned") or not mine \
                 or p.get("media.class") not in kinds:
             continue
-        kind = kinds[p["media.class"]]
+        tagged = p.get("pipeboard.type")
+        kind = tagged if tagged in CLASS else kinds[p["media.class"]]
         ports = info.get("n-output-ports" if kind == "mic" else "n-input-ports") or 2
         dev = {"id": str(p["pipeboard.id"]), "type": kind, "channels": 1 if ports == 1 else 2,
                "name": p.get("node.description") or p.get("node.name", "Device"),

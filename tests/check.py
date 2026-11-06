@@ -1616,7 +1616,8 @@ async def check_settings_revert():
         await board.refresh()
         hum = plugins.ref(plugins.FAKE_INSTALLED[3])
         for op in ({"type": "gain", "name": "Gain", "channels": 2}, {"type": "eq"},
-                   {"type": "plugin", "plugin": hum}):
+                   {"type": "plugin", "plugin": hum}, {"type": "waveform", "name": "Waveform", "channels": 2},
+                   {"type": "counter", "name": "Counter", "channels": 2}):
             assert await board.op_create_device(None, {**op, "x": 0, "y": 0}) is None
         import time
         assert board.settling > time.monotonic() + 20, "a device made: its own errors are not dropouts"
@@ -1629,9 +1630,11 @@ async def check_settings_revert():
             {"type": "bell", "freq": 1000, "gain": 6, "q": 1}]})
         board.heard(keys["plugin"], {"param": [0, 0.9]})
         await board.op_plugin_bypass(None, {"key": keys["plugin"], "on": True})
+        await board.op_diag_set(None, {"key": keys["waveform"], "mono": True})  # a setting (owner)
+        board.ws["devices"][keys["counter"]]["counts"]["drops"] = 7  # a total: not a setting
         await board.refresh()
         changed = board.profile_state()["changes"]
-        assert len([c for c in changed if c.startswith("Changed the settings")]) == 3, changed
+        assert len([c for c in changed if c.startswith("Changed the settings")]) == 4, changed
         sent = []
         board.plugins.send = lambda k, m: sent.append(m)
         board.gains.sent.clear()
@@ -1643,6 +1646,8 @@ async def check_settings_revert():
         assert board.eqs.heard(keys["eq"]) == eq.slots([], board.rate()), "EQ flat again"
         assert {"values": {"0": 0.6, "1": 0.5, "2": 0.0, "3": 1.0, "4": 0.0}} in sent and {"bypass": False} in sent, sent
         assert board.profile_state()["changes"] == [], board.profile_state()["changes"]
+        assert not board.ws["devices"][keys["waveform"]].get("mono"), "Mono reverted to Stereo"
+        assert board.ws["devices"][keys["counter"]]["counts"]["drops"] == 7, "Revert never resets a Counter"
 
 
 class FakeCli:
@@ -1799,6 +1804,106 @@ async def check_server():
         await client.close()
 
 
+async def check_diag(tmp):
+    """Diagnostic cards (PLAN §8d): a Waveform and a Stereo are quiet sinks with an input only; the
+    capture runs only while a window shows the board and only for cards that are on; what it
+    hears goes to the visible windows; an old Gain is never taken for one (adopt)."""
+    from pipeboard import devices, diag, pipewire, server
+
+    class Page:
+        def __init__(self):
+            self.sent, self.frames = [], []
+
+        async def send_str(self, text):
+            self.sent.append(json.loads(text))
+
+        async def send_bytes(self, data):
+            self.frames.append(data)
+
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    for kind in ("waveform", "stereo"):
+        assert await board.op_create_device(None, {"type": kind, "name": kind.title(), "channels": 2, "x": 0, "y": 0}) is None
+    for _ in range(3):  # (the first returns early while new devices' wires are on their way)
+        await board.refresh()
+    keys = {d["type"]: k for k, d in board.ws["devices"].items()}
+    cards = {c["key"]: c for c in board.model["cards"]}
+    for kind in ("waveform", "stereo"):
+        c = cards[keys[kind]]
+        assert c["kind"] == "diag" and [s["id"] for s in c["inputs"]] == ["in"] and c["outputs"] == [], c
+    assert {d["type"] for d in devices.adopt(board.source.dump).values()} >= {"waveform", "stereo"}
+    assert board.taps is None, "no window shows the board: nothing captured"
+    page = Page()
+    board.pages.add(page)
+    await board.op_live(page, {"visible": True})
+    assert board.taps and [k for k, _ in board.taps.cards] == sorted(keys.values())
+    await asyncio.sleep(0.05)
+    await board.send_taps()
+    msg = next(m for m in page.sent if m.get("type") == "diag-keys")  # the order once, then binary
+    assert msg["keys"] == sorted(keys.values()) and page.frames and page.frames[0][:4] == diag.MARK
+    await asyncio.sleep(0.02)
+    await board.send_taps()
+    assert len([m for m in page.sent if m.get("type") == "diag-keys"]) == 1, "the order is not sent again"
+    await board.op_diag_set(page, {"key": keys["waveform"], "mono": True})
+    await board.op_diag_set(page, {"key": keys["stereo"], "mono": True})  # (Stereo has no such switch)
+    assert board.ws["devices"][keys["waveform"]]["mono"] is True and "mono" not in board.ws["devices"][keys["stereo"]]
+    await board.op_diag_on(page, {"key": keys["stereo"], "on": False})
+    assert [k for k, _ in board.taps.cards] == [keys["waveform"]], "off: not captured"
+    await board.op_live(page, {"visible": False})
+    assert board.taps is None, "hidden: nothing captured"
+    # The Counter: dropouts on its path (one glitch once, none while settling, a node made again
+    # starts over); clipping once per moment; Reset.
+    from array import array
+    assert await board.op_create_device(None, {"type": "counter", "name": "Counter", "channels": 2, "x": 0, "y": 0,
+                                               "connect": {"from": ["desktop_mix", "out"]}}) is None
+    for _ in range(3):
+        await board.refresh()
+    key = next(k for k, d in board.ws["devices"].items() if d["type"] == "counter")
+    path = [c["key"] for c in server.upstream(board.model, key)]
+    assert "desktop_mix" in path and not any(c["kind"] == "app" for c in board.model["cards"] if c["key"] in path), path
+    mix = next(c for c in board.model["cards"] if c["key"] == "desktop_mix")
+    errs = lambda n: dict.fromkeys(mix["names"][:1], n)  # noqa: E731
+    counts = lambda: board.ws["devices"][key]["counts"]  # noqa: E731
+    assert not board.tally(errs(5), False) and counts()["drops"] == 0, "the first look: none yet"
+    assert board.tally(errs(8), False) and counts()["drops"] == 3 and counts()["last_drop"]
+    assert not board.tally(errs(12), True) and counts()["drops"] == 3, "PipeBoard's own change: not counted"
+    assert not board.tally(errs(2), False) and counts()["drops"] == 3, "made again: starts over"
+    assert board.tally(errs(4), False) and counts()["drops"] == 5
+    assert not board.tally({}, False) and counts()["drops"] == 5, "not listed (idle): nothing counted"
+    assert board.tally(errs(5), False) and counts()["drops"] == 6, "listed again: only what is new since"
+    # the interface clocking the graph counts too, wherever it sits (its dropout stops every sound)
+    hw = next(c for c in board.model["cards"] if c["kind"] == "hardware" and c["names"])
+    board.engine["interface"] = hw["names"][:1]
+    assert hw["key"] not in path and [c["key"] for c in board.clocking(key)] == [hw["key"]]
+    clock = lambda n: {**errs(4), hw["names"][0]: n}  # noqa: E731
+    board.tally(clock(10), False)
+    before = counts()["drops"]
+    assert board.tally(clock(13), False) and counts()["drops"] == before + 3, counts()
+
+    class Taps:
+        cards, channels = [(key, [1, 2])], 2
+    loud, quiet = array("f", [1.0, 0.2] * 64).tobytes(), array("f", [0.3, 0.2] * 64).tobytes()
+    for chunk in (loud, loud, quiet, loud):
+        board.count_clips(chunk, Taps)
+    assert counts()["clips"] == 2 and counts()["last_clip"], counts()
+    await board.op_diag_reset(None, {"key": key})
+    assert counts()["drops"] == 0 and counts()["clips"] == 0 and counts()["last_drop"] is None
+    await board.stop_children(around=False)
+
+
+def check_watch_filter():
+    """Only changes to the board's own objects ask for a new read of the graph: a client
+    connecting (PipeBoard's own pw-dump, pw-top, pw-link) did, and each read made the next
+    (~13 a second). A removal names only its id: what it was is remembered."""
+    from pipeboard import pipewire
+    kinds = {}
+    obj = lambda i, t: f'  {{\n    "id": {i},\n    "type": "PipeWire:Interface:{t}",\n    "info": {{}}\n  }}'  # noqa: E731
+    assert not pipewire.matters(obj(74, "Client"), kinds) and not pipewire.matters('{ "id": 74, "info": null }', kinds)
+    assert pipewire.matters(obj(90, "Node"), kinds) and pipewire.matters('{ "id": 90, "info": null }', kinds)
+    assert pipewire.matters(obj(91, "Link"), kinds) and pipewire.matters(obj(92, "Metadata"), kinds)
+    assert pipewire.matters('{ "id": 555, "info": null }', kinds), "never seen: read, to be safe"
+
+
 def check_cells():
     """Positions are whole cells (owner): a board from before (pixels, no mark) is converted once,
     on reading it; a marked one is left alone; what a snapshot writes is marked."""
@@ -1824,6 +1929,7 @@ def main():
     check_problems()
     check_workspace()
     check_cells()
+    check_watch_filter()
     check_streams()
     check_gain_math()
     check_virtual_source()
@@ -1855,6 +1961,8 @@ def main():
         asyncio.run(check_engine_effects(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_engine_trial(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_diag(Path(tmp)))
     asyncio.run(check_plugin_startup())
     asyncio.run(check_own_devices())
     asyncio.run(check_settings_revert())

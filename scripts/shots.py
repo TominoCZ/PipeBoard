@@ -173,6 +173,31 @@ def equalized(folder: Path, dump: list) -> list:
     return fixture.dump
 
 
+def diagnosed(folder: Path, dump: list) -> list:
+    """A Waveform and a Stereo card, each wired from Music Player beside its usual path (the
+    shots feed them made-up sound: PB.debug.fakeDiag)."""
+    fixture = pipewire.Fixture(dump)
+    wave = {"id": "dwave01", "type": "waveform", "name": "Waveform", "node": "pb_wave", "channels": 2}
+    ster = {"id": "dster01", "type": "stereo", "name": "Stereo", "node": "pb_stereo", "channels": 2}
+    import time
+    now = round(time.time())
+    count = {"id": "dcount01", "type": "counter", "name": "Counter", "node": "pb_counter", "channels": 2,
+             "counts": {"drops": 0, "clips": 3, "since": now - 1800, "last_drop": None, "last_clip": now - 300}}
+    met = {"id": "dmeter01", "type": "meter", "name": "Meter", "node": "pb_meter", "channels": 2}
+    spec = {"id": "dspec01", "type": "spectrum", "name": "Spectrum", "node": "pb_spectrum", "channels": 2}
+    for dev in (wave, ster, count, met, spec):
+        asyncio.run(fixture.create(dev))
+    workspace.save(folder / "workspace.json", {"cards": {}, "devices": {"pb:dwave01": wave, "pb:dster01": ster,
+                                                                     "pb:dcount01": count, "pb:dmeter01": met,
+                                                                     "pb:dspec01": spec}})
+    model = graph.build(fixture.dump)
+    cards = {c["key"]: c for c in model["cards"]}
+    for key in ("pb:dwave01", "pb:dster01", "pb:dcount01", "pb:dmeter01", "pb:dspec01"):
+        for i in (0, 1):
+            asyncio.run(fixture.link(cards["music_player"]["outputs"][0]["ports"][i], cards[key]["inputs"][0]["ports"][i]))
+    return fixture.dump
+
+
 def _frame() -> str:
     """A frame from the capture's own encoder: a bass on source 0, a hi-hat on source 1."""
     import base64
@@ -282,6 +307,8 @@ SHOTS = {
     "portal-toggle": ("machine", BIG, None, "PB.debug.portalToggle()"),
     "appear-free": ("machine", BIG, None, "PB.debug.appearOver('music_player', 'mic_mix')"),
     "appear-back": ("machine", BIG, None, "PB.debug.comeBackOver('music_player', 'mic_mix')"),
+    "drop-over": ("machine", BIG, equalized, "PB.debug.dropOver('pb:deq02', 'desktop_mix')"),
+    "drop-stale": ("machine", BIG, None, "PB.debug.staleAfterDrop('music_player')"),
     "menu-edge": ("machine", BIG, None, "PB.debug.menu(1380, 760, ['Add node', 'Effects'])"),
     "card-menu": ("machine", BIG, renamed, "PB.debug.cardMenu('mic_mix')"),
     "renaming": ("machine", BIG, renamed, "PB.debug.rename('instrument_mix')"),
@@ -347,6 +374,16 @@ SHOTS = {
     "live-frame": ("machine", BIG, None, _frame()),
     "live-instant": ("machine", BIG, None, "PB.debug.liveInstant() || PB.debug.fakeLive()"),  # (off by default: this turns it on)
     "bar-wires": ("machine", BIG, None, "PB.debug.wiresMenu()"),
+    "diag": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag()"),
+    "diag-wave-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dwave01')"),
+    "diag-stereo-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dster01')"),
+    "diag-mono": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(3) || PB.debug.diagMono('pb:dwave01')"),
+    "diag-sync": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(3) || PB.debug.diagSync('pb:dwave01')"),
+    "diag-smooth": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(3) || PB.debug.diagSmooth('pb:dwave01') || PB.debug.openDiag('pb:dwave01')"),
+    "diag-meter-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dmeter01')"),
+    "diag-spectrum-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dspec01')"),
+    "diag-off": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.diagOff('pb:dster01')"),
+    "diag-menu": ("machine", BIG, diagnosed, "PB.debug.menu(560, 300, ['Add node', 'Diagnostic'])"),
     "bar-tidy": ("machine", BIG, None, "PB.debug.tidyMenu()"),
     "live-pedal": ("pedal", BIG, None, "PB.debug.fakeLive()"),
     "zoomed-out": ("machine", SMALL, None, "PB.debug.zoom(0.55)"),

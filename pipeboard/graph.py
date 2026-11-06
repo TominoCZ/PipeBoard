@@ -332,7 +332,9 @@ def _card(group: str, ids: list[int], seen: dict, fixed: tuple) -> dict:
         # one it replaces.
         "serials": [int(m.get("object.serial", 0)) for m in members],
         "inputs": _sockets("in", [p for p in shown if p["dir"] == "in"]),
-        "outputs": _sockets("out", [p for p in shown if p["dir"] == "out"]),
+        # (a diagnostic card only listens: its sink's monitor is PipeBoard's to read, not a socket)
+        "outputs": [] if kind == "diag" else _sockets("out", [p for p in shown
+                                                              if p["dir"] == "out"]),
         "hidden": any(n.startswith(HIDDEN_BY_DEFAULT) for n in names) and not fixed[1],
         "owned": any(m.get("pipeboard.owned") for m in members),
         # Hardware only: the rate it runs at, and its clock (two devices, two clocks).

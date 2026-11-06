@@ -9,11 +9,30 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from pipeboard import devices
 
 log = logging.getLogger(__name__)
 NODE, PORT, LINK = (f"PipeWire:Interface:{t}" for t in ("Node", "Port", "Link"))
+# What the board is made of: a change to anything else (a client connecting, as PipeBoard's own
+# pw-dump, pw-top and pw-link do every time) is no reason to read the graph again. Reacting to
+# those, each read made the next one: ~13 full reads a second, for nothing (owner: the load).
+BOARD_TYPES = {"Node", "Port", "Link", "Device", "Metadata"}
+_TYPED = re.compile(r'"id": (\d+),\s*"type": "PipeWire:Interface:(\w+)"')
+_GONE = re.compile(r'"id": (\d+),\s*"info": null')
+
+
+def matters(text: str, kinds: dict[str, str]) -> bool:
+    """Whether a piece of pw-dump --monitor output changes the board. `kinds` remembers each
+    object's type (a removal names only its id); an id never seen counts, to be safe."""
+    hit = False
+    for oid, kind in _TYPED.findall(text):
+        kinds[oid] = kind
+        hit = hit or kind in BOARD_TYPES
+    for oid in _GONE.findall(text):
+        hit = hit or kinds.pop(oid, "Node") in BOARD_TYPES
+    return hit
 
 
 async def _run(*cmd: str) -> tuple[int, str, str]:
@@ -41,9 +60,17 @@ class Live:
                 "pw-dump", "--monitor", "--no-colors",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=True)  # Ctrl+C: not killed under PipeBoard while it quits
+            kinds: dict[str, str] = {}
+            tail = ""
             try:
-                while await proc.stdout.read(65536):
-                    changed()
+                while chunk := await proc.stdout.read(65536):
+                    text = tail + chunk.decode(errors="replace")
+                    # (whole objects, each starting "  {" on its own line: an id and its type are
+                    # never split between two pieces)
+                    head, mark, rest = text.rpartition("\n  {")
+                    text, tail = (head, mark + rest) if mark else (text, "")
+                    if matters(text, kinds):
+                        changed()
                 await proc.wait()
             finally:  # the app is stopping: take the watcher with it, quietly
                 if proc.returncode is None:
@@ -152,7 +179,8 @@ class Fixture:
                  "media.class": devices.CLASS[dev["type"]], "object.serial": nid,
                  "node.virtual": True, "pipeboard.owned": True, "pipeboard.id": dev["id"],
                  "pipeboard.board": devices.BOARD,
-                 "pipeboard.kind": "effect" if dev["type"] == "gain" else "virtual"}
+                 "pipeboard.kind": devices.KIND.get(dev["type"], "virtual"),
+                 "pipeboard.type": dev["type"]}
         self.dump.append({"id": nid, "type": NODE, "info": {"props": props}})
         names = ("input", "capture") if dev["type"] == "mic" else ("playback", "monitor")
         for i, ch in enumerate(chans):
