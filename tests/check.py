@@ -383,6 +383,38 @@ async def check_engine_trial(tmp):
     assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
 
 
+def check_headroom():
+    """Buffer headroom: the output's frames written but not yet sent, the input's room before it
+    overflows, None while closed; sampled over made-up status files; found from the fixture's
+    interface; sampled only while a page shows it."""
+    from pipeboard import engine, headroom, pipewire, server
+    st = lambda state, appl, hw: f"state: {state}\nowner_pid   : 1\ndelay       : 9\n-----\nhw_ptr      : {hw}\nappl_ptr    : {appl}\n"  # noqa: E731
+    assert headroom.frames_left("out", st("RUNNING", 1000, 700), 3072) == 300, "written, not yet sent"
+    assert headroom.frames_left("in", st("RUNNING", 700, 1000), 3072) == 2772, "room before it overflows"
+    assert headroom.frames_left("out", st("XRUN", 1000, 700), 3072) is None
+    assert headroom.frames_left("out", "closed\n", 0) is None
+    with tempfile.TemporaryDirectory() as tmp:
+        out, inn, gone = (Path(tmp) / x for x in ("p", "c", "x"))
+        for d, text in ((out, st("RUNNING", 1000, 900)), (inn, st("RUNNING", 500, 600))):
+            d.mkdir()
+            (d / "status").write_text(text)
+            (d / "hw_params").write_text("access: MMAP_INTERLEAVED\nperiod_size: 512\nbuffer_size: 3072\n")
+        assert headroom.sample({"out": out, "in": inn, "gone": gone}, 0.02) == {"out": 100, "in": 2972, "gone": None}
+    pcms = engine.read(scenarios.load("machine"))["pcms"]
+    assert pcms == {"out": "/proc/asound/card1/pcm0p/sub0", "in": "/proc/asound/card1/pcm0c/sub0"}, pcms
+
+    async def on_off():
+        with tempfile.TemporaryDirectory() as tmp:
+            board = server.Board(pipewire.Fixture(scenarios.load("machine")), Path(tmp))
+            page = object()
+            await board.op_headroom(page, {"on": True})
+            assert board.head_task, "a page shows it: sampled"
+            await board.forget(page)
+            await asyncio.sleep(0.6)
+            assert board.head_task is None, "no page shows it: it stops"
+    asyncio.run(on_off())
+
+
 def check_moment():
     """A dropout's moment: CPU busy (all, busiest core), GPU and USB interrupts against the last
     minute's usual, and the kernel's and PipeWire's own lines from around then (not the firewall's)."""
@@ -1975,6 +2007,7 @@ def main():
     check_latency(model)
     check_dropouts()
     check_moment()
+    check_headroom()
     check_cstates()
     check_engine()
     check_missing()

@@ -95,6 +95,7 @@ const PB = (() => {
     if (msg.type === "diag-keys") { DIAG.keys(msg.keys); return; }
     if (msg.type === "dyn-peaks") { DYN.peaks(msg.key, msg.peaks); return; }
     if (msg.type === "drops") { S.drops = msg.counts; showDrops(); return; }
+    if (msg.type === "headroom") { S.headroom = msg; showHeadroom(); return; }
     if (msg.type !== "state") return;
     if (S.drag || S.editing) { S.queued = msg; return; }
     load(msg);
@@ -2354,12 +2355,67 @@ const PB = (() => {
       return b;
     }));
   }
-  function closeEngine() { $("engine")?.remove(); $("clock").classList.remove("open"); }
+  function closeEngine() {
+    $("engine")?.remove();
+    $("clock").classList.remove("open");
+    if (S.headroomOn) { S.headroomOn = false; send({ op: "headroom", on: false }); }
+  }
+  // Buffer headroom (owner's pick G, always open): how close the interface's buffers came to
+  // running out, sampled by the server while the panel is open (headroom.py). The line: each
+  // side's lowest in the last minute; the graph: that minute, 0 ms (a click) red at the bottom.
+  const HEAD_RED = 0.5, HEAD_WARN = 1.0, HEAD_W = 280, HEAD_H = 64;  // ms, ms, px, px
+  function headroomBlock() {
+    if (!S.headroomOn) { S.headroomOn = true; S.headroom = null; send({ op: "headroom", on: true }); }
+    const el = h("div", { id: "headroom", class: "headroom" });
+    fillHeadroom(el);
+    return el;
+  }
+  function showHeadroom() { const el = $("headroom"); if (el) fillHeadroom(el); }
+  function fillHeadroom(el) {
+    const d = S.headroom, e = S.engine, every = d?.every || 0.5, n = Math.round(60 / every);
+    const top = (e.block + e.margin) / e.rate * 1000;  // the graph's scale: one half of the round trip
+    const sides = [["out", "Output"], ["in", "Input"]].map(([k, name]) => {
+      const xs = (d?.[k] || []).slice(-n);
+      let low = null;
+      xs.forEach((v, i) => { if (v != null && (low == null || v < xs[low])) low = i; });
+      return { k, name, xs, low: low == null ? null : xs[low], ago: low == null ? null : (xs.length - 1 - low) * every, at: low };
+    });
+    const level = (v) => (v < HEAD_RED ? "bad" : v < HEAD_WARN ? "warn" : "ok");
+    const line = h("div", { class: "hr-line" }, ...sides.map((x) => x.low == null
+      ? h("span", { class: "wait" }, `${x.name} measuring…`)
+      : h("span", { "data-tip": `${x.name}: ${x.low.toFixed(2)} ms at its lowest, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}` },
+        h("i", { class: `hr-dot ${level(x.low)}` }), `${x.name} `, h("b", { text: x.low.toFixed(1) }), " ms")));
+    const X = (i, len) => ((i + n - len) / (n - 1)) * HEAD_W, Y = (v) => HEAD_H - (Math.min(v, top) / top) * HEAD_H;
+    const svg = s("svg", { width: HEAD_W, height: HEAD_H, viewBox: `0 0 ${HEAD_W} ${HEAD_H}`, class: "hr-plot", "aria-hidden": "true" });
+    svg.append(s("rect", { class: "hr-red", x: 0, y: Y(HEAD_RED), width: HEAD_W, height: HEAD_H - Y(HEAD_RED) }),
+               s("rect", { class: "hr-zero", x: 0, y: HEAD_H - 1, width: HEAD_W, height: 1 }));
+    for (const x of [...sides].reverse()) {  // (the output, the tight one, drawn on top)
+      const dpath = x.xs.map((v, i) => (v == null ? "" : `${i && x.xs[i - 1] != null ? "L" : "M"}${X(i, x.xs.length).toFixed(1)},${Y(v).toFixed(1)}`)).join("");
+      if (dpath) svg.append(s("path", { class: `hr-${x.k}`, d: dpath }));
+    }
+    const worst = sides.filter((x) => x.low != null).sort((a, b) => a.low - b.low)[0];
+    const graph = h("div", { class: "hr-graph" }, svg,
+      h("span", { class: "hr-axis top", text: `${top.toFixed(0)} ms` }), h("span", { class: "hr-axis zero", text: "0 ms" }));
+    if (worst) {
+      const cx = X(worst.at, worst.xs.length), cy = Y(worst.low);
+      svg.append(s("circle", { class: "hr-low", cx, cy, r: 3 }));
+      const tag = h("span", { class: "hr-tag", text: `${worst.low.toFixed(1)} ms · ${worst.ago < 1 ? "now" : `${Math.round(worst.ago)} s ago`}` });
+      tag.style.left = `${Math.max(0, Math.min(HEAD_W - 92, cx - 46))}px`;
+      tag.style.top = `${cy > 22 ? cy - 20 : cy + 6}px`;
+      graph.append(tag);
+    }
+    el.replaceChildren(
+      h("div", { class: "hr-top" }, h("span", { text: "Buffer headroom" }), h("small", { text: "lowest, last minute" })),
+      h("div", { class: "hr-box" }, line, graph,
+        h("div", { class: "hr-foot" }, h("span", { text: "1 min ago" }),
+          h("span", { class: "key out", text: "Output" }), h("span", { class: "key in", text: "Input" }), h("span", { text: "now" }))),
+      h("p", { class: "hr-note" }, "How close the buffers came to running out. ", h("span", { class: "red", text: "At 0 ms it clicks." })));
+  }
   function drawEngine() {
     // Drawn again on every change: no opening animation then, and the focus back where it was
     // (owner: each + or − made the panel close and open).
     const again = !!$("engine"), focused = document.activeElement?.dataset?.k;
-    closeEngine();
+    $("engine")?.remove();  // (not closeEngine: Buffer headroom keeps sampling across a redraw)
     p0();
     // The round trip compares only when the block changes (owner: a priority shown as a new
     // round trip); otherwise it is what runs (on the timer PipeWire pads the margin itself).
@@ -2399,6 +2455,7 @@ const PB = (() => {
     close.addEventListener("click", closeEngine);
     const panel = h("div", { id: "engine", class: "eng", role: "dialog", "aria-label": "Audio engine" },
       h("div", { class: "eng-head" }, h("b", { text: "Audio engine" }), h("span", { class: "sub", text: `clocked by ${e.title || "the interface"} · ${rate / 1000} kHz` }), h("span", { class: "sp" }), close),
+      h("div", { class: "eng-body" },  // (scrolls in a short window; the head and its tip stay)
       h("div", { class: "rt" },
         h("div", { class: "rt-top" }, h("span", { class: "what", text: "Round trip" }),
           resized && Math.abs(next - now) > 0.05 ? h("span", { class: "now struck", text: `${now.toFixed(1)} ms` }) : null,
@@ -2410,6 +2467,7 @@ const PB = (() => {
       h("p", { class: "hint", text: "Smaller: less delay, more CPU." }),
       row("Safety margin", marginSeg(p, e), msOf(p.margin)),
       h("p", { class: "hint", text: "More: fewer dropouts, more delay." }),
+      Object.keys(e.pcms || {}).length ? headroomBlock() : null,
       h("hr"), adv,
       p.advanced ? row("Scheduling", scheduling(p, e), p.tsched ? "timer" : "interrupts") : null,
       p.advanced ? h("p", { class: "hint", text: "Timer: block changes apply without restarting the interface." }) : null,
@@ -2421,7 +2479,7 @@ const PB = (() => {
         h("span", { class: "note", text: S.pick && reopensNow(S.pick, S.engine)
           ? "The interface restarts: silent until it is back. Then a minute to Keep."
           : "Applies at once. A minute to Keep." }),
-        cancel, go));
+        cancel, go)));
     panel.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); closeEngine(); } });
     if (again) panel.style.animation = "none";
     document.body.append(panel);
@@ -2910,6 +2968,14 @@ const PB = (() => {
       $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: x, clientY: y, bubbles: true, button: 0 }));
       dispatchEvent(new MouseEvent("mouseup", { clientX: x, clientY: y, bubbles: true, button: 0 }));
       if ($("latpath")) S.errors.push("a click on the board left the path panel open");
+    },
+    // Buffer headroom made up: "ok" (the owner's, at block 512), "close" (dips near 0), "wait" (none yet).
+    fakeHeadroom: (kind = "ok") => {
+      const wob = (base, amp, dips, len = 120) => Array.from({ length: len }, (_, i) => +(base + amp * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)) - (dips[i] || 0)).toFixed(2));
+      S.headroom = kind === "wait" ? null : kind === "close"
+        ? { every: 0.5, out: wob(0.9, 0.35, { 70: 0.62, 71: 0.4, 101: 0.3 }), in: wob(4.2, 0.5, {}) }
+        : { every: 0.5, out: wob(1.6, 0.18, { 88: 0.3, 89: 0.15, 30: 0.12 }), in: wob(7.3, 0.6, { 40: 0.25 }) };
+      showHeadroom();
     },
     engineOpen: (pick, advanced) => { openEngine(); Object.assign(S.pick, pick || {}, { advanced: !!advanced }); drawEngine(); },
     // Tidy, then a fractional zoom (the owner's) and the cards measured again, then Tidy: nothing

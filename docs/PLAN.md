@@ -213,6 +213,7 @@ from its partner; a stereo-to-stereo wire with one link missing is dashed.
 | `denoise.py` | the Noise Suppression node's plugin (`native/pb_denoise.c`, Speex), built on demand (§5.8) |
 | `dynamics.py`, `web/dynamics.js` | the Limiter, Compressor, Noise Gate and De-Esser nodes: LSP's plugins in a filter-chain, their settings, the in/out peaks; their live panel (§5.5–5.7a) |
 | `plugins.py`, `plughost.py` | plugin nodes: the installed list, one Carla host process per plugin; FakePlugins for fixtures (§5.2) |
+| `headroom.py` | Buffer headroom: how close the interface's ALSA buffers come to running out, sampled while the Audio engine panel is open (§8c) |
 | `moment.py` | what the machine was doing when a dropout was logged: CPU (all, busiest core), GPU and USB interrupts against the last minute's usual, the kernel's and PipeWire's log lines; added to each `dropouts:` log line. Never polls the GPU driver |
 
 **Watching.** `pw-dump --monitor` is only a "something changed" trigger. 150 ms after the first
@@ -994,6 +995,19 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   Nothing restarts and there is no trial. The scripts are checked on a made-up sysfs and rules
   folder, a line carrying a command refused by the helper itself; the owner's password prompt
   appeared from the login service.
+
+- **Buffer headroom** (`headroom.py`, built 2026-11-06; the owner's pick G of eleven renders, always
+  open): under Safety margin, how close the interface's buffers came to running out in the last
+  minute. The line "● Output 1.3 ms ● Input 7.0 ms" (each side's lowest; green ≥ 1 ms, amber < 1,
+  red < 0.5), the minute as a graph from 0 ms (red: a click) to block + margin, its lowest point
+  labelled with when. Read from the kernel's status files (`/proc/asound/cardN/pcmD{p,c}/sub0`,
+  found from the nodes' `alsa.card` / `alsa.device`): the output is what PipeWire wrote and USB has
+  not taken yet (`appl_ptr − hw_ptr`), not ALSA's `delay`, which counts the ~2 ms already in USB
+  transfers that cannot cover a late block (the first figure did and looked 2 ms safer than it
+  was); the input is the room before the ring overflows. Sampled about every millisecond in a
+  thread, a low sent every half second, only while a page shows the panel (~2 % of a core; the
+  files stay open and are read again, a fresh open each time cost ~6 %). The owner's machine at
+  block 512 with two blocks of margin: output 1.3 ms, input 7 ms, so the output is the tight side.
 
 - **Clipping is seen by a second capture** (`scope.py`): the 8 kHz live-wires capture filters a
   full-scale peak away (a clipped 6 kHz burst read 0.34 there), so beside it runs one at 1 kHz in

@@ -21,7 +21,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from pipeboard import graph
+from pipeboard import graph, headroom
 
 BLOCKS = (64, 128, 256, 512, 1024, 2048)
 # The safety margin in whole blocks (owner's UR44C: under one block the input dropped out ~100
@@ -74,6 +74,7 @@ def read(dump: list[dict]) -> dict:
         return int(m[1]) if m else dflt
     return {"rate": clock["rate"], "block": clock["quantum"],
             "interface": sorted(p["node.name"] for p in iface),
+            "pcms": headroom.folders(iface),  # (its buffers' status, for Buffer headroom)
             "title": (names.get(driver.get("device.id")) or driver.get("node.description"))
             if driver else None,
             "period": max((int(p.get("api.alsa.period-size") or 0) for p in iface), default=0),

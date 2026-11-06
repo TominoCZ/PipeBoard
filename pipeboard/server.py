@@ -12,7 +12,7 @@ import os
 import re
 import secrets
 import time
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 from aiohttp import WSCloseCode, WSMsgType, web
@@ -26,6 +26,7 @@ from pipeboard import (
     eq,
     gain,
     graph,
+    headroom,
     moment,
     plugins,
     problems,
@@ -42,6 +43,7 @@ SETTLE_S = 0.15  # wait this long after a change before taking a snapshot
 # ends with PipeBoard and is started again at launch.
 FILTERS = ("eq", *dynamics.KINDS)
 RUNS_WITH = ("plugin", *FILTERS)
+HEAD_EVERY_S, HEAD_KEEP = 0.5, 120  # Buffer headroom: one low per half second, two minutes kept
 SETTLE_DROPS_S = 30  # dropouts just after an engine change or a device made: its own, not counted
 SETTLE_CAPTURE_S = 5  # and just after the live wires' capture started or took new wires in
 TRIAL_S = 60  # a new audio engine setting is kept only if Keep is pressed within this
@@ -120,6 +122,7 @@ class Board:
                     "engine-try": self.op_engine_try, "engine-keep": self.op_engine_keep,
                     "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
+                    "headroom": self.op_headroom,
                     "cstates": self.op_cstates, "diag-on": self.op_diag_on,
                     "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
@@ -135,14 +138,14 @@ class Board:
         # tallies: each Counter's cards' error totals a second ago; clipping: the Counters whose
         # sound was at full scale in the last frame (a new clipping moment counts once); counted:
         # a Counter's totals changed (saved and sent once a second). moment: what the machine
-        # was doing each second, told with every dropout logged (moment.py).
+        # was doing each second, told with every dropout logged (moment.py). head_pages: the
+        # pages showing Buffer headroom, and the task sampling it meanwhile (headroom.py).
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
          self.dropped, self.settling, self.idle, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
-         self.diag_keys, self.err_seen, self.moment) = ({}, None, (None, None), set(), None, {},
-                                                        0.0, engine.IdleHelper(), None, None,
-                                                        None, {}, {}, set(), False, 0.0, {}, {},
-                                                        moment.Moment())
+         self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_task) = (
+            {}, None, (None, None), set(), None, {}, 0.0, engine.IdleHelper(), None, None, None,
+            {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(), None)
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -1225,6 +1228,7 @@ class Board:
     async def forget(self, page: web.WebSocketResponse) -> None:
         self.pages.discard(page)
         self.drop_pages.discard(page)
+        self.head_pages.discard(page)
         self.visible.discard(page)
         self.watching.pop(page, None)
         self.diag_keys.pop(page, None)
@@ -1347,6 +1351,40 @@ class Board:
                 await asyncio.sleep(2.0)
         finally:
             self.drops_task = None
+
+    async def op_headroom(self, page, op) -> str | None:
+        """A page opens or closes the Audio engine panel: Buffer headroom is sampled meanwhile."""
+        (self.head_pages.add if op.get("on") else self.head_pages.discard)(page)
+        if self.head_pages and not self.head_task:
+            self.head_task = asyncio.create_task(self.watch_headroom())
+        return None
+
+    async def watch_headroom(self) -> None:
+        """Every half second, each of the interface's buffers' lowest headroom in it (ms), the last
+        two minutes of them sent to the pages that show it. Sampled in a thread (about every ms:
+        headroom.sample) only while a panel is open, and only on the live graph. Never raises."""
+        hist = {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}
+        try:
+            while self.head_pages:
+                found = (self.engine.get("pcms") or {}) if self.source.mode == "live" else {}
+                if not found:
+                    await asyncio.sleep(HEAD_EVERY_S)
+                    continue
+                low = await asyncio.to_thread(
+                    headroom.sample, {k: Path(v) for k, v in found.items()}, HEAD_EVERY_S)
+                rate = self.engine.get("rate") or 48000
+                for side, h in hist.items():
+                    v = low.get(side)
+                    h.append(None if v is None else round(v / rate * 1000, 2))
+                text = json.dumps({"type": "headroom", "every": HEAD_EVERY_S,
+                                   **{k: list(v) for k, v in hist.items()}})
+                for page in list(self.head_pages):
+                    with contextlib.suppress(ConnectionError, RuntimeError):
+                        await page.send_str(text)
+        except Exception:  # noqa: BLE001 - a reading failing must never touch the board
+            log.exception("headroom: could not sample")
+        finally:
+            self.head_task = None
 
     async def op_live_instant(self, _page, op) -> str | None:
         self._set(live_instant=bool(op.get("on")))

@@ -634,6 +634,7 @@ button { font: inherit; color: inherit; }
 .eng::before { content: ""; position: absolute; top: -6px; left: var(--tip, 40px); width: 10px; height: 10px; background: #262626;
   border-left: 1px solid rgba(255, 255, 255, 0.1); border-top: 1px solid rgba(255, 255, 255, 0.1); transform: rotate(45deg); }
 .eng-head { display: flex; align-items: center; gap: 9px; padding: 9px 10px 2px 16px; }
+.eng-body { max-height: calc(100vh - 110px); overflow-y: auto; overscroll-behavior: contain; }
 .eng-head b { font-weight: 600; font-size: 13.5px; }
 .eng-head .sub { color: var(--faint); font-size: 11px; }
 .eng-head .sp { flex: 1; }
@@ -667,6 +668,38 @@ button { font: inherit; color: inherit; }
 .eng .segmented button.cur::after { content: ""; position: absolute; left: 50%; bottom: 1px; width: 4px; height: 4px; margin-left: -2px;
   border-radius: 50%; background: var(--hardware); }
 .eng p.hint { margin: 5px 16px 0 124px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+/* Buffer headroom (owner's pick G): the minute's lowest per side, the minute itself, 0 ms red. */
+.headroom { --red: #e5534b; margin: 12px 16px 0 124px; }
+.hr-top { display: flex; align-items: baseline; margin-bottom: 6px; }
+.hr-top span { color: var(--muted); font-size: 11.5px; }
+.hr-top small { margin-left: auto; color: var(--faint); font-size: 10.5px; }
+.hr-box { background: #1d1d1d; border-radius: 8px; padding: 8px 10px; }
+.hr-line { display: flex; gap: 16px; white-space: nowrap; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hr-line b { color: var(--text); font-weight: 600; }
+.hr-line .wait { color: var(--faint); }
+.hr-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--on); }
+.hr-dot.warn { background: var(--hardware); }
+.hr-dot.bad { background: var(--red); }
+.hr-graph { position: relative; margin-top: 10px; width: 280px; }
+.hr-plot { display: block; overflow: visible; }
+.hr-plot path { fill: none; stroke-linejoin: round; }
+.hr-plot .hr-out { stroke: var(--hardware); stroke-width: 1.6; }
+.hr-plot .hr-in { stroke: var(--muted); stroke-width: 1.2; opacity: 0.7; }
+.hr-plot .hr-red { fill: var(--red); opacity: 0.18; }
+.hr-plot .hr-zero { fill: var(--red); opacity: 0.7; }
+.hr-plot .hr-low { fill: var(--text); }
+.hr-axis { position: absolute; left: 286px; font-size: 9.5px; color: var(--faint); white-space: nowrap; }
+.hr-axis.top { top: -5px; }
+.hr-axis.zero { bottom: -5px; color: var(--red); opacity: 0.85; }
+.hr-tag { position: absolute; width: 92px; text-align: center; font-size: 10.5px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.hr-foot { display: flex; gap: 12px; width: 280px; margin-top: 5px; font-size: 10px; color: var(--faint); }
+.hr-foot .key { display: inline-flex; align-items: center; gap: 4px; }
+.hr-foot .key.out { margin-left: auto; }
+.hr-foot .key + span:last-child { margin-left: auto; }
+.hr-foot .key::before { content: ""; width: 10px; height: 2px; background: var(--hardware); }
+.hr-foot .key.in::before { background: var(--muted); }
+.hr-note { margin: 6px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.4; }
+.hr-note .red { color: var(--red); opacity: 0.85; white-space: nowrap; }
 .eng hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.07); margin: 13px 16px 0; }
 /* Advanced: a plain button, not faint text (owner: "really hard to see"). */
 .eng .adv-head { display: flex; align-items: center; gap: 8px; width: calc(100% - 32px); margin: 12px 16px 0; padding: 7px 10px;
