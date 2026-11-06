@@ -394,7 +394,8 @@ SHOTS = {
     "diag-smooth": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(3) || PB.debug.diagSmooth('pb:dwave01') || PB.debug.openDiag('pb:dwave01')"),
     "diag-meter-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dmeter01')"),
     "diag-spectrum-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dspec01')"),
-    "diag-off": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.diagOff('pb:dster01')"),
+    "diag-off": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || setTimeout(() => "
+                 "['pb:dster01', 'pb:dwave01', 'pb:dmeter01', 'pb:dspec01'].forEach(PB.debug.diagOff) || PB.audit(), 500)"),
     "diag-menu": ("machine", BIG, diagnosed, "PB.debug.menu(560, 300, ['Add node', 'Diagnostic'])"),
     "bar-tidy": ("machine", BIG, None, "PB.debug.tidyMenu()"),
     "live-pedal": ("pedal", BIG, None, "PB.debug.fakeLive()"),

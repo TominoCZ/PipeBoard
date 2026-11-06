@@ -853,7 +853,8 @@ button { font: inherit; color: inherit; }
 .diag-guides { position: absolute; left: 6px; right: 6px; top: 4px; bottom: 2px; width: calc(100% - 12px); height: calc(100% - 6px); }
 .diag-display.off { cursor: default; }
 .diag-display.off .diag-guides { opacity: 0.3; }
-.diag-off { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+.diag-off { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; font-weight: 600;
+            letter-spacing: 0.04em; color: rgba(232, 230, 227, 0.72); }
 /* The Stereo card's two tiles (owner's pick D, as the Counter's): the number, what it is, what it
    means, and a small bar that glides (scaleX: the compositor only). */
 .stereo-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }

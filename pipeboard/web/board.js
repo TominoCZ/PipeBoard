@@ -2835,6 +2835,10 @@ const PB = (() => {
       const px = c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
       if (!px || !px.some((v, i) => i % 4 === 3 && v > 0)) faults.push(`a diagnostic display drew nothing: ${c.closest("[data-key], .eq-panel")?.dataset?.key || "the panel"}`);
     }
+    // Turned off: an empty box, not the last picture held (owner).
+    for (const c of document.querySelectorAll(".diag-display.off canvas")) {
+      if (c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0)) faults.push(`a diagnostic display that is off still shows its picture: ${c.closest("[data-key]")?.dataset.key}`);
+    }
     const bar = rect($("bar")), pb = rect($("problems-btn"));
     if (bar && pb && bar.right > pb.left - 8) faults.push("the bar runs into the problems button");
     for (const p of layer.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("a wire has NaN in its path");

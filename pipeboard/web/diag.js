@@ -513,7 +513,10 @@ const DIAG = (() => {
         h("div", { class: "stereo-tile", "data-tip": "Short-term loudness (LUFS, the last 3 s). Streaming platforms play music at about −14 LUFS and turn anything louder down" },
           v.short, h("small", { text: "LUFS short-term" }), v.word));
     }
-    if (on) { views.set(id, v); kick(); info(v); } else views.delete(id);
+    if (on) { views.set(id, v); kick(); info(v); } else {  // off: an empty box, not its last picture (owner)
+      views.delete(id); delete rings[key];
+      canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    }
     if (type === "waveform" || type === "spectrum") { v.info.classList.add("diag-peak"); display.append(v.info); }  // (in its corner: the foot holds the switches)
     return { display, extra, info: null, v };
   }
