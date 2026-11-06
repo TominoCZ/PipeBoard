@@ -104,6 +104,8 @@ const DIAG = (() => {
   // steadiest thing in most music), and with hysteresis: a crossing counts only after the wave
   // went clearly below zero first (a tenth of its size). Owner saw it jump half a wave, "as if
   // mirrored": a ripple at the bottom of a bass wave crossing zero upwards for an instant.
+  // A new picture comes only with a new bass wave: under ~60 Hz fewer than 60 a second (a 41 Hz
+  // note: 44 of 60 frames differ), so a bass passage can look choppier. Kept (owner, 2026-11-06).
   const TRIG_A = Math.exp((-2 * Math.PI * 150) / RATE);
   function trigger(look) {
     const n = SPAN + 1, t = new Float32Array(n);
