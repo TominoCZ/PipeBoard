@@ -582,13 +582,25 @@ const DIAG = (() => {
   }
 
   // For shots (no server): made-up stereo music on these cards, as FakeTaps makes it.
-  function fake(keys, wide = 1) {  // (wide: how far apart L and R are; 1 is a typical mix)
+  // rich (the README's picture, owner: detailed): a kick and bass line, a three-note chord that
+  // swells, a bright shimmer on its own rhythm and a little air; the side its own chord voices.
+  const note = (s, hz) => Math.sin(2 * Math.PI * hz * s);
+  function richMid(s) {
+    const beat = s % 0.5, kick = Math.exp(-beat * 14) * note(s, 48 + 70 * Math.exp(-beat * 40)) * 0.42;
+    const bass = 0.2 * note(s, 55) + 0.07 * note(s, 110);
+    const chord = (0.11 + 0.05 * Math.sin(s * 1.7)) * (note(s, 220) + note(s, 277.2) + note(s, 329.6));
+    const shimmer = 0.05 * Math.exp(-((s % 0.25) * 18)) * note(s, 1760 + 30 * Math.sin(s * 3));
+    return kick + bass + chord + shimmer + 0.012 * (Math.random() - 0.5);
+  }
+  const richSide = (s) => (0.06 + 0.03 * Math.sin(s * 2.3)) * (note(s, 440.6) - note(s, 659.9) * 0.6) + 0.01 * (Math.random() - 0.5);
+  function fake(keys, wide = 1, rich = false) {  // (wide: how far apart L and R are; 1 is a typical mix)
     let t = 0;
     const step = () => {
       const n = 960, f = new Float32Array(n * keys.length * 2);
       for (let j = 0; j < n; j++, t++) {
-        const s = t / RATE, mid = 0.5 * Math.sin(2 * Math.PI * 220 * s) + 0.2 * Math.sin(2 * Math.PI * 661 * s);
-        const side = wide * (mid * 0.4 * Math.sin(2 * Math.PI * 3 * s) + 0.06 * Math.sin(2 * Math.PI * 330 * s) + 0.03 * (Math.random() - 0.5));
+        const s = t / RATE, mid = rich ? richMid(s) : 0.5 * Math.sin(2 * Math.PI * 220 * s) + 0.2 * Math.sin(2 * Math.PI * 661 * s);
+        const side = rich ? wide * richSide(s)
+          : wide * (mid * 0.4 * Math.sin(2 * Math.PI * 3 * s) + 0.06 * Math.sin(2 * Math.PI * 330 * s) + 0.03 * (Math.random() - 0.5));
         for (let i = 0; i < keys.length; i++) { f[(j * keys.length + i) * 2] = mid + side; f[(j * keys.length + i) * 2 + 1] = mid - side; }
       }
       feed(keys, f);
