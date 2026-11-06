@@ -122,11 +122,15 @@ const PB = (() => {
     setStatus(S.mode === "live" ? "live" : "fixture",
               { live: "live", fixture: "fixture graph", preview: "preview" }[S.mode] || S.mode);
     showClock(S.model.clock);
-    // The idle states changed (a password prompt answered): the open panel shows it, drawn again
-    // only then, so a click elsewhere in it is never lost to a rebuild (owner: "they don't toggle").
-    const idleWas = JSON.stringify(S.engine?.cstates);
+    // The idle states or kernel options changed (a password prompt answered): the open panel
+    // shows it, drawn again only then, so a click elsewhere in it is never lost to a rebuild
+    // (owner: "they don't toggle").
+    const rootWas = JSON.stringify([S.engine?.cstates, S.engine?.kernel]);
     S.engine = msg.engine || null;
-    if (JSON.stringify(S.engine?.cstates) !== idleWas) { S.idlePending = null; if ($("engine")) drawEngine(); }
+    if (JSON.stringify([S.engine?.cstates, S.engine?.kernel]) !== rootWas) {
+      S.idlePending = S.kernelPending = null;
+      if ($("engine")) drawEngine();
+    }
     if (S.pathKey) (S.showLatency && S.model.latency?.[S.pathKey]?.path ? openPath(S.pathKey) : closePath());
     showTrial(S.engine?.trial);
     // Saved places, except just after a Tidy: a state the server sent before it saved them would
@@ -2340,6 +2344,35 @@ const PB = (() => {
     return [row("CPU idle states", chips, off.length ? `${off.join(", ")} off` : "all on"),
             h("p", { class: "hint", text: `Slow-waking states can cause dropouts; off costs some power. Needs your password.${kept ? ` Boot rule: ${kept}.` : ""}` })];
   }
+  // Low-latency kernel options, one toggle each: what linux-lowlatency adds to Ubuntu's kernel.
+  // Lit = on at the next boot (PipeBoard's GRUB snippet); set in another GRUB file = not ours to
+  // take off. Needs the password and a restart.
+  const KERNEL_WHAT = { "preempt=full": "full preemption", "rcu_nocbs=all": "RCU offload" };
+  function kernelOpts(e, row) {
+    const k = e.kernel;
+    if (!k?.grub) return [row("Kernel", h("span", { class: "of", text: "no GRUB found" }), ""), null];
+    const next = (x) => x.ours || x.elsewhere.length > 0;
+    const on = k.opts.filter((x) => x.ours).map((x) => x.name);
+    const chips = h("div", { class: "chips" }, ...k.opts.map((x) => {
+      const where = x.elsewhere.map((f) => f.split("/").pop()).join(", ");
+      const b = h("button", { type: "button", class: `chip-state${S.kernelPending === x.name ? " pending" : ""}`, "aria-pressed": String(next(x)), "data-k": `kernel-${x.name}`,
+                              disabled: !!S.kernelPending || (!!where && !x.ours),
+                              title: `${x.name} (${KERNEL_WHAT[x.name]}): ${x.now ? "on" : "off"} now, ${next(x) ? "on" : "off"} after a restart.` +
+                                     (where ? ` Set in ${where}: change it there.` : ` Click to turn ${x.ours ? "off" : "on"} at the next boot.`) },
+        h("b", { text: x.name }));
+      b.addEventListener("click", () => {
+        S.kernelPending = x.name;  // (until the server's answer, as for the idle states)
+        send({ op: "kernel", on: x.ours ? on.filter((n) => n !== x.name) : [...on, x.name] });
+        toast("Asking for your password…", "info");
+        drawEngine();
+      });
+      return b;
+    }));
+    const restart = k.opts.some((x) => next(x) !== x.now);
+    const now = k.opts.filter((x) => x.now).length;
+    return [row("Kernel", chips, restart ? "on restart" : now ? `${now} of 2 on` : "off"),
+            h("p", { class: "hint", text: "What the low-latency kernel adds. Small effect: audio already runs real time. Needs your password; applies after a restart." })];
+  }
   function marginSeg(p, e) {  // 1 · 2 · 3 blocks, the one running marked like the block's
     return h("div", { class: "segmented words", role: "radiogroup", "aria-label": "Safety margin" }, ...MARGINS.map((v) => {
       const b = h("button", { type: "button", role: "radio", "aria-checked": String(p.blocks === v), class: v === (e.margin_blocks || 1) ? "cur" : "",
@@ -2481,6 +2514,7 @@ const PB = (() => {
       p.advanced ? row("Scheduling", scheduling(p, e), p.tsched ? "timer" : "interrupts") : null,
       p.advanced ? h("p", { class: "hint", text: "Timer: block changes apply without restarting the interface." }) : null,
       ...(p.advanced ? deepSleep(e, row) : []),
+      ...(p.advanced ? kernelOpts(e, row) : []),
       p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), "real time") : null,
       p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), "") : null,
       p.advanced ? h("p", { class: "hint", text: "Already real time; raising rarely helps and never cuts delay." }) : null,

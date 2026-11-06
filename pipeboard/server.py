@@ -43,7 +43,7 @@ SETTLE_S = 0.15  # wait this long after a change before taking a snapshot
 # ends with PipeBoard and is started again at launch.
 FILTERS = ("eq", *dynamics.KINDS)
 RUNS_WITH = ("plugin", *FILTERS)
-HEAD_EVERY_S, HEAD_KEEP = 0.5, 120  # Buffer headroom: one low per half second, two minutes kept
+HEAD_EVERY_S, HEAD_KEEP = 0.5, 120  # Buffer headroom: one low per half second, a minute kept
 SETTLE_DROPS_S = 30  # dropouts just after an engine change or a device made: its own, not counted
 SETTLE_CAPTURE_S = 5  # and just after the live wires' capture started or took new wires in
 TRIAL_S = 60  # a new audio engine setting is kept only if Keep is pressed within this
@@ -122,7 +122,7 @@ class Board:
                     "engine-try": self.op_engine_try, "engine-keep": self.op_engine_keep,
                     "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
-                    "headroom": self.op_headroom,
+                    "headroom": self.op_headroom, "kernel": self.op_kernel,
                     "cstates": self.op_cstates, "diag-on": self.op_diag_on,
                     "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
@@ -131,7 +131,7 @@ class Board:
         # Pages showing the path panel, and the task counting its cards' dropouts meanwhile;
         # dropped: each card's dropouts in the last minute, for the Dropouts problem; settling:
         # until when dropouts are not counted, an engine change's own burst (owner: Spotify 666).
-        # idle: the root helper for CPU idle states (one password prompt per run).
+        # root: the root helper for CPU idle states and kernel options (one password per run).
         # starting: while a reopened interface comes back, its step and since when (then for a
         # moment how long it took); listen: the task waiting for its sound. taps: the diagnostic
         # cards' capture, and each card's monitor ports (diag.monitors).
@@ -139,13 +139,14 @@ class Board:
         # sound was at full scale in the last frame (a new clipping moment counts once); counted:
         # a Counter's totals changed (saved and sent once a second). moment: what the machine
         # was doing each second, told with every dropout logged (moment.py). head_pages: the
-        # pages showing Buffer headroom, and the task sampling it meanwhile (headroom.py).
+        # pages showing Buffer headroom, and its last minute, sampled all along (headroom.py).
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
-         self.dropped, self.settling, self.idle, self.starting, self.listen, self.taps,
+         self.dropped, self.settling, self.root, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
-         self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_task) = (
-            {}, None, (None, None), set(), None, {}, 0.0, engine.IdleHelper(), None, None, None,
-            {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(), None)
+         self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_hist) = (
+            {}, None, (None, None), set(), None, {}, 0.0, engine.RootHelper(), None, None, None,
+            {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(),
+            {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")})
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -189,9 +190,12 @@ class Board:
                            "show_latency": self.settings["show_latency"]})
 
     def read_engine(self, dump: list[dict]) -> None:
-        """The audio engine as it runs, and the CPU idle states (their attempts counted on)."""
-        tries = self.engine.get("cstates", {}).get("tries", 0)
-        self.engine = {**engine.read(dump), "cstates": {**engine.cstates(), "tries": tries}}
+        """The audio engine as it runs, the CPU idle states and the kernel options (their
+        attempts counted on)."""
+        tries = lambda k: self.engine.get(k, {}).get("tries", 0)  # noqa: E731
+        self.engine = {**engine.read(dump),
+                       "cstates": {**engine.cstates(), "tries": tries("cstates")},
+                       "kernel": {**engine.kernel(), "tries": tries("kernel")}}
 
     def dress(self) -> None:
         """PipeBoard's own cards get the names it gave them (a plugin's node is pb-<id>), and every
@@ -1281,11 +1285,31 @@ class Board:
             return str(e)
 
         async def change() -> None:
-            error = await self.idle.set(off)
+            error = await self.root.idle(off)
             # (each attempt counted: a closed password prompt changes nothing, and the page must
             # still learn it is over)
             tries = self.engine.get("cstates", {}).get("tries", 0) + 1
             self.engine["cstates"] = {**engine.cstates(), "tries": tries}
+            await self.broadcast(self.state())
+            if error:
+                await toast(page, error)
+        asyncio.create_task(change())
+        return None
+
+    async def op_kernel(self, page, op) -> str | None:
+        """Which low-latency kernel options the next boot gets (Audio engine › Advanced): as root
+        through pkexec, in the background like op_cstates."""
+        if self.source.mode != "live":
+            return "Kernel options can only be changed on the real system."
+        try:
+            opts = engine.check_kernel(op.get("on"))
+        except ValueError as e:
+            return str(e)
+
+        async def change() -> None:
+            error = await self.root.kernel(opts)
+            tries = self.engine.get("kernel", {}).get("tries", 0) + 1
+            self.engine["kernel"] = {**engine.kernel(), "tries": tries}
             await self.broadcast(self.state())
             if error:
                 await toast(page, error)
@@ -1353,38 +1377,43 @@ class Board:
             self.drops_task = None
 
     async def op_headroom(self, page, op) -> str | None:
-        """A page opens or closes the Audio engine panel: Buffer headroom is sampled meanwhile."""
+        """A page opens or closes the Audio engine panel: it gets the minute so far at once, then
+        each half second's."""
         (self.head_pages.add if op.get("on") else self.head_pages.discard)(page)
-        if self.head_pages and not self.head_task:
-            self.head_task = asyncio.create_task(self.watch_headroom())
+        if op.get("on"):
+            with contextlib.suppress(ConnectionError, RuntimeError):
+                await page.send_str(self.headroom_text())
         return None
 
+    def headroom_text(self) -> str:
+        return json.dumps({"type": "headroom", "every": HEAD_EVERY_S,
+                           **{k: list(v) for k, v in self.head_hist.items()}})
+
     async def watch_headroom(self) -> None:
-        """Every half second, each of the interface's buffers' lowest headroom in it (ms), the last
-        two minutes of them sent to the pages that show it. Sampled in a thread (about every ms:
-        headroom.sample) only while a panel is open, and only on the live graph. Never raises."""
-        hist = {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}
-        try:
-            while self.head_pages:
+        """Every half second, each of the interface's buffers' lowest headroom in it (ms), kept
+        whether a window is open or not (owner: hear a dropout, then open the panel and see it).
+        Sampled in a thread, about every ms (headroom.sample, ~2 % of a core), on the live graph
+        only; sent to the pages that show it. Never raises."""
+        while True:
+            try:
                 found = (self.engine.get("pcms") or {}) if self.source.mode == "live" else {}
-                if not found:
+                if not found or self.closing:
                     await asyncio.sleep(HEAD_EVERY_S)
                     continue
                 low = await asyncio.to_thread(
                     headroom.sample, {k: Path(v) for k, v in found.items()}, HEAD_EVERY_S)
                 rate = self.engine.get("rate") or 48000
-                for side, h in hist.items():
+                for side, h in self.head_hist.items():
                     v = low.get(side)
                     h.append(None if v is None else round(v / rate * 1000, 2))
-                text = json.dumps({"type": "headroom", "every": HEAD_EVERY_S,
-                                   **{k: list(v) for k, v in hist.items()}})
-                for page in list(self.head_pages):
-                    with contextlib.suppress(ConnectionError, RuntimeError):
-                        await page.send_str(text)
-        except Exception:  # noqa: BLE001 - a reading failing must never touch the board
-            log.exception("headroom: could not sample")
-        finally:
-            self.head_task = None
+                if self.head_pages:
+                    text = self.headroom_text()
+                    for page in list(self.head_pages):
+                        with contextlib.suppress(ConnectionError, RuntimeError):
+                            await page.send_str(text)
+            except Exception:  # noqa: BLE001 - a reading failing must never touch the board
+                log.exception("headroom: could not sample")
+                await asyncio.sleep(HEAD_EVERY_S)
 
     async def op_live_instant(self, _page, op) -> str | None:
         self._set(live_instant=bool(op.get("on")))
@@ -1666,7 +1695,7 @@ class Board:
         await self.gains.stop()
         await self.plugins.stop_all()
         await self.eqs.stop_all()
-        await self.idle.stop()  # (the root helper ends with PipeBoard)
+        await self.root.stop()  # (the root helper ends with PipeBoard)
         if self.listen:  # (its capture ends with PipeBoard too)
             self.listen.cancel()
         if self.taps:
@@ -1901,12 +1930,14 @@ def lifecycle(application: web.Application, board: Board) -> None:
         _app["taps"] = asyncio.create_task(taps(board))
         _app["listing"] = asyncio.create_task(board.plugins.installed())  # warms the picker
         _app["dropouts"] = asyncio.create_task(board.watch_errors())
+        _app["headroom"] = asyncio.create_task(board.watch_headroom())
         if board.source.mode == "live":
             _app["journal"] = asyncio.create_task(board.moment.follow())
 
     async def stop(_app: web.Application) -> None:
         board.closing = True
-        tasks = [_app[k] for k in ("watch", "frames", "taps", "listing", "dropouts", "journal")
+        tasks = [_app[k] for k in ("watch", "frames", "taps", "listing", "dropouts", "journal",
+                                    "headroom")
                  if k in _app]
         for task in tasks:  # PipeBoard's own background work ends before the loop does
             task.cancel()

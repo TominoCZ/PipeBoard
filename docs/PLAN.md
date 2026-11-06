@@ -996,6 +996,20 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   folder, a line carrying a command refused by the helper itself; the owner's password prompt
   appeared from the login service.
 
+- **Kernel** (Advanced, built 2026-11-06; owner: "an advanced setting for this"): toggles for
+  `preempt=full` and `rcu_nocbs=all`. On Ubuntu 26.04 `linux-lowlatency` is only the generic
+  kernel (already `CONFIG_HZ=1000`, `PREEMPT_DYNAMIC`, booting `lazy`) plus those two boot
+  options, so PipeBoard offers just them. The same root helper as the idle states (one password
+  per run) writes or removes `/etc/default/grub.d/99-pipeboard-kernel.cfg` and runs `update-grub`;
+  if that fails, the snippet goes back as it was and the panel says so. Applies at the next boot:
+  lit = on at the next boot, the row says "on restart" while that differs from `/proc/cmdline`.
+  Boot-only on purpose: `preempt` can switch live through debugfs, but reading it back needs root,
+  so the panel could not show the truth. An option set in another GRUB file is shown lit and
+  disabled (not PipeBoard's to remove). `/boot/grub/grub.cfg` is root-only, so the next boot is
+  read from GRUB's sources. No GRUB or no `update-grub`: the row says so. Expected effect is small
+  (audio threads are SCHED_FIFO, which preempt in every mode); dropouts at small blocks are
+  PipeWire's resync, not the kernel.
+
 - **Buffer headroom** (`headroom.py`, built 2026-11-06; the owner's pick G of eleven renders, always
   open): under Safety margin, how close the interface's buffers came to running out in the last
   minute. The line "● Output 1.3 ms ● Input 7.0 ms" (each side's lowest; red under a quarter

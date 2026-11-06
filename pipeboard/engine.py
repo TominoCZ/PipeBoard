@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -238,60 +239,142 @@ def own_rule(off: list[str]) -> str:
             f"case $(cat $d/name) in {'|'.join(off)}) echo 1 > $d/disable;; esac; done'\"\n")
 
 
+# Low-latency kernel options (owner: "an advanced setting for this"). On Ubuntu 26.04
+# linux-lowlatency is the generic kernel (already 1000 Hz, PREEMPT_DYNAMIC) plus these two boot
+# options, so PipeBoard offers just them: a GRUB snippet of its own, applied at the next boot.
+KERNEL_OPTS = ("preempt=full", "rcu_nocbs=all")
+GRUB = Path("/etc/default/grub")  # (and GRUB.parent / "grub.d")
+OWN_GRUB = "99-pipeboard-kernel.cfg"  # (in grub.d)
+UPDATE_GRUB = "update-grub"  # (tests: a stand-in)
+ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"  # (pkexec's PATH)
+
+
+def kernel() -> dict:
+    """Each option: on in the running kernel (now), on at the next boot (next), and the other
+    GRUB files that set it (elsewhere: PipeBoard's toggle cannot take it off). No root needed;
+    /boot/grub/grub.cfg is root-only, so the next boot is read from GRUB's sources."""
+    now = _read(Path("/proc/cmdline")).split()
+    files = [GRUB, *sorted(GRUB.parent.glob("grub.d/*.cfg"))]
+    said = {str(f): " ".join(ln for ln in _read(f).splitlines() if not ln.lstrip().startswith("#"))
+            for f in files}
+    ours = said.pop(str(GRUB.parent / "grub.d" / OWN_GRUB), "")
+    has = lambda o, t: re.search(rf"(?<![^\s\"']){re.escape(o)}(?![^\s\"'])", t)  # noqa: E731
+    return {"opts": [{"name": o, "now": o in now, "ours": bool(has(o, ours)),
+                      "elsewhere": [f for f, t in said.items() if has(o, t)]}
+                     for o in KERNEL_OPTS],
+            "grub": GRUB.exists() and bool(shutil.which(UPDATE_GRUB, path=ROOT_PATH))}
+
+
+def check_kernel(opts) -> list[str]:
+    """The options PipeBoard's snippet should set, or ValueError: only KERNEL_OPTS."""
+    if not isinstance(opts, list) or not set(opts) <= set(KERNEL_OPTS):
+        raise ValueError("Kernel options: a list of " + ", ".join(KERNEL_OPTS) + ".")
+    return [o for o in KERNEL_OPTS if o in opts]
+
+
+def own_grub(opts: list[str]) -> str:
+    """PipeBoard's GRUB snippet: these options added to the default boot (checked by
+    check_kernel). GRUB sources it as shell, so its own variable stays unexpanded here."""
+    return ("# Written by PipeBoard (Audio engine): low-latency kernel options.\n"
+            f'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT {" ".join(opts)}"\n')
+
+
 def helper_script() -> str:
-    """The root helper, fixed text: one line per change on its stdin (the names of the states to
-    turn off, space-separated; empty = all on), "ok" or "bad" back. Exactly those states off on
-    every CPU, every other one (but POLL) on; at boot PipeBoard's own rule for them (none if
-    none), every other rule touching idle states set aside (renamed, never deleted). It checks
-    each line itself: only letters, digits and . _ - pass, so no line can become a command."""
+    """The root helper, fixed text: one line per change on its stdin, "ok" or "bad" back.
+    `idle <names>` (space-separated; none = all on): exactly those states off on every CPU,
+    every other one (but POLL) on; at boot PipeBoard's own rule for them (none if none), every
+    other rule touching idle states set aside (renamed, never deleted).
+    `kernel <options>` (of KERNEL_OPTS; none = none): PipeBoard's GRUB snippet with exactly
+    those (none if none), then update-grub; if that fails, the snippet as it was and "failed".
+    It checks each line itself: only letters, digits and . _ - (and = for kernel options, each
+    one of a fixed list) pass, so no line can become a command."""
     rule = RULES / OWN_RULE
     head = "# Written by PipeBoard (Audio engine): these CPU idle states stay off."
-    return f"""while IFS= read -r off; do
-  case "$off" in *[!A-Za-z0-9_.\\ -]*) echo bad; continue;; esac
-  for d in {CPUS}/cpu[0-9]*/cpuidle/state*; do
-    n=$(cat "$d/name"); [ "$n" = POLL ] && continue
-    v=0; for o in $off; do [ "$n" = "$o" ] && v=1; done; echo $v > "$d/disable"
-  done
-  for r in {RULES}/*.rules; do
-    [ "$r" = {rule} ] && continue; grep -qs cpuidle "$r" && mv "$r" "$r{ASIDE}"
-  done
-  if [ -n "$off" ]; then
-    pat=$(echo $off | tr ' ' '|')
-    r1='ACTION=="add", SUBSYSTEM=="cpu", KERNEL=="cpu[0-9]*", '
-    r2="RUN+=\\"/bin/sh -c 'for d in /sys/devices/system/cpu/%k/cpuidle/state*; do "
-    r3="case \\$(cat \\$d/name) in $pat) echo 1 > \\$d/disable;; esac; done'\\""
-    printf '%s\n%s%s%s\n' '{head}' "$r1" "$r2" "$r3" > {rule}
-  else
-    rm -f {rule}
-  fi
-  echo ok
+    snippet = GRUB.parent / "grub.d" / OWN_GRUB
+    khead, kline = own_grub(["X"]).splitlines()
+    kline = kline.replace("$", "\\$").replace('"', '\\"').replace(" X", " $opts")
+    allowed = "|".join(KERNEL_OPTS)
+    return f"""while read -r what rest; do
+  case "$what" in
+  idle)
+    off=$rest
+    case "$off" in *[!A-Za-z0-9_.\\ -]*) echo bad; continue;; esac
+    for d in {CPUS}/cpu[0-9]*/cpuidle/state*; do
+      n=$(cat "$d/name"); [ "$n" = POLL ] && continue
+      v=0; for o in $off; do [ "$n" = "$o" ] && v=1; done; echo $v > "$d/disable"
+    done
+    for r in {RULES}/*.rules; do
+      [ "$r" = {rule} ] && continue; grep -qs cpuidle "$r" && mv "$r" "$r{ASIDE}"
+    done
+    if [ -n "$off" ]; then
+      pat=$(echo $off | tr ' ' '|')
+      r1='ACTION=="add", SUBSYSTEM=="cpu", KERNEL=="cpu[0-9]*", '
+      r2="RUN+=\\"/bin/sh -c 'for d in /sys/devices/system/cpu/%k/cpuidle/state*; do "
+      r3="case \\$(cat \\$d/name) in $pat) echo 1 > \\$d/disable;; esac; done'\\""
+      printf '%s\\n%s%s%s\\n' '{head}' "$r1" "$r2" "$r3" > {rule}
+    else
+      rm -f {rule}
+    fi
+    echo ok;;
+  kernel)
+    opts=$rest
+    case "$opts" in *[!a-z_=\\ ]*) echo bad; continue;; esac
+    ok=1; for o in $opts; do case "$o" in {allowed}) ;; *) ok=;; esac; done
+    [ -z "$ok" ] && {{ echo bad; continue; }}
+    was=$(cat {snippet} 2>/dev/null); mkdir -p {snippet.parent}
+    if [ -n "$opts" ]; then
+      printf '%s\\n%s\\n' '{khead}' "{kline}" > {snippet}
+    else
+      rm -f {snippet}
+    fi
+    if {UPDATE_GRUB} >/dev/null 2>&1; then echo ok; else
+      if [ -n "$was" ]; then printf '%s\\n' "$was" > {snippet}; else rm -f {snippet}; fi
+      echo failed
+    fi;;
+  *) echo bad;;
+  esac
 done
 """
 
 
-class IdleHelper:
-    """The root helper for CPU idle states, started at the first change (one password prompt)
-    and kept while PipeBoard runs (owner: "require the password once"); it ends with it (its
-    stdin closes). `command`: how it is run (tests run it without root)."""
+class RootHelper:
+    """The root helper (helper_script) for CPU idle states and kernel options, started at the
+    first change (one password prompt) and kept while PipeBoard runs (owner: "require the
+    password once"); it ends with it (its stdin closes). `command`: how it is run (tests run it
+    without root)."""
 
     def __init__(self, command: tuple = ("pkexec", "/bin/sh", "-c")):
         self.command, self.proc = command, None
 
-    async def set(self, off: list[str]) -> str | None:
+    async def idle(self, off: list[str]) -> str | None:
         """These states off, the rest on; a complaint, or None."""
         assert all(STATE_NAME.match(n) for n in off)
+        return await self._ask("idle " + " ".join(off))
+
+    async def kernel(self, opts: list[str]) -> str | None:
+        """PipeBoard's GRUB snippet with these options (none: no snippet); a complaint, or None."""
+        assert set(opts) <= set(KERNEL_OPTS)
+        return await self._ask("kernel " + " ".join(opts))
+
+    async def _ask(self, line: str) -> str | None:
         if not self.proc or self.proc.returncode is not None:
-            self.proc = await asyncio.create_subprocess_exec(
-                *self.command, helper_script(), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                self.proc = await asyncio.create_subprocess_exec(
+                    *self.command, helper_script(), stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            except OSError:
+                self.proc = None
+                return f"Not changed: {self.command[0]} could not be run (is it installed?)."
         try:
-            self.proc.stdin.write((" ".join(off) + "\n").encode())
+            self.proc.stdin.write((line + "\n").encode())
             await self.proc.stdin.drain()
             said = (await asyncio.wait_for(self.proc.stdout.readline(), 180)).decode().strip()
         except (TimeoutError, ConnectionError):
             said = ""
         if said == "ok":
             return None
+        if said == "failed":  # (the helper stays: the next change needs no password)
+            return "Not changed: update-grub failed; the boot options are as they were."
         await self.stop()
         return ("Not changed: the password prompt was closed, or no prompt could be shown."
                 if not said else "Not changed: the helper refused the request.")

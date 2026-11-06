@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "tests" / "fixtures")]
 import asyncio  # noqa: E402
 import json  # noqa: E402
+import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 
 import scenarios  # noqa: E402
@@ -403,15 +404,26 @@ def check_headroom():
     pcms = engine.read(scenarios.load("machine"))["pcms"]
     assert pcms == {"out": "/proc/asound/card1/pcm0p/sub0", "in": "/proc/asound/card1/pcm0c/sub0"}, pcms
 
+    class Page:
+        def __init__(self):
+            self.got = []
+
+        async def send_str(self, text):
+            self.got.append(json.loads(text))
+
     async def on_off():
         with tempfile.TemporaryDirectory() as tmp:
             board = server.Board(pipewire.Fixture(scenarios.load("machine")), Path(tmp))
-            page = object()
+            board.head_hist["out"].extend([1.2, 0.9])  # (sampled while no window was open)
+            page = Page()
             await board.op_headroom(page, {"on": True})
-            assert board.head_task, "a page shows it: sampled"
-            await board.forget(page)
+            assert page.got and page.got[0]["out"] == [1.2, 0.9], "the panel opens with the minute so far"
+            await board.op_headroom(page, {"on": False})
+            assert page not in board.head_pages
+            task = asyncio.create_task(board.watch_headroom())
             await asyncio.sleep(0.6)
-            assert board.head_task is None, "no page shows it: it stops"
+            task.cancel()
+            assert list(board.head_hist["out"]) == [1.2, 0.9], "a fixture has no buffers: nothing sampled"
     asyncio.run(on_off())
 
 
@@ -508,24 +520,83 @@ def check_cstates():
 async def _idle_session(engine, cpus, rules, mine):
     """One helper, several changes (one password prompt in real life), and a line no request can
     make refused by the helper itself."""
-    helper = engine.IdleHelper(("sh", "-c"))
+    helper = engine.RootHelper(("sh", "-c"))
     states = lambda: {s["name"]: s["off"] for s in engine.cstates()["states"]}  # noqa: E731
-    assert await helper.set(["C2"]) is None
+    assert await helper.idle(["C2"]) is None
     first = helper.proc
     assert states() == {"C1": False, "C2": True, "C3": False}, "exactly the ones asked, on every CPU"
     assert (cpus / "cpu1/cpuidle/state2/disable").read_text().strip() == "1"
     assert (cpus / "cpu1/cpuidle/state0/disable").read_text().strip() == "0", "POLL left alone"
     assert not mine.exists() and (rules / (mine.name + engine.ASIDE)).read_text().startswith("# the user's own")
     assert (rules / engine.OWN_RULE).read_text() == engine.own_rule(["C2"]), "PipeBoard's rule, exactly"
-    assert await helper.set(["C1", "C3"]) is None and helper.proc is first, "the same helper"
+    assert await helper.idle(["C1", "C3"]) is None and helper.proc is first, "the same helper"
     assert (rules / engine.OWN_RULE).read_text() == engine.own_rule(["C1", "C3"])
-    assert await helper.set([]) is None and states() == {"C1": False, "C2": False, "C3": False}
+    assert await helper.idle([]) is None and states() == {"C1": False, "C2": False, "C3": False}
     assert not (rules / engine.OWN_RULE).exists()
-    helper.proc.stdin.write(b"C3; touch /tmp/pipeboard-pwned\n")
+    helper.proc.stdin.write(b"idle C3; touch /tmp/pipeboard-pwned\n")
     await helper.proc.stdin.drain()
     assert (await helper.proc.stdout.readline()).decode().strip() == "bad"
     assert not Path("/tmp/pipeboard-pwned").exists()
     await helper.stop()
+
+
+def check_kernel():
+    """Low-latency kernel options: PipeBoard's GRUB snippet written and removed by the same root
+    helper (run without root on a made-up /etc/default), GRUB sourcing it gets the options; one set
+    in the user's own GRUB file is found; nothing else gets through."""
+    from pipeboard import engine
+    with tempfile.TemporaryDirectory() as tmp:
+        grub = Path(tmp) / "grub"
+        grub.write_text('GRUB_CMDLINE_LINUX_DEFAULT="quiet rcu_nocbs=all"\n# preempt=full\n')
+        (Path(tmp) / "grub.d").mkdir()
+        real = engine.GRUB, engine.UPDATE_GRUB
+        engine.GRUB, engine.UPDATE_GRUB = grub, "true"
+        try:
+            asyncio.run(_kernel_session(engine, grub))
+            assert engine.check_kernel(["rcu_nocbs=all", "preempt=full"]) == list(engine.KERNEL_OPTS)
+            for bad in (["preempt=none"], "preempt=full", [1], ["preempt=full; reboot"]):
+                try:
+                    engine.check_kernel(bad)
+                except ValueError:
+                    continue
+                raise AssertionError(f"accepted {bad!r}")
+        finally:
+            engine.GRUB, engine.UPDATE_GRUB = real
+
+
+async def _kernel_session(engine, grub):
+    snippet = grub.parent / "grub.d" / engine.OWN_GRUB
+    state = lambda: {x["name"]: (x["ours"], x["elsewhere"]) for x in engine.kernel()["opts"]}  # noqa: E731
+    assert state() == {"preempt=full": (False, []), "rcu_nocbs=all": (False, [str(grub)])}, \
+        "the user's own setting found, a comment is not"
+    helper = engine.RootHelper(("sh", "-c"))
+    assert await helper.kernel(["preempt=full"]) is None
+    assert snippet.read_text() == engine.own_grub(["preempt=full"]), "PipeBoard's snippet, exactly"
+    assert state()["preempt=full"] == (True, [])
+    sourced = subprocess.run(["sh", "-c", f'. {grub}; . {snippet}; echo "$GRUB_CMDLINE_LINUX_DEFAULT"'],
+                             capture_output=True, text=True).stdout.strip()
+    assert sourced == "quiet rcu_nocbs=all preempt=full", sourced
+    first = helper.proc
+    assert await helper.kernel(list(engine.KERNEL_OPTS)) is None and helper.proc is first
+    assert await helper.kernel([]) is None and helper.proc is first and not snippet.exists()
+    helper.proc.stdin.write(b"kernel preempt=full $(touch /tmp/pipeboard-pwned)\n")
+    await helper.proc.stdin.drain()
+    assert (await helper.proc.stdout.readline()).decode().strip() == "bad"
+    helper.proc.stdin.write(b"kernel init=/bin/sh\n")
+    await helper.proc.stdin.drain()
+    assert (await helper.proc.stdout.readline()).decode().strip() == "bad", "only the fixed options"
+    assert not Path("/tmp/pipeboard-pwned").exists() and not snippet.exists()
+    assert await helper.kernel(["rcu_nocbs=all"]) is None
+    engine.UPDATE_GRUB = "false"  # (update-grub failing: the snippet as it was)
+    await helper.stop()
+    assert (await helper.kernel(["preempt=full"])).startswith("Not changed: update-grub failed")
+    assert snippet.read_text() == engine.own_grub(["rcu_nocbs=all"])
+    assert await helper.kernel([]) is not None and snippet.exists()
+    await helper.stop()
+    engine.UPDATE_GRUB = "pipeboard-no-such-update-grub"
+    assert not engine.kernel()["grub"], "no update-grub: nothing offered"
+    missing = engine.RootHelper(("pipeboard-no-such-pkexec",))
+    assert "could not be run" in await missing.kernel([]), "no pkexec: a complaint, no crash"
 
 
 def check_missing():
@@ -2009,6 +2080,7 @@ def main():
     check_moment()
     check_headroom()
     check_cstates()
+    check_kernel()
     check_engine()
     check_missing()
     check_scope_math()

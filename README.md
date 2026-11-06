@@ -62,7 +62,7 @@ anything dropped out while the panel was open.
 
 The clock readout in the bar opens the **Audio engine**: the block size and the interface's safety
 margin, with the round trip they make, and under Advanced the scheduling (interrupts or timer),
-the CPU's deep idle states, and PipeWire's priorities. A change is tried for a minute and goes
+the CPU's deep idle states, the low-latency kernel options, and PipeWire's priorities. A change is tried for a minute and goes
 back by itself unless you keep it.
 
 <img src="docs/images/engine.png" alt="The Audio engine panel, Advanced open: block 256, a 2-block margin, 8.0 ms round trip, timer scheduling, idle states, priorities" width="460">

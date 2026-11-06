@@ -297,6 +297,9 @@ SHOTS = {
                           "PB.debug.clickBoard(760, 820)"),
     "engine": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, margin: 256})"),
     "engine-advanced": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, margin: 256, prio: 90, tsched: true}, true)"),
+    "engine-kernel": ("machine", BIG, None, "PB.debug.engineOpen({}, true) || PB.debug.fakeHeadroom('ok', {kernel: {grub: true, opts: ["
+                      "{name: 'preempt=full', now: false, ours: true, elsewhere: []}, "
+                      "{name: 'rcu_nocbs=all', now: true, ours: false, elsewhere: ['/etc/default/grub']}]}})"),
     "engine-same": ("machine", BIG, None, "PB.debug.engineOpen()"),
     "engine-headroom": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom()"),
     "engine-headroom-close": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('close')"),
