@@ -1293,6 +1293,8 @@ class Board:
             await self.broadcast(self.state())
             if error:
                 await toast(page, error)
+        if not self.root.running:  # (a password was given this run: no prompt, no toast)
+            await toast(page, "Asking for your password…", "info")
         asyncio.create_task(change())
         return None
 
@@ -1313,6 +1315,8 @@ class Board:
             await self.broadcast(self.state())
             if error:
                 await toast(page, error)
+        if not self.root.running:  # (a password was given this run: no prompt, no toast)
+            await toast(page, "Asking for your password…", "info")
         asyncio.create_task(change())
         return None
 

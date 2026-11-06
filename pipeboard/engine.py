@@ -346,6 +346,11 @@ class RootHelper:
     def __init__(self, command: tuple = ("pkexec", "/bin/sh", "-c")):
         self.command, self.proc = command, None
 
+    @property
+    def running(self) -> bool:
+        """Started and not ended: a change asks no password."""
+        return bool(self.proc and self.proc.returncode is None)
+
     async def idle(self, off: list[str]) -> str | None:
         """These states off, the rest on; a complaint, or None."""
         assert all(STATE_NAME.match(n) for n in off)
@@ -357,7 +362,7 @@ class RootHelper:
         return await self._ask("kernel " + " ".join(opts))
 
     async def _ask(self, line: str) -> str | None:
-        if not self.proc or self.proc.returncode is not None:
+        if not self.running:
             try:
                 self.proc = await asyncio.create_subprocess_exec(
                     *self.command, helper_script(), stdin=asyncio.subprocess.PIPE,

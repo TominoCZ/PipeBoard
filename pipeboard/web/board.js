@@ -2335,7 +2335,6 @@ const PB = (() => {
       b.addEventListener("click", () => {
         S.idlePending = x.name;  // (until the server's answer: no second click on a stale chip)
         send({ op: "cstates", off: x.off ? off.filter((n) => n !== x.name) : [...off, x.name] });
-        toast("Asking for your password…", "info");
         drawEngine();
       });
       return b;
@@ -2363,7 +2362,6 @@ const PB = (() => {
       b.addEventListener("click", () => {
         S.kernelPending = x.name;  // (until the server's answer, as for the idle states)
         send({ op: "kernel", on: x.ours ? on.filter((n) => n !== x.name) : [...on, x.name] });
-        toast("Asking for your password…", "info");
         drawEngine();
       });
       return b;

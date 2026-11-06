@@ -577,6 +577,7 @@ async def _kernel_session(engine, grub):
                              capture_output=True, text=True).stdout.strip()
     assert sourced == "quiet rcu_nocbs=all preempt=full", sourced
     first = helper.proc
+    assert helper.running, "a password given: the next change asks none (and says nothing)"
     assert await helper.kernel(list(engine.KERNEL_OPTS)) is None and helper.proc is first
     assert await helper.kernel([]) is None and helper.proc is first and not snippet.exists()
     helper.proc.stdin.write(b"kernel preempt=full $(touch /tmp/pipeboard-pwned)\n")
