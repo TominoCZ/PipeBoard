@@ -11,6 +11,10 @@ import os
 from pathlib import Path
 
 HISTORY = 12  # earlier names kept per card
+# Card positions and Tidy's portal spots are whole cells (owner: zoom only changes how the board
+# is drawn, and Tidy cannot drift on float error). A cell is the page's 14 px grid step. A file
+# without the mark is from before and holds pixels: converted once, on reading it.
+CELL, CELLS = 14, "cells"
 
 
 def config_dir() -> Path:
@@ -29,6 +33,21 @@ def load(path: Path) -> dict:
         path.replace(path.with_suffix(".broken.json"))
         ws = {}
     ws.setdefault("cards", {})
+    return in_cells(ws)
+
+
+def in_cells(ws: dict) -> dict:
+    """A board or profile with its positions in cells (pixels from before converted, once)."""
+    if ws.get("grid") != CELLS:
+        cell = lambda v: round(v / CELL) if isinstance(v, int | float) else v  # noqa: E731
+        for card in ws.get("cards", {}).values():
+            if isinstance(card, dict):
+                card.update({k: cell(card[k]) for k in ("x", "y") if k in card})
+        tidy = [how for how in ws.get("portals", {}).values() if isinstance(how, dict)]
+        for how, k in ((how, k) for how in tidy for k in ("out", "in")):
+            if isinstance(how.get(k), list):
+                how[k] = [cell(v) for v in how[k]]
+        ws["grid"] = CELLS
     return ws
 
 
@@ -64,7 +83,7 @@ def remember(card: dict, name: str) -> None:
 def place(cards: dict, moved: dict) -> None:
     for key, p in moved.items():
         if isinstance(p, dict) and all(isinstance(p.get(k), int | float) for k in ("x", "y")):
-            cards.setdefault(str(key), {}).update(x=round(p["x"]), y=round(p["y"]))
+            cards.setdefault(str(key), {}).update(x=round(p["x"]), y=round(p["y"]))  # (cells)
 
 
 def _view(ws: dict, op: dict) -> bool:
@@ -76,7 +95,8 @@ def _view(ws: dict, op: dict) -> bool:
 
 def _portal(how) -> str | dict | None:
     """A portal as the page sends it, made safe: "hand" (badges by the sockets), or a Tidy's with
-    where its two badges sit ({"how": "tidy", "out": [x, y] | None, "in": …}); else None."""
+    where its two badges sit, in cells ({"how": "tidy", "out": [x, y] | None, "in": …});
+    else None."""
     if how == "hand":
         return how
     def spot(p):

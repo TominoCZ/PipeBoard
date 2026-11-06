@@ -1792,6 +1792,21 @@ async def check_server():
         await client.close()
 
 
+def check_cells():
+    """Positions are whole cells (owner): a board from before (pixels, no mark) is converted once,
+    on reading it; a marked one is left alone; what a snapshot writes is marked."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "workspace.json"
+        path.write_text(json.dumps({"cards": {"a": {"x": 70, "y": 84}},
+                                    "portals": {"w": {"how": "tidy", "out": [140, 98], "in": None}, "h": "hand"}}))
+        ws = workspace.load(path)
+        assert ws["cards"]["a"] == {"x": 5, "y": 6} and ws["portals"] == {"w": {"how": "tidy", "out": [10, 7], "in": None}, "h": "hand"}, ws
+        workspace.save(path, ws)
+        assert workspace.load(path)["cards"]["a"] == {"x": 5, "y": 6}, "a marked board is not converted again"
+    assert profiles.snapshot({"cards": [], "wires": []}, {"cards": {"a": {"x": 5, "y": 6}}})["grid"] == "cells"
+    assert profiles._moved({"x": 5, "y": 6}, {"x": 6, "y": 6}) and not profiles._moved({"x": 5, "y": 6}, {"x": 5, "y": 6})
+
+
 def main():
     model = graph.build(scenarios.load("machine"))
     cards = {c["key"]: c for c in model["cards"]}
@@ -1801,6 +1816,7 @@ def main():
     check_pedal()
     check_problems()
     check_workspace()
+    check_cells()
     check_streams()
     check_gain_math()
     check_virtual_source()

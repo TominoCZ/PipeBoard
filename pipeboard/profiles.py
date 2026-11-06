@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 import re
 
-from pipeboard import dynamics, graph
+from pipeboard import dynamics, graph, workspace
 
 DEFAULT = "Default"
 # What the user sets on a card; "parked": the wires they made, set aside while it is off the board.
@@ -47,7 +47,8 @@ def snapshot(model: dict, board: dict) -> dict:
             if (w["from"][0] not in live or w["to"][0] not in live) and w["from"][0] and w["to"][0]]
     wires = [_wire(w) for w in model["wires"]] + copy.deepcopy(gone)
     ids = {f"{w['from'][0]}:{w['from'][1]}>{w['to'][0]}:{w['to'][1]}" for w in wires}
-    return {"version": 1, "cards": cards, "wires": wires, "view": board.get("view"),
+    return {"version": 1, "grid": workspace.CELLS, "cards": cards, "wires": wires,
+            "view": board.get("view"),
             "devices": copy.deepcopy(board.get("devices", {})),
             "made": [i for i in board.get("made", []) if i in ids],  # wires the user made here
             "cut": [i for i in board.get("cut", []) if i not in ids],  # and unplugged here
@@ -185,7 +186,8 @@ def _settings(dev: dict) -> tuple:
 
 
 def _moved(a: dict, b: dict) -> bool:
-    return "x" in a and "x" in b and (abs(a["x"] - b["x"]) > 2 or abs(a["y"] - b["y"]) > 2)
+    """Moved by a cell or more (positions are whole cells)."""
+    return "x" in a and "x" in b and (a["x"], a["y"]) != (b["x"], b["y"])
 
 
 def _new_socket(old: dict, new: dict, side: str, sock: str) -> dict | None:

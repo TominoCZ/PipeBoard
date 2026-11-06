@@ -48,7 +48,10 @@ const PB = (() => {
   const visible = () => S.model.cards.filter((c) => !isHidden(c));
   const titleOf = (c) => saved(c.key).nick || c.title;
   // Cards sit on the board's grid: every 14 px, so corners land on the dots or halfway between.
-  const GRID = 14, snap = (v) => Math.round(v / GRID) * GRID;
+  // Positions and card sizes are whole cells (owner: zoom only changes how the board is drawn,
+  // and Tidy cannot drift on float error). A cell is GRID px; cell [0, 0] is the window's centre
+  // on a new board, and Tidy centres the board on it. Pixels only where something is drawn.
+  const GRID = 14, snap = (v) => Math.round(v / GRID) * GRID, px = (c) => c * GRID, cell = (v) => Math.round(v / GRID);
   // The view as drawn: its offset in whole pixels (applyView).
   const toWorld = (sx, sy) => ({ x: (sx - Math.round(S.view.x)) / S.view.z, y: (sy - Math.round(S.view.y)) / S.view.z });
   const toScreen = (p) => ({ x: p.x * S.view.z + Math.round(S.view.x), y: p.y * S.view.z + Math.round(S.view.y) });
@@ -130,7 +133,11 @@ const PB = (() => {
     if (placing && Object.entries(placing).every(([k, q]) => saved(k).x === q.x && saved(k).y === q.y)) S.placing = null;
     render();
     if (S.ws.view && first) { S.view = { ...S.ws.view }; applyView(); }
-    else if (first) fit(false);
+    else if (first) {  // a new board: cell [0, 0] in the window's centre (owner), then fit what is there
+      S.view = { x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2), z: 1 };
+      applyView(false);
+      fit(false);
+    }
     const eqKey = Object.keys(S.ws.devices || {}).find((k) => EQ.isOpen(k));
     if (eqKey) EQ.sync(eqKey, S.ws.devices[eqKey]);
     else if (S.eqOpen && !S.ws.devices?.[S.eqOpen]) EQ.close();  // it was deleted
@@ -593,7 +600,7 @@ const PB = (() => {
   // {insert: wireId} put the new device in the middle of that wire.
   function makeDevice(fields, ctx = {}) {
     const at = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
-    const where = { x: snap(at.x), y: snap(at.y) };
+    const where = { x: cell(at.x), y: cell(at.y) };  // (cells)
     if (ctx.insert) send({ op: "insert-device", wire: ctx.insert, ...fields, ...where });
     else send({ op: "create-device", ...fields, ...where, connect: ctx.connect });
   }
@@ -645,13 +652,13 @@ const PB = (() => {
       // divided by the zoom it carried float noise that changed with the zoom (154.0000088 here,
       // 153.9999952 there), and Tidy's centring sat exactly half a grid step: it rounded one way
       // and, after its Fit changed the zoom, the other (owner: a card moved back and forth).
-      S.sizes[key] = { w: el.offsetWidth, h: el.offsetHeight };
+      S.sizes[key] = { w: Math.ceil(el.offsetWidth / GRID), h: Math.ceil(el.offsetHeight / GRID) };  // (cells)
     }
   }
 
   function placeCard(key) {
     const p = S.pos[key], el = S.els[key];
-    if (p && el) el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+    if (p && el) el.style.transform = `translate(${px(p.x)}px, ${px(p.y)}px)`;
   }
 
   // ---- layout: columns by signal flow -------------------------------------------------------
@@ -708,18 +715,17 @@ const PB = (() => {
     const cols = [];
     for (const c of cards) (cols[d[c.key]] = cols[d[c.key]] || []).push(c);
     const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4 };
-    // Gaps of whole grid steps from a start on the grid: every card lands exactly, so a column's
-    // rows are evenly spaced (owner; 26 px snapped card by card gave gaps of 14 or 28).
-    const ROW_GAP = 2 * GRID, COL_GAP = 9 * GRID;
+    // All in whole cells: every card lands exactly, a column's rows evenly spaced (owner).
+    const ROW_GAP = 2, COL_GAP = 9;
     const list = cols.filter(Boolean), at = {};
     list.forEach((col, i) => col.forEach((c) => { at[c.key] = i; }));
     const wide = list.map((col) => Math.max(...col.map((c) => S.sizes[c.key].w)));
     const high = list.map((col) => col.reduce((t, c) => t + S.sizes[c.key].h + ROW_GAP, 0));
     const bands = fold(wide, high, wires.map((w) => [at[w.from[0]], at[w.to[0]]]).filter(([a, b]) => a !== undefined && b !== undefined));
     const placed = {}, rows = [], rowOf = {}, edge = {};
-    let top = 80;
+    let top = 0;
     bands.forEach(([from, to], r) => {
-      let x = snap(60 + (r ? PORTAL_COL : 0));  // a later row leaves room for its column of entry portals
+      let x = r ? PORTAL_COL : 0;  // a later row leaves room for its column of entry portals
       const tallest = Math.max(...high.slice(from, to)), left = x;
       for (const col of list.slice(from, to)) {
         const bary = (c) => {
@@ -727,9 +733,9 @@ const PB = (() => {
           return ys.length ? ys.reduce((a, b) => a + b) / ys.length : 1e6 + order[c.kind] * 1e3;
         };
         col.sort((a, b) => bary(a) - bary(b) || order[a.kind] - order[b.kind] || a.title.localeCompare(b.title));
-        let y = snap(top + (tallest - high[list.indexOf(col)]) / 2);
+        let y = top + Math.floor((tallest - high[list.indexOf(col)]) / 2);
         for (const c of col) {
-          placed[c.key] = { x: snap(x), y: snap(y) };  // (sizes are measured: float noise)
+          placed[c.key] = { x, y };
           rowOf[c.key] = r;
           edge[c.key] = (col === list[from] ? "first" : "") + (col === list[to - 1] ? "last" : "");
           y += S.sizes[c.key].h + ROW_GAP;
@@ -737,8 +743,13 @@ const PB = (() => {
         x += Math.max(...col.map((c) => S.sizes[c.key].w)) + COL_GAP;
       }
       rows.push({ left, right: x - COL_GAP });
-      top = snap(top + tallest + ROW_BAND_GAP);
+      top += tallest + ROW_BAND_GAP;
     });
+    // Centred on cell [0, 0] (owner): shifted by whole cells, half the board's size each way.
+    const all = Object.entries(placed), dx = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.x + S.sizes[k].w))) / 2);
+    const dy = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.y + S.sizes[k].h))) / 2);
+    for (const [, q] of all) { q.x += dx; q.y += dy; }
+    for (const row of rows) { row.left += dx; row.right += dx; }
     S.fold = { rows, rowOf, edge };
     for (const k of keys) S.pos[k] = placed[k];
     return keys;
@@ -748,10 +759,10 @@ const PB = (() => {
   // row would be far wider than the window, at the cuts the fewest wires cross; the rows stacked.
   // Each candidate count of rows is scored by how near its shape is to the window's and by how many
   // wires become portals. wide/high: each column's size; links: [column from, column to] per wire.
-  const PORTAL_COL = 8 * GRID, ROW_BAND_GAP = 7 * GRID;  // (a portal column: room for its badges off the cards)
+  const PORTAL_COL = 8, ROW_BAND_GAP = 7;  // (cells; a portal column: room for its badges off the cards)
   function fold(wide, high, links) {
     const n = wide.length, aspect = innerWidth / Math.max(1, innerHeight - 120);
-    const span = (a, b) => wide.slice(a, b).reduce((t, w) => t + w + 9 * GRID, 0);
+    const span = (a, b) => wide.slice(a, b).reduce((t, w) => t + w + 9, 0);  // (cells, like layout's COL_GAP)
     const crossing = (cuts) => links.filter(([a, b]) => cuts.some((c) => (a < c) !== (b < c))).length;
     const shape = (cuts) => {
       const edges = [0, ...cuts, n], bands = edges.slice(1).map((e, i) => [edges[i], e]);
@@ -788,15 +799,15 @@ const PB = (() => {
       if (rf === undefined || rt === undefined || rf === rt || w.ghost) continue;
       const a = anchor(...w.from), b = anchor(...w.to);
       if (!a || !b) continue;
-      const out = edge[w.from[0]]?.includes("last") ? [snap(rows[rf].right + PORTAL_COL / 2), a.y] : null;
-      const into = edge[w.to[0]]?.includes("first") ? [snap(rows[rt].left - PORTAL_COL / 2), b.y] : null;
+      const out = edge[w.from[0]]?.includes("last") ? [rows[rf].right + PORTAL_COL / 2, cell(a.y)] : null;  // (cells: sockets sit on the grid)
+      const into = edge[w.to[0]]?.includes("first") ? [rows[rt].left - PORTAL_COL / 2, cell(b.y)] : null;
       set[w.id] = { how: "tidy", out, in: into };
       if (out) (cols[`o${rf}`] ||= []).push([out, b.y]);  // (with the other end's height: from one
       if (into) (cols[`i${rt}`] ||= []).push([into, a.y]);  //  socket, in the order they arrive: no crossing)
     }
     for (const col of Object.values(cols)) {
       col.sort(([p, py], [q, qy]) => p[1] - q[1] || py - qy);
-      for (let i = 1; i < col.length; i++) col[i][0][1] = Math.max(col[i][0][1], col[i - 1][0][1] + 28);
+      for (let i = 1; i < col.length; i++) col[i][0][1] = Math.max(col[i][0][1], col[i - 1][0][1] + 2);  // (two cells apart)
     }
     return set;
   }
@@ -818,9 +829,9 @@ const PB = (() => {
     const want = Object.fromEntries(keys.map((k) => [k, S.pos[k]]));
     for (const k of keys) delete S.pos[k];
     const boxes = Object.keys(S.pos).filter((k) => S.sizes[k]).map((k) => ({ ...S.pos[k], ...S.sizes[k] }));
-    const hits = (p, s) => boxes.some((b) => p.x < b.x + b.w + GRID && b.x < p.x + s.w + GRID
-                                          && p.y < b.y + b.h + GRID && b.y < p.y + s.h + GRID);
-    const step = 2 * GRID, left = Math.min(Infinity, ...boxes.map((b) => b.x));
+    const hits = (p, s) => boxes.some((b) => p.x < b.x + b.w + 1 && b.x < p.x + s.w + 1
+                                          && p.y < b.y + b.h + 1 && b.y < p.y + s.h + 1);  // (cells: a cell clear)
+    const step = 2, left = Math.min(Infinity, ...boxes.map((b) => b.x));
     for (const k of keys) {
       const s = S.sizes[k], w = want[k];
       let at = w;
@@ -854,8 +865,8 @@ const PB = (() => {
 
   // ---- wires --------------------------------------------------------------------------------
   function anchor(key, sock) {
-    const p = S.pos[key], o = S.offsets[key]?.[sock];
-    return p && o ? { x: p.x + o.x, y: p.y + o.y } : null;
+    const p = S.pos[key], o = S.offsets[key]?.[sock];  // (drawn: pixels)
+    return p && o ? { x: px(p.x) + o.x, y: px(p.y) + o.y } : null;
   }
 
   function curve(a, b) {
@@ -993,8 +1004,8 @@ const PB = (() => {
       const w = we.w, a = we.ends && anchor(...w.from), b = we.ends && anchor(...w.to);
       if (!a || !b) continue;
       const how = S.ws.portals?.[w.id], tidy = how && typeof how === "object";
-      spots.push({ we, i: 0, sock: a, x: tidy && how.out ? how.out[0] : a.x + PORTAL_OUT, y: tidy && how.out ? how.out[1] : a.y, id: `${w.id}>0` },
-                 { we, i: 1, sock: b, x: tidy && how.in ? how.in[0] : b.x - PORTAL_OUT, y: tidy && how.in ? how.in[1] : b.y, id: `${w.id}>1` });
+      spots.push({ we, i: 0, sock: a, x: tidy && how.out ? px(how.out[0]) : a.x + PORTAL_OUT, y: tidy && how.out ? px(how.out[1]) : a.y, id: `${w.id}>0` },
+                 { we, i: 1, sock: b, x: tidy && how.in ? px(how.in[0]) : b.x - PORTAL_OUT, y: tidy && how.in ? px(how.in[1]) : b.y, id: `${w.id}>1` });
     }
     spots.sort((p, q) => p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1));
     // (Pushed below one, it may now touch another: again. Nearer than the gap less half a pixel:
@@ -1354,7 +1365,8 @@ const PB = (() => {
   }
 
   function bounds(keys) {
-    const boxes = keys.filter((k) => S.pos[k] && S.sizes[k]).map((k) => ({ ...S.pos[k], ...S.sizes[k] }));
+    const boxes = keys.filter((k) => S.pos[k] && S.sizes[k])
+      .map((k) => ({ x: px(S.pos[k].x), y: px(S.pos[k].y), w: px(S.sizes[k].w), h: px(S.sizes[k].h) }));  // (pixels: the view)
     if (!boxes.length) return null;
     const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
     const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
@@ -1397,7 +1409,7 @@ const PB = (() => {
     }
     if (head && e.button === 0 && !e.target.isContentEditable) {
       const key = head.parentElement.dataset.key, p = toWorld(e.clientX, e.clientY);
-      S.drag = { kind: "card", key, dx: p.x - S.pos[key].x, dy: p.y - S.pos[key].y, moved: false };
+      S.drag = { kind: "card", key, dx: p.x - px(S.pos[key].x), dy: p.y - px(S.pos[key].y), moved: false };
       S.els[key].classList.add("dragging");
       return;
     }
@@ -1460,10 +1472,10 @@ const PB = (() => {
       S.view = { ...S.view, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy };
       applyView();
     } else if (d.kind === "card") {
-      // The card follows the mouse; an outline shows the grid spot it drops into (Alt: no snap).
-      const p = toWorld(e.clientX, e.clientY), free = { x: Math.round(p.x - d.dx), y: Math.round(p.y - d.dy) };
+      // The card follows the mouse; an outline shows the cell it drops into (a whole cell, always).
+      const p = toWorld(e.clientX, e.clientY), free = { x: (p.x - d.dx) / GRID, y: (p.y - d.dy) / GRID };
       S.pos[d.key] = free;
-      d.to = e.altKey ? free : { x: snap(free.x), y: snap(free.y) };
+      d.to = { x: Math.round(free.x), y: Math.round(free.y) };
       d.moved = true;
       placeCard(d.key);
       placeWires(new Set([d.key]));
@@ -1474,8 +1486,8 @@ const PB = (() => {
   function showLanding(d) {
     const el = $("landing"), size = S.sizes[d.key], at = S.pos[d.key];
     el.hidden = at.x === d.to.x && at.y === d.to.y;
-    Object.assign(el.style, { transform: `translate(${d.to.x}px, ${d.to.y}px)`,
-                              width: `${size.w}px`, height: `${size.h}px` });
+    Object.assign(el.style, { transform: `translate(${px(d.to.x)}px, ${px(d.to.y)}px)`,
+                              width: `${px(size.w)}px`, height: `${px(size.h)}px` });
     el.className = `landing k-${byKey()[d.key].kind}`;
   }
 
@@ -1905,7 +1917,7 @@ const PB = (() => {
 
   function showAt(key) {
     const p = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
-    S.pos[key] = { x: snap(p.x), y: snap(p.y) };
+    S.pos[key] = { x: cell(p.x), y: cell(p.y) };
     send({ op: "place", cards: { [key]: S.pos[key] } });
     setHidden(key, false);
   }
@@ -2511,8 +2523,9 @@ const PB = (() => {
     }
     for (const [k, el] of Object.entries(S.els)) {
       if (el.offsetWidth % GRID || el.offsetHeight % GRID) faults.push(`card off the grid: ${k} is ${el.offsetWidth}×${el.offsetHeight}`);
-      const sz = S.sizes[k];  // whole pixels whatever the zoom: Tidy must not depend on float noise
-      if (sz && !(Number.isInteger(sz.w) && Number.isInteger(sz.h))) faults.push(`card size not whole pixels: ${k} ${sz.w}×${sz.h}`);
+      const sz = S.sizes[k], p = S.pos[k];  // whole cells whatever the zoom: Tidy must not depend on float noise
+      if (sz && !(Number.isInteger(sz.w) && Number.isInteger(sz.h))) faults.push(`card size not whole cells: ${k} ${sz.w}×${sz.h}`);
+      if (p && S.drag?.key !== k && !(Number.isInteger(p.x) && Number.isInteger(p.y))) faults.push(`card not on a cell: ${k} at ${p.x},${p.y}`);  // (a dragged one follows the mouse)
       for (const [sock, o] of Object.entries(S.offsets[k] || {}))
         if (Math.abs(o.y - snap(o.y)) > 0.6 || Math.abs(o.x - snap(o.x)) > 0.6) faults.push(`socket off the grid: ${k} ${sock} at ${o.x},${o.y}`);
     }
@@ -2731,7 +2744,7 @@ const PB = (() => {
     // they jittered).
     tidyEcho: () => {
       const behind = structuredClone(S.lastState), where = () => JSON.stringify(Object.values(S.els).map((el) => el.style.transform));
-      for (const k of Object.keys(S.els)) behind.workspace.cards[k] = { ...behind.workspace.cards[k], x: 14, y: 14 };  // its places before
+      for (const k of Object.keys(S.els)) behind.workspace.cards[k] = { ...behind.workspace.cards[k], x: 1, y: 1 };  // its places before
       tidy();
       const after = where();
       receive(behind);

@@ -164,8 +164,9 @@ the layout are each card's own layout size (whole CSS pixels at any zoom), socke
 a quarter pixel: read off the screen and divided by the zoom they carried float noise that changed
 with it, and a column centred exactly half a grid step off rounded one way, then, after Tidy's Fit
 changed the zoom, the other (owner: a card moved back and forth between clicks; reproduced with
-real clicks on a fixture server of their board, Mic EQ ±14 px). The page audit now fails on a
-size that is not whole pixels. Which rows read best is still open (owner: "something we gotta delve deep into").
+real clicks on a fixture server of their board, Mic EQ ±14 px). Since then positions and sizes are
+whole cells (see Grid), Tidy works in cells and centres the board on cell [0, 0], and the
+tidy-any-zoom shot lays it out at six zooms and fails on any difference. Which rows read best is still open (owner: "something we gotta delve deep into").
 
 A card that appears (an app starts playing, a device is plugged in) goes to its place in a fresh
 layout if that is free, else to the nearest free spot (its own column first), and stays there: it
@@ -281,10 +282,15 @@ cascade already turned, and flips left at the screen edge. Arrow keys, Enter and
   left-only wire stays left-only); the old link is removed only once the new path is made, so the
   sound does not drop.
 
-**Grid.** Cards snap to a 14 px grid (the dot grid is every 28 px, so corners land on a dot or
-halfway) when dragged, tidied or added; hold Alt to place freely. While dragging, the card follows
-the mouse and a dashed outline in its colour shows the grid spot it will drop into (user's
-request); on release it lands there. No slide animation: wires would lag behind the card.
+**Grid.** Positions are whole **cells** (a cell is 14 px; the dot grid is every 28 px, so corners
+land on a dot or halfway), and card sizes whole cells too (widths rounded up when drawn; the page
+audit fails a card off the grid). Owner: zoom only changes how the board is drawn, and Tidy cannot
+drift on float error. Cell [0, 0] is the window's centre on a new board, and Tidy centres the
+board on it. Saved boards and profiles hold cells, marked `"grid": "cells"`; a file without the
+mark is from before and holds pixels, converted once on reading (`workspace.in_cells`). There is
+no free placement (Alt used to give one). While dragging, the card follows the mouse and a dashed
+outline in its colour shows the cell it will drop into (user's request); on release it lands
+there. No slide animation: wires would lag behind the card.
 
 **Layout.** Columns by signal flow: longest path from the sources after dropping the edges that
 close a loop (DFS back edges). On the user's graph that gives apps → speaker mixes → Easy Effects
