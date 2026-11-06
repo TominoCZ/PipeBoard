@@ -6,6 +6,12 @@ already in USB transfers is left out: it is committed and cannot cover a late bl
 first figure counted it and looked 2 ms safer than it was). At 0 the output runs dry: a click.
 Input: room before the capture ring overflows (buffer − (hw_ptr − appl_ptr)). At 0 it clicks too.
 
+That holds for an interface with implicit feedback (the UR44C: /proc/asound/cardN/stream0 says
+"Implicit Feedback Mode: Yes"): snd-usb-audio then never uses its low-latency playback mode and
+copies sound into USB transfers ahead of time, an xrun as soon as hw_ptr passes appl_ptr. Without
+implicit feedback, low-latency mode defers a transfer when a block is late and only drops out once
+the transfers in flight run dry (sound/usb/endpoint.c, pcm.c): there the output reads low.
+
 ponytail: sampled about every millisecond, so a low can read up to a millisecond of drain high;
 an exact low would need the kernel's trace of each USB transfer (eBPF, tracepoints)."""
 
