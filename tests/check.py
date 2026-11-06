@@ -385,7 +385,17 @@ async def check_engine_trial(tmp):
 
 def check_dropouts():
     """Dropouts in the last minute per card, its nodes summed; a node made again starts over."""
-    from pipeboard import server
+    from pipeboard import engine, server
+    # pw-top now and then samples nothing (every node at quantum 0, ERR 0; only a screen-capture
+    # stream with data): read as real, the next good sample looked like ~1500 dropouts at once.
+    head = "S   ID  QUANT   RATE    WAIT    BUSY   W/Q   B/Q  ERR FORMAT           NAME"
+    empty = "\n".join([head, "R  150      0      0   0,0us   0,0us  ???   ???     0    F32P 2 192000 music_mix",
+                       "R  486    512 192000  11,4us   0,5us  0,00  0,00    0   BGRA 2469x1432 kwin_wayland"])
+    good = "\n".join([head, "R  131    512 192000 216,0us   0,3us  0,08  0,00    5   S32LE 8 192000 alsa_input",
+                      "R  150      0      0   0,0us   0,0us  ???   ???  1496    F32P 2 192000 music_mix"])
+    assert engine.pw_top_errors(empty) == {}, "an empty sample lists nothing"
+    assert engine.pw_top_errors(good) == {"alsa_input": 5, "music_mix": 1496}
+    assert engine.pw_top_errors(good + "\n" + empty) == {"alsa_input": 5, "music_mix": 1496}, "the last good sample"
     seen, card = {}, {"key": "ur", "names": ["in", "out"]}
     assert server.last_minute(seen, card, {"in": 5, "out": 1}, 0) == 0, "the first look: none yet"
     assert server.last_minute(seen, card, {"in": 8, "out": 1}, 10) == 3

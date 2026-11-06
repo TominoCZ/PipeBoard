@@ -327,12 +327,32 @@ async def node_errors() -> dict[str, int]:
     except TimeoutError:
         proc.kill()
         return {}
-    last = {}
+    return pw_top_errors(out)
+
+
+AUDIO_FORMAT = re.compile(r"[SFU](8|16|24|32|64)")
+
+
+def pw_top_errors(out: str) -> dict[str, int]:
+    """pw-top's ERR column by node name, from its last sample that has data. Now and then a sample
+    comes back empty: every node at quantum 0, rate 0 and ERR 0 (no timing from PipeWire in that
+    moment). Taken as real, the next good one looked like every node's whole lifetime count of
+    dropouts at once (owner: ~1500 at a time, none heard). A sample counts only if an audio node
+    in it (an audio format: S32LE, F32P…) has a quantum; a screen-capture stream can still have
+    one when the audio has none (seen: kwin_wayland, BGRA). None does: nothing is listed (each
+    card keeps its last count)."""
+    samples, cur = [], None
     for line in out.splitlines():
         f = line.split()
-        if len(f) > 9 and f[8].isdigit():
-            last[f[-1]] = int(f[8])
-    return last
+        if f[:2] == ["S", "ID"]:
+            cur = {"errors": {}, "data": False}
+            samples.append(cur)
+        elif cur is not None and len(f) > 9 and f[8].isdigit():
+            cur["errors"][f[-1]] = int(f[8])
+            audio = AUDIO_FORMAT.match(f[9])
+            cur["data"] = cur["data"] or bool(audio and f[2].isdigit() and int(f[2]) > 0)
+    good = [s for s in samples if s["data"]]
+    return good[-1]["errors"] if good else {}
 
 
 async def dropouts(names: list[str]) -> int | None:
