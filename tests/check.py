@@ -384,6 +384,37 @@ async def check_engine_trial(tmp):
     assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
 
 
+def check_audible():
+    """Only audible dropouts count (owner: "not a real drop" otherwise): the interface stopping and
+    starting again (its trigger_time changed, both directions once) and PipeWire's resyncs on its
+    card (N suppressed: N more); a late cycle with neither is a close call, logged, not counted."""
+    from pipeboard import headroom, pipewire, server
+    st = lambda trig: f"state: RUNNING\ntrigger_time: {trig}\n-----\nhw_ptr      : 700\nappl_ptr    : 1000\n"  # noqa: E731
+    with tempfile.TemporaryDirectory() as tmp:
+        dirs = {side: Path(tmp) / side for side in ("out", "in")}
+        for d in dirs.values():
+            d.mkdir()
+            (d / "status").write_text(st("100.5"))
+            (d / "hw_params").write_text("buffer_size: 3072\n")
+        seen = {}
+        headroom.sample(dirs, 0.01, seen=seen)
+        assert seen["restarts"] == 0, "the first look is no restart"
+        for d in dirs.values():  # (an xrun's recovery: both directions start again together)
+            (d / "status").write_text(st("101.7"))
+        headroom.sample(dirs, 0.01, seen=seen)
+        assert seen["restarts"] == 1, seen
+    with tempfile.TemporaryDirectory() as tmp:
+        board = server.Board(pipewire.Fixture(scenarios.load("machine")), Path(tmp))
+        board.engine.update(interface=["ur_out", "ur_in"], card=2, title="Interface")
+        board.head_seen["restarts"] = 1
+        board.moment.heard("1.0 pc pipewire[1]: spa.alsa: hw:2,0p: follower avail:82 delay:82 target:384 thr:128, resync (2 suppressed)")
+        board.moment.heard("1.1 pc pipewire[1]: spa.alsa: hw:5,0p: follower avail:9 delay:9 target:384 thr:128, resync (0 suppressed)")
+        assert board.audible() == {"ur_in": 4, "ur_out": 0}, board.audible()  # (1 restart + 3 resyncs; card 5 is not it)
+        board.note_close_calls({"ur_in": 10, "ur_out": 0})
+        board.note_close_calls({"ur_in": 13, "ur_out": 0})
+        assert board.audible()["ur_in"] == 4, "late cycles alone count nothing"
+
+
 def check_apprt():
     """Apps' audio in real time: the clients owning an audio stream the graph waits for (not
     async, not PipeWire's own), their PipeWire thread by name; told only while the setting is
@@ -2150,6 +2181,7 @@ def main():
     check_headroom()
     check_usb_blocks()
     check_apprt()
+    check_audible()
     check_cstates()
     check_kernel()
     check_engine()

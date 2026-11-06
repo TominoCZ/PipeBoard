@@ -472,12 +472,6 @@ def pw_top_errors(out: str) -> dict[str, int]:
     return good[-1]["errors"] if good else {}
 
 
-async def dropouts(names: list[str]) -> int | None:
-    """The interface's dropout count so far, summed over its nodes; None if pw-top could not say."""
-    found = [n for name, n in (await node_errors()).items() if name in names]
-    return sum(found) if found else None
-
-
 async def _back(names: set[str], wait: float = 15.0) -> bool:
     """Wait for the interface's nodes to be in the graph again."""
     for _ in range(int(wait * 4)):

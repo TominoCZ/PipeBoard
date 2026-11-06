@@ -1023,6 +1023,17 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   Allowed by the app's own RLIMIT_RTPRIO, no root. Off puts back what it raised. Async nodes
   (PipeBoard's captures) are left alone.
 
+- **Only audible dropouts count** (built 2026-11-06; owner: a late cycle with no sound lost is "not
+  a real drop"). The Dropouts problem, the Counters, the path panel and a trial's count take the
+  interface's restarts (the headroom sampler sees its start time change: a buffer ran dry or full,
+  both directions once) plus PipeWire's resyncs on its card (`spa.alsa: hw:N…: follower … resync
+  (K suppressed)` from the journal `moment.py` follows: silence written or sound skipped), in
+  pw-top's shape (`Board.audible`). pw-top's error count alone overcounted (the UR44C's ~1 ms-late
+  wake-ups, 2.5 ms of sound still queued) and undercounted (270 resyncs in 3 days, 30 near a
+  count). A late cycle with neither is logged as a close call with the output's headroom, never
+  counted. Effects' and mixes' own counts no longer count: a late node is heard, if at all, as
+  the interface's restart or resync.
+
 - **Block sizes the interface lines up with** (`engine.blocks`, built 2026-11-06): an interface
   with implicit feedback (`/proc/asound/cardN/stream0`: "Implicit Feedback Mode: Yes", the UR44C)
   moves sound in 1 ms USB transfers (snd-usb-audio caps capture URBs, and the playback that

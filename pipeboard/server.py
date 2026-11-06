@@ -141,14 +141,16 @@ class Board:
         # sound was at full scale in the last frame (a new clipping moment counts once); counted:
         # a Counter's totals changed (saved and sent once a second). moment: what the machine
         # was doing each second, told with every dropout logged (moment.py). head_pages: the
-        # pages showing Buffer headroom, and its last minute, sampled all along (headroom.py).
+        # pages showing Buffer headroom, and its last minute, sampled all along (headroom.py);
+        # head_seen: the sampler's memory across calls, the interface's restarts among it.
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
          self.dropped, self.settling, self.root, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
-         self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_hist) = (
+         self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_hist,
+         self.head_seen) = (
             {}, None, (None, None), set(), None, {}, 0.0, engine.RootHelper(), None, None, None,
             {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(),
-            {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")})
+            {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}, {})
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -1335,6 +1337,30 @@ class Board:
             self.drops_task = asyncio.create_task(self.watch_drops())
         return None
 
+    def audible(self) -> dict[str, int]:
+        """The interface's audible dropouts so far, in pw-top's shape (on its first node: a card
+        sums its nodes): its restarts (the headroom sampler saw it stop and start again: a buffer
+        ran dry or full) and PipeWire's resyncs on its card (silence written or sound skipped).
+        A late cycle the margin covered is neither (owner: "not a real drop"). Other nodes are not
+        listed (their last count stands): an effect or mix late in a cycle is heard, if at all,
+        as the interface's restart or resync; an app's own gap is its own (heard)."""
+        names = sorted(self.engine.get("interface") or ())
+        total = (self.head_seen.get("restarts", 0)
+                 + self.moment.resyncs.get(self.engine.get("card"), 0))
+        return {n: total if i == 0 else 0 for i, n in enumerate(names)}
+
+    def note_close_calls(self, raw: dict[str, int]) -> None:
+        """The interface's late cycles that cost no sound (PipeWire counted them, no restart or
+        resync came of them): logged with the output's lowest headroom then, never counted."""
+        names = set(self.engine.get("interface") or ())
+        total, heard = sum(n for k, n in raw.items() if k in names), sum(self.audible().values())
+        was, self.head_seen["close"] = self.head_seen.get("close"), (total, heard)
+        if was and total >= was[0] and (n := (total - was[0]) - (heard - was[1])) > 0:
+            low = min((v for v in list(self.head_hist["out"])[-2:] if v is not None), default=None)
+            log.info("close call: %s missed %d cycle%s, no sound lost (output headroom %s)",
+                     self.engine.get("title") or "the interface", n, "s" if n > 1 else "",
+                     f"{low:.2f} ms" if low is not None else "not measured")
+
     async def watch_errors(self) -> None:
         """Every second each card's dropout count, a minute of it kept: the Dropouts problem (owner:
         it must show as they happen; pw-top takes ~3 ms). A node made again counts from 0: its
@@ -1349,7 +1375,8 @@ class Board:
             if self.source.mode != "live" or self.closing:
                 continue
             try:
-                errors, now = await engine.node_errors(), time.monotonic()
+                self.note_close_calls(await engine.node_errors())
+                errors, now = self.audible(), time.monotonic()
                 self.moment.read()  # (the same second pw-top just counted)
                 if now < self.settling:  # an engine change's own burst: counted afresh after
                     seen.clear()
@@ -1371,7 +1398,7 @@ class Board:
         start: dict[str, int] = {}
         try:
             while self.drop_pages:
-                errors = await engine.node_errors() if self.source.mode == "live" else {}
+                errors = self.audible() if self.source.mode == "live" else {}
                 if time.monotonic() < self.settling:  # (an engine change's own burst: not counted)
                     start.clear()
                 counts = {}
@@ -1420,7 +1447,8 @@ class Board:
                     await asyncio.sleep(HEAD_EVERY_S)
                     continue
                 low = await asyncio.to_thread(
-                    headroom.sample, {k: Path(v) for k, v in found.items()}, HEAD_EVERY_S)
+                    headroom.sample, {k: Path(v) for k, v in found.items()}, HEAD_EVERY_S,
+                    headroom.EVERY_S, self.head_seen)
                 rate = self.engine.get("rate") or 48000
                 for side, h in self.head_hist.items():
                     v = low.get(side)
@@ -1697,9 +1725,10 @@ class Board:
             self.trial_task = asyncio.create_task(wait())
 
     async def count_drops(self) -> None:
-        count = await engine.dropouts(self.engine.get("interface", []))
-        if count is None:
+        found = self.audible()
+        if not found:
             return
+        count = sum(found.values())
         first = self.trial_drops[0] if self.trial_drops[0] is not None else count
         if (first, count) != self.trial_drops:
             self.trial_drops = (first, count)

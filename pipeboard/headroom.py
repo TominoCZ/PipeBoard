@@ -37,7 +37,10 @@ def fields(text: str) -> dict[str, str]:
 
 def frames_left(side: str, status: str, buffer: int) -> int | None:
     """Frames of headroom in one buffer now ("out" or "in"); None while it is not running."""
-    f = fields(status)
+    return _left(side, fields(status), buffer)
+
+
+def _left(side: str, f: dict[str, str], buffer: int) -> int | None:
     if f.get("state") != "RUNNING" or not buffer:
         return None
     try:
@@ -54,11 +57,15 @@ def buffer_frames(folder: Path) -> int:
     return 0
 
 
-def sample(folders: dict[str, Path], seconds: float,
-           every: float = EVERY_S) -> dict[str, int | None]:
+def sample(folders: dict[str, Path], seconds: float, every: float = EVERY_S,
+           seen: dict | None = None) -> dict[str, int | None]:
     """Each buffer's fewest frames of headroom over `seconds`, read every `every`. Blocking: run
     it in a thread. None for a buffer that was not running the whole time. The status files stay
-    open and are read again from the start (a fresh open each time cost ~5 % of a core)."""
+    open and are read again from the start (a fresh open each time cost ~5 % of a core).
+    `seen` (kept by the caller across calls) counts the interface's restarts in "restarts": its
+    start time (trigger_time) changing is a stop and start again, an xrun's recovery or a
+    reopen. Both directions restart together (linked): counted once."""
+    seen = {} if seen is None else seen
     sizes = {side: buffer_frames(d) for side, d in folders.items()}
     low: dict[str, int | None] = dict.fromkeys(folders)
     fds = {}
@@ -68,11 +75,17 @@ def sample(folders: dict[str, Path], seconds: float,
                 fds[side] = os.open(d / "status", os.O_RDONLY)
         end = time.monotonic() + seconds
         while time.monotonic() < end:
+            moved = False
             for side, fd in fds.items():
                 with contextlib.suppress(OSError):
-                    left = frames_left(side, os.pread(fd, 4096, 0).decode(), sizes[side])
+                    f = fields(os.pread(fd, 4096, 0).decode())
+                    if (t := f.get("trigger_time")) and f.get("state") == "RUNNING":
+                        moved |= seen.get(side, t) != t
+                        seen[side] = t
+                    left = _left(side, f, sizes[side])
                     if left is not None and (low[side] is None or left < low[side]):
                         low[side] = left
+            seen["restarts"] = seen.get("restarts", 0) + moved
             time.sleep(every)
     finally:
         for fd in fds.values():

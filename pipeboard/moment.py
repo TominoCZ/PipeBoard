@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import statistics
 import time
 from collections import deque
@@ -21,6 +22,9 @@ JOURNAL = ("journalctl", "-f", "-n", "0", "-o", "short-unix",
            "_TRANSPORT=kernel", "+", "_COMM=pipewire", "+", "_COMM=wireplumber")
 NOISE = ("[UFW ",)  # kernel lines that say nothing about audio
 WINDOW_S = 2.0  # log lines this close before a dropout's second are shown with it
+# PipeWire's resync of a device that follows the graph's clock: silence written or sound skipped
+# to get back on target, a click (alsa-pcm.c, alsa_write_sync). N suppressed: N more before it.
+RESYNC = re.compile(r"spa\.alsa: hw:(\d+),\d+[pc]: follower .*resync \((\d+) suppressed\)")
 
 
 def cpu_times(stat: str) -> dict[str, tuple[int, int]]:
@@ -56,6 +60,7 @@ class Moment:
         self.last: tuple | None = None  # (time, cpu times, irq counts)
         self.seconds: deque[dict] = deque(maxlen=60)  # the last minute, one sample a second
         self.lines: deque[tuple[float, str]] = deque(maxlen=200)
+        self.resyncs: dict[int, int] = {}  # PipeWire's resyncs so far, by ALSA card: audible
 
     def tick(self, stat: str, interrupts: str, now: float) -> None:
         """One second's sample, from the texts of /proc/stat and /proc/interrupts."""
@@ -82,6 +87,9 @@ class Moment:
             return
         with contextlib.suppress(ValueError):
             self.lines.append((float(f[0]), f"{f[2].split('[')[0].rstrip(':')}: {f[3].strip()}"))
+        if m := RESYNC.search(f[3]):
+            card = int(m[1])
+            self.resyncs[card] = self.resyncs.get(card, 0) + 1 + int(m[2])
 
     def describe(self, now: float | None = None) -> str:
         """This second, in one line: CPU, interrupts against the usual, and the log around it."""
