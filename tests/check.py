@@ -387,7 +387,7 @@ async def check_engine_trial(tmp):
 def check_headroom():
     """Buffer headroom: the output's frames written but not yet sent, the input's room before it
     overflows, None while closed; sampled over made-up status files; found from the fixture's
-    interface; sampled only while a page shows it."""
+    interface; kept with no window open, a page that opens the panel gets it at once."""
     from pipeboard import engine, headroom, pipewire, server
     st = lambda state, appl, hw: f"state: {state}\nowner_pid   : 1\ndelay       : 9\n-----\nhw_ptr      : {hw}\nappl_ptr    : {appl}\n"  # noqa: E731
     assert headroom.frames_left("out", st("RUNNING", 1000, 700), 3072) == 300, "written, not yet sent"

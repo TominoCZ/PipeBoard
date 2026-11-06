@@ -1024,8 +1024,9 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   not taken yet (`appl_ptr − hw_ptr`), not ALSA's `delay`, which counts the ~2 ms already in USB
   transfers that cannot cover a late block (the first figure did and looked 2 ms safer than it
   was); the input is the room before the ring overflows. Sampled about every millisecond in a
-  thread, a low sent every half second, only while a page shows the panel (~2 % of a core; the
-  files stay open and are read again, a fresh open each time cost ~6 %). The owner's machine at
+  thread, a low kept every half second all along on the live graph, a window open or not (owner:
+  hear a dropout, then open the panel and see it; ~2 % of a core; the files stay open and are read
+  again, a fresh open each time cost ~6 %). Opening the panel sends the minute so far at once. The owner's machine at
   block 512 with two blocks of margin: output 1.3 ms, input 7 ms, so the output is the tight side.
 
 - **Clipping is seen by a second capture** (`scope.py`): the 8 kHz live-wires capture filters a
