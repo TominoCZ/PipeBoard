@@ -26,6 +26,7 @@ from pipeboard import (
     eq,
     gain,
     graph,
+    moment,
     plugins,
     problems,
     profiles,
@@ -133,13 +134,15 @@ class Board:
         # cards' capture, and each card's monitor ports (diag.monitors).
         # tallies: each Counter's cards' error totals a second ago; clipping: the Counters whose
         # sound was at full scale in the last frame (a new clipping moment counts once); counted:
-        # a Counter's totals changed (saved and sent once a second).
+        # a Counter's totals changed (saved and sent once a second). moment: what the machine
+        # was doing each second, told with every dropout logged (moment.py).
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
          self.dropped, self.settling, self.idle, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
-         self.diag_keys, self.err_seen) = ({}, None, (None, None), set(), None, {}, 0.0,
-                                           engine.IdleHelper(), None, None, None, {}, {}, set(),
-                                           False, 0.0, {}, {})
+         self.diag_keys, self.err_seen, self.moment) = ({}, None, (None, None), set(), None, {},
+                                                        0.0, engine.IdleHelper(), None, None,
+                                                        None, {}, {}, set(), False, 0.0, {}, {},
+                                                        moment.Moment())
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -780,7 +783,8 @@ class Board:
 
     def note_drops(self, errors: dict[str, int], settling: bool, before: dict[str, int]) -> None:
         """One log line a second when any card logged new errors: which, how many, and what each
-        Counter added (owner: "some don't get counted"; a mismatch can be read back exactly)."""
+        Counter added (owner: "some don't get counted"; a mismatch can be read back exactly), and
+        what the machine was doing then (moment.py: the CPU, the GPU, USB, PipeWire itself?)."""
         new = []
         for card in heard(self.model):
             if (total := listed(card, errors)) is None:
@@ -792,8 +796,9 @@ class Board:
             devs = self.ws.get("devices", {})
             added = [f"{devs[k]['name']} +{devs[k].get('counts', {}).get('drops', 0) - n}"
                      for k, n in before.items() if k in devs]
-            log.info("dropouts: %s%s; counters: %s", ", ".join(new),
-                     " (settling: not counted)" if settling else "", ", ".join(added) or "none")
+            log.info("dropouts: %s%s; counters: %s; moment: %s", ", ".join(new),
+                     " (settling: not counted)" if settling else "", ", ".join(added) or "none",
+                     self.moment.describe())
 
     def clocking(self, key: str) -> list[dict]:
         """The interface clocking the graph, for a Counter it does not already feed: when it drops
@@ -1305,6 +1310,7 @@ class Board:
                 continue
             try:
                 errors, now = await engine.node_errors(), time.monotonic()
+                self.moment.read()  # (the same second pw-top just counted)
                 if now < self.settling:  # an engine change's own burst: counted afresh after
                     seen.clear()
                 recent = {} if now < self.settling else {
@@ -1857,10 +1863,13 @@ def lifecycle(application: web.Application, board: Board) -> None:
         _app["taps"] = asyncio.create_task(taps(board))
         _app["listing"] = asyncio.create_task(board.plugins.installed())  # warms the picker
         _app["dropouts"] = asyncio.create_task(board.watch_errors())
+        if board.source.mode == "live":
+            _app["journal"] = asyncio.create_task(board.moment.follow())
 
     async def stop(_app: web.Application) -> None:
         board.closing = True
-        tasks = [_app[k] for k in ("watch", "frames", "taps", "listing", "dropouts") if k in _app]
+        tasks = [_app[k] for k in ("watch", "frames", "taps", "listing", "dropouts", "journal")
+                 if k in _app]
         for task in tasks:  # PipeBoard's own background work ends before the loop does
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

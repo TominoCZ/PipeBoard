@@ -213,6 +213,7 @@ from its partner; a stereo-to-stereo wire with one link missing is dashed.
 | `denoise.py` | the Noise Suppression node's plugin (`native/pb_denoise.c`, Speex), built on demand (§5.8) |
 | `dynamics.py`, `web/dynamics.js` | the Limiter, Compressor, Noise Gate and De-Esser nodes: LSP's plugins in a filter-chain, their settings, the in/out peaks; their live panel (§5.5–5.7a) |
 | `plugins.py`, `plughost.py` | plugin nodes: the installed list, one Carla host process per plugin; FakePlugins for fixtures (§5.2) |
+| `moment.py` | what the machine was doing when a dropout was logged: CPU (all, busiest core), GPU and USB interrupts against the last minute's usual, the kernel's and PipeWire's log lines; added to each `dropouts:` log line. Never polls the GPU driver |
 
 **Watching.** `pw-dump --monitor` is only a "something changed" trigger. 150 ms after the first
 change the server takes one full `pw-dump`, rebuilds the model and pushes it only if it differs.

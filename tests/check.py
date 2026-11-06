@@ -383,6 +383,34 @@ async def check_engine_trial(tmp):
     assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
 
 
+def check_moment():
+    """A dropout's moment: CPU busy (all, busiest core), GPU and USB interrupts against the last
+    minute's usual, and the kernel's and PipeWire's own lines from around then (not the firewall's)."""
+    from pipeboard import moment
+    head = "            CPU0       CPU1\n"
+    irqs = lambda gpu, usb: head + "\n".join([  # noqa: E731
+        f" 114:  {gpu}  0  IR-PCI-MSIX-0000:01:00.0  0-edge  nvidia",
+        f"  58:  {usb}  {usb}  IR-PCI-MSIX-0000:0e:00.0  0-edge  xhci_hcd",
+        f"  66:  {usb}  0  IR-PCI-MSIX-0000:0f:00.0  0-edge  xhci_hcd",
+        "NMI:  3  3  Non-maskable interrupts"])
+    stat = lambda t, a, b: "\n".join([  # noqa: E731  (so far: user nice system idle iowait …)
+        f"cpu  {a + b} 0 0 {200 * t - a - b} 0 0 0 0 0 0", f"cpu0 {a} 0 0 {100 * t - a} 0 0 0 0 0 0",
+        f"cpu1 {b} 0 0 {100 * t - b} 0 0 0 0 0 0", "intr 1 2 3"])
+    assert moment.irq_counts(irqs(10, 5)) == {"gpu": 10, "usb": 15}, "every CPU and line summed"
+    m = moment.Moment()
+    assert m.describe(0) == "nothing sampled yet"
+    m.tick(stat(0, 0, 0), irqs(0, 0), 0.0)
+    for t in range(1, 6):  # four quiet seconds, then a busy one
+        m.tick(stat(t, 10 * t if t < 5 else 40 + 90, 2 * t), irqs(100 * t if t < 5 else 400 + 900, 0), float(t))
+    m.heard("1000.2 tom-pc kernel: [UFW BLOCK] IN=eno1 SRC=192.168.50.1")
+    m.heard("1000.5 tom-pc pipewire[3870]: spa.alsa: hw:2,0p: follower avail:850 resync (0 suppressed)\n")
+    m.heard("990.0 tom-pc kernel: usb 1-4: reset high-speed USB device")
+    m.heard("not a journal line")
+    said = m.describe(1001.0)
+    assert said == ("cpu 46% (busiest core 90%); gpu 900 irq/s (usual 100); usb 0 irq/s (usual 0); "
+                    "pipewire: spa.alsa: hw:2,0p: follower avail:850 resync (0 suppressed)"), said
+
+
 def check_dropouts():
     """Dropouts in the last minute per card, its nodes summed; a node made again starts over."""
     from pipeboard import engine, server
@@ -1946,6 +1974,7 @@ def main():
     check_profiles()
     check_latency(model)
     check_dropouts()
+    check_moment()
     check_cstates()
     check_engine()
     check_missing()
