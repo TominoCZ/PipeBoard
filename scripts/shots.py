@@ -276,6 +276,9 @@ SHOTS = {
     "tidy-zoom": ("machine", BIG, chained, "PB.debug.tidyZoom()"),
     "tidy-no-portals": ("machine", BIG, chained, "PB.debug.noPortals() || PB.debug.tidy()"),
     "tidy-any-zoom": ("machine", BIG, chained, "PB.debug.tidyAnyZoom()"),
+    "portal-follow": ("machine", BIG, chained, "PB.debug.portalFollow('pb:dds01')"),
+    "portals-off": ("machine", BIG, chained, "PB.debug.portalsOff()"),
+    "tidy-wrap": ("machine", BIG, diagnosed, "PB.debug.tidyWrap(['pb:dwave01', 'pb:dster01', 'pb:dcount01', 'pb:dmeter01', 'pb:dspec01'])"),
     "portal-hover": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.portalHover(0)"),
     "latency": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.showLatency()"),
     "latency-near": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.dynFlag('pb:dcomp01', 'bypass') || "

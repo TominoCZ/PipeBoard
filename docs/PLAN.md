@@ -154,7 +154,14 @@ row's edge (a column there drew a stub across the row). A Tidy's portals are red
 user's stay. Saved on the board (`portals`: wire id → "hand" or {how: "tidy", out, in}) and in
 profiles. The bar's Tidy is a split button, **[ Tidy | ▾ ]**: its menu holds Portals, with a line
 saying what it does (owner's pick W2). Off, Tidy keeps one row and drops its own portals (the
-user's stay); saved on the board (`tidy_portals`, off unless turned on: owner).
+user's stay); saved on the board (`tidy_portals`, off unless turned on: owner). Toggling it
+tidies again (owner: turned off, Tidy's portals stayed). A card dragged away takes its Tidy
+badges with it: that end goes beside its socket (owner: they stayed behind).
+**A column far taller than the rest** (more than 1.4× the tallest other one) wraps: its cards that
+only receive go into extra columns right after it, none taller than the tallest other column
+(owner: five diagnostic cards fed from one EQ stacked into one column, and folding could not help
+while that column set the height; a fold rule by fit size was tried and dropped: it flipped on 87
+px of window height).
 Tidy is worked out in full, shown in one go and sent as one `tidy` message (places and portals):
 owner saw cards jitter, as Tidy sent its portals and its places separately and the server's state
 after the first still held the old places (each state puts the cards at their saved places).
@@ -1076,6 +1083,15 @@ wire dropped from an input.
 - Not built yet (from the owner's list): Silence watch.
 
 ## 9. Preview tooling
+
+**The README's pictures** come from `scripts/readme.py` (`uv run --with playwright --with pillow
+python scripts/readme.py [name ...]`): the shots' fixture boards and, for the overview, the
+owner's board read-only (a snapshot of the live graph, a copy of the board file: diagnostic cards
+hidden, Portals on, tidied). Animations step the page's fake wire sound through exact moments
+(`PB.debug.liveAt`), so the motion is even. The diagnostic pictures play a few seconds of real
+music recorded passively from the owner's Waveform card (`.dev/readme-sound.raw`, not kept in
+git). The owner's `diag.mp4` gets a GIF preview: GitHub does not play a video file from the
+repository, so the README links the preview to it.
 
 UI work is seen, not guessed. `./run.sh shots` renders the page in headless Chrome for each
 scenario (board, small window, Pedal loop, problems open, wire being dragged, wire selected, add

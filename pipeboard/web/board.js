@@ -794,6 +794,28 @@ const PB = (() => {
     return d;
   }
 
+  // A column far taller than the rest (owner: five diagnostic cards fed from one EQ stacked into
+  // one, and Tidy could neither fold the board nor show it any bigger): its cards that only
+  // receive (nothing wired out of them) wrap into extra columns right after it, each no taller
+  // than the tallest other column. What passes sound on stays in its own column.
+  function wrapTall(list, wires, gap) {
+    const tall = (col) => col.reduce((t, c) => t + S.sizes[c.key].h + gap, 0);
+    const out = [];
+    list.forEach((col, i) => {
+      const target = Math.max(28, ...list.filter((_, j) => j !== i).map(tall));
+      const ends = col.filter((c) => !wires.some((w) => w.from[0] === c.key && w.to[0] !== c.key));
+      if (tall(col) <= target * 1.4 || ends.length < 2) { out.push(col); return; }
+      let cur = col.filter((c) => !ends.includes(c)), h = tall(cur);
+      for (const c of ends) {
+        const ch = S.sizes[c.key].h + gap;
+        if (cur.length && h + ch > target) { out.push(cur); cur = []; h = 0; }
+        cur.push(c); h += ch;
+      }
+      out.push(cur);
+    });
+    return out;
+  }
+
   function layout(keys) {
     const cards = visible(), wires = visibleWires(), d = regroup(cards, wires, depths(cards, wires));
     const cols = [];
@@ -801,7 +823,7 @@ const PB = (() => {
     const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4, diag: 5 };
     // All in whole cells: every card lands exactly, a column's rows evenly spaced (owner).
     const ROW_GAP = 2, COL_GAP = 9;
-    const list = cols.filter(Boolean), at = {};
+    const list = wrapTall(cols.filter(Boolean), wires, ROW_GAP), at = {};
     list.forEach((col, i) => col.forEach((c) => { at[c.key] = i; }));
     const wide = list.map((col) => Math.max(...col.map((c) => S.sizes[c.key].w)));
     const high = list.map((col) => col.reduce((t, c) => t + S.sizes[c.key].h + ROW_GAP, 0));
@@ -1098,9 +1120,11 @@ const PB = (() => {
     for (const we of Object.values(S.wireEls)) {
       const w = we.w, a = we.ends && anchor(...w.from), b = we.ends && anchor(...w.to);
       if (!a || !b) continue;
-      const how = S.ws.portals?.[w.id], tidy = how && typeof how === "object";
-      spots.push({ we, i: 0, sock: a, x: tidy && how.out ? px(how.out[0]) : a.x + PORTAL_OUT, y: tidy && how.out ? px(how.out[1]) : a.y, id: `${w.id}>0` },
-                 { we, i: 1, sock: b, x: tidy && how.in ? px(how.in[0]) : b.x - PORTAL_OUT, y: tidy && how.in ? px(how.in[1]) : b.y, id: `${w.id}>1` });
+      // (a Tidy's badge at its spot; one whose card is being dragged follows it, beside its socket)
+      const how = S.ws.portals?.[w.id], tidy = how && typeof how === "object", held = S.drag?.kind === "card" ? S.drag.key : null;
+      const out = tidy && w.from[0] !== held ? how.out : null, into = tidy && w.to[0] !== held ? how.in : null;
+      spots.push({ we, i: 0, sock: a, x: out ? px(out[0]) : a.x + PORTAL_OUT, y: out ? px(out[1]) : a.y, id: `${w.id}>0` },
+                 { we, i: 1, sock: b, x: into ? px(into[0]) : b.x - PORTAL_OUT, y: into ? px(into[1]) : b.y, id: `${w.id}>1` });
     }
     spots.sort((p, q) => p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1));
     // (Pushed below one, it may now touch another: again. Nearer than the gap less half a pixel:
@@ -1423,9 +1447,11 @@ const PB = (() => {
     openMenu(r.left, r.bottom + 6, Object.entries(WIRES).map(([k, m]) => ({ ...m, on: k === now, action: () => setWires(k) })));
   }
   // Tidy's one option: Portals (the next Tidy follows it; saved with the board).
-  function setTidyPortals(on) {
+  // Tidy's own option: toggling it tidies again (owner: turned off, its portals stayed).
+  function setTidyPortals(on, retidy = true) {
     S.ws.tidy_portals = on;
     send({ op: "tidy-portals", on });
+    if (retidy) tidy();
   }
   function tidyMenu(e) {
     const r = e.currentTarget.closest(".split").getBoundingClientRect(), on = S.ws.tidy_portals === true;
@@ -1599,6 +1625,15 @@ const PB = (() => {
       $("landing").hidden = true;
       if (d.moved) {
         S.pos[d.key] = d.to;
+        // A Tidy's badges on the moved card's own wires: beside its sockets from now on (owner: they
+        // stayed behind when the card moved); the other end keeps its spot.
+        const moved = {};
+        for (const [id, how] of Object.entries(S.ws.portals || {})) {
+          const w = typeof how === "object" && S.model.wires.find((x) => x.id === id);
+          if (w && (w.from[0] === d.key || w.to[0] === d.key))
+            moved[id] = { ...how, out: w.from[0] === d.key ? null : how.out, in: w.to[0] === d.key ? null : how.in };
+        }
+        if (Object.keys(moved).length) setPortals(moved);
         placeCard(d.key);
         placeWires(new Set([d.key]));
         sendPlaces({ [d.key]: S.pos[d.key] });
@@ -2789,7 +2824,7 @@ const PB = (() => {
     // Tidy is the same at any zoom (owner: zoom is only how it looks): positions, portals and
     // socket offsets laid out at six zooms, every one compared with zoom 1.
     // Diagnostic cards fed made-up sound (no server in the shots); one opened large; one off.
-    fakeDiag: (wide = 1) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide); },
+    fakeDiag: (wide = 1, rich = false) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide, rich); },
     openDiag: (key) => { openDiag(key); if (!DIAG.isOpen(key)) S.errors.push("the diagnostic panel did not open"); },
     diagMono: (key) => {
       [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();
@@ -2820,7 +2855,7 @@ const PB = (() => {
       for (const z of [0.35, 0.47, 0.83, 1.31, 1.75]) if (run(z) !== want) S.errors.push(`Tidy differs at zoom ${z}`);
       run(1); tidy();
     },
-    noPortals: () => { setTidyPortals(false); if (S.ws.tidy_portals !== false) S.errors.push("Portals did not turn off"); },
+    noPortals: () => { setTidyPortals(false, false); if (S.ws.tidy_portals !== false) S.errors.push("Portals did not turn off"); },
     showLatency: () => { $("show-latency").click(); },
     liveInstant: () => setWires("instant"),
     // The Wires and Tidy menus open (their rows, the current one marked).
@@ -2926,6 +2961,31 @@ const PB = (() => {
     // at the nearest free spot, never at a layout spot across the board (owner).
     // A card dropped after a drag, then a board update from before the drop arrives (its old spot):
     // the card stays where it was dropped (owner: it jumped back and forth).
+    // A card dragged after a Tidy that gave its wires portals: their badges come along (owner).
+    portalFollow: (key, dx = 6, dy = 4) => {
+      tidy();
+      const mine = Object.entries(S.ws.portals || {}).filter(([id, how]) => typeof how === "object" && S.model.wires.some((w) => w.id === id && (w.from[0] === key || w.to[0] === key)));
+      if (!mine.length) { S.errors.push(`portalFollow: no Tidy portal on ${key}'s wires`); return; }
+      const to = { x: S.pos[key].x + dx, y: S.pos[key].y + dy };
+      S.drag = { kind: "card", key, dx: 0, dy: 0, moved: true, to };
+      onUp();
+      for (const [id] of mine) {
+        const how = S.ws.portals[id], w = S.model.wires.find((x) => x.id === id);
+        if ((w.from[0] === key && how.out) || (w.to[0] === key && how.in)) S.errors.push(`a portal of ${id} stayed behind when ${key} moved`);
+      }
+    },
+    // Portals turned off after a Tidy that folded: Tidy again, one row, none of its portals left (owner).
+    portalsOff: () => {
+      tidy();
+      if (!Object.values(S.ws.portals || {}).some((how) => typeof how === "object")) S.errors.push("portalsOff: the Tidy made no portals to begin with");
+      setTidyPortals(false);
+      if (Object.values(S.ws.portals || {}).some((how) => typeof how === "object")) S.errors.push("Tidy's portals stayed after Portals was turned off");
+    },
+    // A column of cards that only receive, far taller than the rest, wraps (owner: Tidy could not fold).
+    tidyWrap: (keys) => {
+      tidy();
+      if (new Set(keys.map((k) => S.pos[k]?.x)).size < 2) S.errors.push("the receive-only cards stayed in one tall column");
+    },
     staleAfterDrop: (key) => {
       const from = { ...S.pos[key] }, to = { x: from.x + 6, y: from.y + 2 };
       S.pos[key] = to; placeCard(key); sendPlaces({ [key]: to });
@@ -3030,7 +3090,7 @@ const PB = (() => {
     // Live wires with made-up sound: speech, a chord, music that clips, the rest silent.
     // n: how many sources get made-up sound; clipWire: the wire whose source is the one that clips
     // (README: the hovered portal's), else the first loud one.
-    fakeLive: (n = 5, clipWire = null) => {
+    fakeLive: (n = 5, clipWire = null, clip = true) => {  // (clip: false, no source clips)
       const srcs = [...new Set(visibleWires().map((w) => w.from.join("|")))];
       const clipSrc = clipWire ? S.wireEls[clipWire]?.w.from.join("|") : null;
       // Speech in bursts, a sustained chord, loud music with a hit every 1.6 s that clips for
@@ -3040,18 +3100,23 @@ const PB = (() => {
         (t) => Math.max(0, Math.sin(t * 2.1) * 0.9 + 0.1) * Math.sin(t * 2 * Math.PI * 140) * (0.5 + 0.5 * Math.sin(t * 9)),
         (t) => Math.exp(-((t % 3) * 0.8)) * (Math.sin(t * 2 * Math.PI * 98) * 0.6 + Math.sin(t * 2 * Math.PI * 147) * 0.4),
         (t) => (0.6 + 0.6 * hit(t)) * Math.sin(t * 2 * Math.PI * 220),
+        // (more, for pictures with many wires: a kick and bass line, an arpeggio, a pad with shimmer)
+        (t) => Math.exp(-((t % 0.5) * 9)) * Math.sin(2 * Math.PI * (55 + 60 * Math.exp(-(t % 0.5) * 30)) * t) * 0.6 + 0.25 * Math.sin(2 * Math.PI * 82 * t),
+        (t) => (0.35 + 0.45 * Math.exp(-((t % 0.25) * 12))) * Math.sin(2 * Math.PI * [262, 330, 392, 523][Math.floor(t * 4) % 4] * t),
+        (t) => (0.45 + 0.15 * Math.sin(t * 1.3)) * (Math.sin(2 * Math.PI * 196 * t) * 0.6 + Math.sin(2 * Math.PI * 294 * t) * 0.3 + Math.sin(2 * Math.PI * 1170 * t) * 0.12 * (0.5 + 0.5 * Math.sin(t * 7))),
       ];
       const bytes = (x) => { const m = Math.abs(x); const v = m >= 0.999 ? 127 : m < 0.002 ? 0 : Math.round((20 * Math.log10(m) + 54) / 54 * 126); return x < 0 ? -v : v; };
-      const tones = [125, 55, 168];  // a voice, a bass chord, bright music (scope.bright's scale)
+      const tones = [125, 55, 168, 70, 150, 110];  // a voice, a bass chord, bright music, kick and bass, arpeggio, pad (scope.bright's scale)
       srcs.slice(0, n).forEach((k, n) => {
         const values = Int8Array.from({ length: 8000 }, (_, ms) => {
           let peak = 0;
-          const shape = clipSrc === k ? 2 : n % 3, clips = clipSrc ? clipSrc === k : n === 2;
+          // (no clipping: only the steady shapes, never silent at the moment of a picture)
+          const shape = clipSrc === k ? 2 : clip ? n % 3 : 2 + (n % 4), clips = clip && (clipSrc ? clipSrc === k : n === 2);
           const quiet = shape === 2 && !clips ? 0.55 : 1;  // (one source clips: one warning)
           for (let s8 = 0; s8 < 8; s8++) { const x = quiet * shapes[shape](ms / 1000 + s8 / 8000); if (Math.abs(x) > Math.abs(peak)) peak = x; }
           return bytes(peak);
         });
-        feed(k, 0, values, tones[n % 3]);
+        feed(k, 0, values, tones[clip ? n % 3 : 2 + (n % 4)]);
         // Clipping raises its warning, as the server's does (problems.clipping), so a picture with
         // red on a wire also says why (owner).
         if (values.some((v) => Math.abs(v) >= 127) && !S.problems.some((p) => p.title === "Clipping" && p.cards[0] === k.split("|")[0])) {
