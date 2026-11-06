@@ -2323,6 +2323,23 @@ const PB = (() => {
   const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) || (!p.tsched && p.block !== e.block);
   // CPU idle states, one toggle each (owner): lit = allowed. By the names and wake times the CPU
   // reports, any vendor. Applied at once through the system's password prompt; nothing restarts.
+  // Apps' audio in real time (apprt.py): each app's PipeWire audio thread raised when it did not
+  // get real time itself (owner: Spotify's Snap left it at normal priority and stalled every
+  // sound). On by default; off puts back what PipeBoard raised. The thread only, not the app.
+  function appsRealtime(e, row) {
+    const a = e.app_rt || { on: true, apps: [] };
+    const say = { own: "real time by itself", raised: "raised by PipeBoard", normal: "normal priority", refused: "could not be raised", none: "no audio thread found" };
+    const b = h("button", { type: "button", class: "chip-state", "aria-pressed": String(!!a.on), "data-k": "app-rt",
+                            title: a.apps.length ? a.apps.map((x) => `${x.name}: ${say[x.state] || x.state}`).join("\n") : "No app is playing" },
+      h("b", { text: "Real time" }));
+    b.addEventListener("click", () => send({ op: "app-rt", on: !a.on }));
+    const raised = a.apps.filter((x) => x.state === "raised").map((x) => x.name);
+    const val = !a.on ? "off" : raised.length ? `${raised.length} raised` : "none needed";
+    return [row("Apps' audio", b, val),
+            h("p", { class: "hint", text: a.on
+              ? `${raised.length ? `Raised: ${raised.join(", ")}. ` : ""}Each app's audio thread only, a few µs a cycle: games keep their CPU.`
+              : "An app whose audio is not real time can stall every sound (Spotify's Snap did)." })];
+  }
   function deepSleep(e, row) {
     const states = e.cstates?.states || [];
     if (!states.length) return [row("CPU idle states", h("span", { class: "of", text: "none reported" }), ""), null];
@@ -2523,6 +2540,7 @@ const PB = (() => {
       p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), "real time") : null,
       p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), "") : null,
       p.advanced ? h("p", { class: "hint", text: "Already real time; raising rarely helps and never cuts delay." }) : null,
+      ...(p.advanced ? appsRealtime(e, row) : []),
       h("div", { class: "eng-foot" },
         h("span", { class: "note", text: S.pick && reopensNow(S.pick, S.engine)
           ? "The interface restarts: silent until it is back. Then a minute to Keep."

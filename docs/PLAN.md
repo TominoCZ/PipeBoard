@@ -213,6 +213,7 @@ from its partner; a stereo-to-stereo wire with one link missing is dashed.
 | `denoise.py` | the Noise Suppression node's plugin (`native/pb_denoise.c`, Speex), built on demand (§5.8) |
 | `dynamics.py`, `web/dynamics.js` | the Limiter, Compressor, Noise Gate and De-Esser nodes: LSP's plugins in a filter-chain, their settings, the in/out peaks; their live panel (§5.5–5.7a) |
 | `plugins.py`, `plughost.py` | plugin nodes: the installed list, one Carla host process per plugin; FakePlugins for fixtures (§5.2) |
+| `apprt.py` | Apps' audio in real time: each app's PipeWire audio thread raised when it did not get real time itself (§8c) |
 | `headroom.py` | Buffer headroom: how close the interface's ALSA buffers come to running out, sampled while the Audio engine panel is open (§8c) |
 | `moment.py` | what the machine was doing when a dropout was logged: CPU (all, busiest core), GPU and USB interrupts against the last minute's usual, the kernel's and PipeWire's log lines; added to each `dropouts:` log line. Never polls the GPU driver |
 
@@ -1009,6 +1010,18 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   read from GRUB's sources. No GRUB or no `update-grub`: the row says so. Expected effect is small
   (audio threads are SCHED_FIFO, which preempt in every mode); dropouts at small blocks are
   PipeWire's resync, not the kernel.
+
+- **Apps' audio in real time** (`apprt.py`, Advanced, on by default; built 2026-11-06): every app
+  with an audio stream the graph waits for runs PipeWire's audio thread in its own process
+  (`pw-data-loop`, `data-loop.N`) and should make it real time itself; a sandboxed one may not
+  (owner: Spotify's Snap, its own libpipewire 1.0.5, left it at normal priority; late by a
+  millisecond now and then it stalled every sound: pw-profiler showed the graph finishing past
+  its deadline with Spotify signalled but not awake, 6 resyncs in 2 minutes at block 192, none
+  with the thread raised). PipeBoard raises that one thread, found by name under the client's host
+  pid (`pipewire.sec.pid`), to SCHED_FIFO 80 (below PipeWire's 95 and pulse's 83) on every read of
+  the graph, never the app: it copies and resamples a few µs a cycle, so games keep their CPU.
+  Allowed by the app's own RLIMIT_RTPRIO, no root. Off puts back what it raised. Async nodes
+  (PipeBoard's captures) are left alone.
 
 - **Block sizes the interface lines up with** (`engine.blocks`, built 2026-11-06): an interface
   with implicit feedback (`/proc/asound/cardN/stream0`: "Implicit Feedback Mode: Yes", the UR44C)

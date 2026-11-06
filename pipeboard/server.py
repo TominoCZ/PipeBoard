@@ -18,6 +18,7 @@ from pathlib import Path
 from aiohttp import WSCloseCode, WSMsgType, web
 
 from pipeboard import (
+    apprt,
     autostart,
     devices,
     diag,
@@ -123,6 +124,7 @@ class Board:
                     "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
                     "headroom": self.op_headroom, "kernel": self.op_kernel,
+                    "app-rt": self.op_app_rt,
                     "cstates": self.op_cstates, "diag-on": self.op_diag_on,
                     "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
@@ -200,6 +202,8 @@ class Board:
         live = self.source.mode == "live"
         e["blocks"], e["usb_step"] = (engine.blocks(e.get("card"), e["rate"]) if live
                                       else (None, None))
+        on = self.settings.get("app_rt", True)  # (apps' audio threads in real time: apprt)
+        e["app_rt"] = {"on": on, "apps": apprt.sync(dump, on) if live else []}
 
     def dress(self) -> None:
         """PipeBoard's own cards get the names it gave them (a plugin's node is pb-<id>), and every
@@ -1383,6 +1387,13 @@ class Board:
                 await asyncio.sleep(2.0)
         finally:
             self.drops_task = None
+
+    async def op_app_rt(self, _page, op) -> str | None:
+        """Apps' audio in real time, on or off (off: the threads PipeBoard raised go back)."""
+        self._set(app_rt=bool(op.get("on")))
+        if not op.get("on"):
+            apprt.lower()
+        return None  # (the state is read again after every action)
 
     async def op_headroom(self, page, op) -> str | None:
         """A page opens or closes the Audio engine panel: it gets the minute so far at once, then

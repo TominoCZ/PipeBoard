@@ -384,6 +384,47 @@ async def check_engine_trial(tmp):
     assert json.loads(again.state())["show_latency"], "Show latency kept across a start"
 
 
+def check_apprt():
+    """Apps' audio in real time: the clients owning an audio stream the graph waits for (not
+    async, not PipeWire's own), their PipeWire thread by name; told only while the setting is
+    off, raised once when on, put back when it goes off; one real time by itself is left be."""
+    import os
+
+    from pipeboard import apprt
+    client = lambda i, pid, binary, name=None: {"id": i, "type": "PipeWire:Interface:Client", "info": {"props": {  # noqa: E731
+        "pipewire.sec.pid": pid, "application.process.binary": binary, **({"application.name": name} if name else {})}}}
+    node = lambda i, cid, kind, **more: {"id": i, "type": "PipeWire:Interface:Node", "info": {"props": {  # noqa: E731
+        "client.id": cid, "media.class": kind, **more}}}
+    dump = [client(10, 4242, "spotify", "Spotify"), client(11, 4343, "pw-cat"), client(12, 1, "pipewire-pulse"),
+            node(20, 10, "Stream/Output/Audio"), node(21, 11, "Stream/Input/Audio", **{"node.async": True}),
+            node(22, 12, "Stream/Output/Audio"), node(23, 10, "Video/Source")]
+    assert apprt.apps(dump) == {4242: "Spotify"}, apprt.apps(dump)
+    with tempfile.TemporaryDirectory() as tmp:
+        for tid, comm in ((4242, "spotify"), (4300, "pw-data-loop"), (4301, "Audio Driver Th")):
+            d = Path(tmp) / "4242" / "task" / str(tid)
+            d.mkdir(parents=True)
+            (d / "comm").write_text(comm + "\n")
+        real, apprt.PROC = apprt.PROC, Path(tmp)
+        pol, calls = {4300: os.SCHED_OTHER}, []
+
+        def put(tid, policy, prio):
+            calls.append((tid, policy, prio))
+            pol[tid] = policy
+        try:
+            assert apprt.threads(4242) == [4300], "the audio thread by its name, not the app's"
+            assert apprt.sync(dump, False, pol.get, put) == [{"name": "Spotify", "state": "normal"}] and not calls
+            assert apprt.sync(dump, True, pol.get, put) == [{"name": "Spotify", "state": "raised"}]
+            assert calls == [(4300, os.SCHED_FIFO, apprt.PRIO)]
+            assert apprt.sync(dump, True, pol.get, put)[0]["state"] == "raised" and len(calls) == 1, "raised once"
+            apprt.lower(put)
+            assert pol[4300] == os.SCHED_OTHER and not apprt.RAISED, "off: put back"
+            pol[4300] = os.SCHED_FIFO
+            assert apprt.sync(dump, True, pol.get, put)[0]["state"] == "own" and len(calls) == 2
+        finally:
+            apprt.PROC = real
+            apprt.RAISED.clear()
+
+
 def check_usb_blocks():
     """An interface with implicit feedback (1 ms USB transfers) is offered whole milliseconds at
     its rate, and only those are accepted; any other, or 44.1 kHz, keeps the usual list."""
@@ -2108,6 +2149,7 @@ def main():
     check_moment()
     check_headroom()
     check_usb_blocks()
+    check_apprt()
     check_cstates()
     check_kernel()
     check_engine()
