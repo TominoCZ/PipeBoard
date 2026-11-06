@@ -6,7 +6,8 @@ It replaced PipeWire's WebRTC module (owner: every built-in effect gets a power 
 bypass is a pass-through; WebRTC has none: it ignores changes while running, and with its noise
 suppression off it still changed the sound). Measured offline at 48 kHz on the same signals
 (plan notes, M17): −40 dB hiss → −64.8 dB alone, −58.8 between syllables, the voice kept at
-−0.1 dB, at Strength −30 (WebRTC: −59.2, −54.2, −2.4); bypassed, the input exactly, 20 ms later.
+−0.1 dB, at Strength −30 (WebRTC: −59.2, −54.2, −2.4); bypassed, the input exactly, as it
+arrives (no delay; on, 20 ms late).
 
 The plugin is compiled once, on demand, with the system's C compiler, against libspeexdsp (it
 comes with PipeWire's Pulse side); neither's headers are needed.

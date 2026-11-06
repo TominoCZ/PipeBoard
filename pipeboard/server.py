@@ -215,7 +215,8 @@ class Board:
             if dev := devs.get(card["key"]):
                 card["title"] = dev["name"]
         self.model["latency"] = graph.latency(self.model, {
-            k: dynamics.latency_ms(d["type"]) for k, d in devs.items() if d["type"] != "plugin"})
+            k: dynamics.latency_ms(d["type"], bool(d.get("bypass")))
+            for k, d in devs.items() if d["type"] != "plugin"})
 
     async def refresh(self) -> None:
         self.pending = False
@@ -673,9 +674,13 @@ class Board:
         dev = self.ws.get("devices", {}).get(op.get("key"))
         if not dev or dev["type"] not in dynamics.KINDS:
             return
+        was = dynamics.latency_ms(dev["type"], bool(dev.get("bypass")))
         dynamics.update(dev, op)
         await self.send_dyn(op["key"], dev)
         self.save_soon()
+        if dynamics.latency_ms(dev["type"], bool(dev.get("bypass"))) != was:  # the totals move
+            self.dress()
+            await self.broadcast(self.state())
 
     async def send_dyn(self, key: str, dev: dict) -> None:
         if (node := self.input_node(key, dev)) is not None:
@@ -898,9 +903,10 @@ class Board:
             return
         if dyn and (not self.aligned or self.aligned.key != spec.key):
             self.aligned = dynamics.Aligned(spec.key)
-        kind = self.ws.get("devices", {}).get(spec.key, {}).get("type", "")
+        dev = self.ws.get("devices", {}).get(spec.key, {})
         text = json.dumps({"type": "dyn-peaks", "key": spec.key, "peaks": self.aligned.peaks(
-                              data, dynamics.delays(kind, self.model.get("clock")))}
+                              data, dynamics.delays(dev.get("type", ""), self.model.get("clock"),
+                                                    bool(dev.get("bypass"))))}
                           if dyn else {"type": "eq-pcm", "key": spec.key,
                                        "pcm": base64.b64encode(data).decode()})
         for page, key in list(self.watching.items()):

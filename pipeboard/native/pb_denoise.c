@@ -6,10 +6,12 @@
  * Speex works on 10 ms frames of 16-bit samples: input is buffered a frame, sent in at half level
  * (6 dB of headroom before 16 bits clip, the graph being float) and brought back up; Speex itself
  * is a frame late (measured: the processed sound leaves 20 ms after it came in, the plugin's
- * latency, reported on its "latency" port). The dry sound is delayed by the same two frames, so
- * the bypass is a 20 ms crossfade between two signals in step: bypassed, the output is the input
- * exactly, 20 ms later. Neither headers are installed (libspeexdsp-dev, ladspa-sdk): the few
- * declarations needed are here, from their stable public interfaces. */
+ * latency, reported on its "latency" port: 0 while bypassed). The bypass is a 20 ms crossfade to
+ * the input as it arrives (owner: a bypass is a pass-through, no delay): bypassed, the output is
+ * the input exactly; while it fades, the two copies 20 ms apart overlap (once per press). Speex
+ * keeps running underneath, its noise estimate ready for switching back. Neither headers are
+ * installed (libspeexdsp-dev, ladspa-sdk): the few declarations needed are here, from their
+ * stable public interfaces. */
 
 #include <math.h>
 #include <stdint.h>
@@ -69,8 +71,7 @@ typedef struct {
     SpeexPreprocessState *st;
     int frame, pos, strength;
     int16_t *pcm;                 /* the frame being filled, for Speex */
-    float *dry, *wet, *dry_mid, *dry_out;  /* this frame's input; the last frame out, wet;
-                                              the dry, one and two frames back */
+    float *wet;                   /* the last frame out of Speex */
     float mix, step;              /* 0 = processed, 1 = bypassed; per-sample move */
 } Denoise;
 
@@ -81,13 +82,10 @@ static void *instantiate(const LADSPA_Descriptor *d, unsigned long rate) {
     p->frame = (int)(rate / 100);  /* 10 ms */
     p->st = speex_preprocess_state_init(p->frame, (int)rate);
     p->pcm = calloc(p->frame, sizeof *p->pcm);
-    p->dry = calloc(p->frame, sizeof *p->dry);
     p->wet = calloc(p->frame, sizeof *p->wet);
-    p->dry_mid = calloc(p->frame, sizeof *p->dry_mid);
-    p->dry_out = calloc(p->frame, sizeof *p->dry_out);
-    if (!p->st || !p->pcm || !p->dry || !p->wet || !p->dry_mid || !p->dry_out) {
+    if (!p->st || !p->pcm || !p->wet) {
         if (p->st) speex_preprocess_state_destroy(p->st);
-        free(p->pcm); free(p->dry); free(p->wet); free(p->dry_mid); free(p->dry_out); free(p);
+        free(p->pcm); free(p->wet); free(p);
         return NULL;
     }
     int on = 1, off = 0;
@@ -104,10 +102,7 @@ static void activate(void *h) {  /* a fresh start: empty buffers, settled on the
     Denoise *p = h;
     p->pos = 0;
     memset(p->pcm, 0, p->frame * sizeof *p->pcm);
-    memset(p->dry, 0, p->frame * sizeof *p->dry);
     memset(p->wet, 0, p->frame * sizeof *p->wet);
-    memset(p->dry_mid, 0, p->frame * sizeof *p->dry_mid);
-    memset(p->dry_out, 0, p->frame * sizeof *p->dry_out);
     p->mix = p->port[P_BYPASS] && *p->port[P_BYPASS] > 0.5f ? 1.0f : 0.0f;
 }
 
@@ -117,11 +112,7 @@ static void connect_port(void *h, unsigned long port, LADSPA_Data *at) {
 
 static void process_frame(Denoise *p) {
     speex_preprocess_run(p->st, p->pcm);
-    for (int i = 0; i < p->frame; i++) {
-        p->wet[i] = (float)p->pcm[i] / (32767.0f * HEADROOM);
-        p->dry_out[i] = p->dry_mid[i];
-        p->dry_mid[i] = p->dry[i];
-    }
+    for (int i = 0; i < p->frame; i++) p->wet[i] = (float)p->pcm[i] / (32767.0f * HEADROOM);
 }
 
 static void run(void *h, unsigned long n) {
@@ -137,22 +128,21 @@ static void run(void *h, unsigned long n) {
     for (unsigned long i = 0; i < n; i++) {
         float x = in[i], v = x * 32767.0f * HEADROOM;
         p->pcm[p->pos] = (int16_t)(v > 32767.0f ? 32767 : v < -32768.0f ? -32768 : lrintf(v));
-        p->dry[p->pos] = x;
         if (p->mix < target) p->mix = fminf(target, p->mix + p->step);
         else if (p->mix > target) p->mix = fmaxf(target, p->mix - p->step);
-        out[i] = p->wet[p->pos] * (1.0f - p->mix) + p->dry_out[p->pos] * p->mix;
+        out[i] = p->wet[p->pos] * (1.0f - p->mix) + x * p->mix;
         if (++p->pos == p->frame) {
             process_frame(p);
             p->pos = 0;
         }
     }
-    if (p->port[P_LATENCY]) *p->port[P_LATENCY] = (float)(2 * p->frame);
+    if (p->port[P_LATENCY]) *p->port[P_LATENCY] = target > 0.5f ? 0.0f : (float)(2 * p->frame);
 }
 
 static void cleanup(void *h) {
     Denoise *p = h;
     speex_preprocess_state_destroy(p->st);
-    free(p->pcm); free(p->dry); free(p->wet); free(p->dry_mid); free(p->dry_out); free(p);
+    free(p->pcm); free(p->wet); free(p);
 }
 
 static const int descriptors[PORTS] = {

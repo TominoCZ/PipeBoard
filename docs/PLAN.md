@@ -542,6 +542,12 @@ live with `set-param` through the shared pw-cli. LSP's defaults turn on Gain boo
 0 dBFS) and automatic level regulation: both off. Lookahead 5 ms, attack 5, release 20 ms, no
 oversampling or dither. Owner's choice: LSP's DSP, not our own. Measured live: a +6 dB tone under
 a −6 dB ceiling records at 0.501 (ceiling 0.5012), its onset included; quiet sound passes untouched.
+**Bypass** skips the lookahead (owner: a bypass is a pass-through, no delay): LSP's own Bypass
+keeps it (measured offline: still 5 ms late), so it stays off and the graph crossfades from LSP to
+the input as it arrives, per sample over 30 ms (the EQ's ramp, `go:Add` 1 = the input). Measured
+live: bypassed, the output is the input sample for sample, 5 ms earlier than limited; settings sent
+while bypassed leave it untouched. Switching overlaps the two copies 5 ms apart for the fade (a
+brief comb, once per press); LSP keeps running, so switching back meets a settled limiter.
 
 **Soft** (a button on the card and the panel, off by default; owner; called Smooth until the owner
 renamed it, still `smooth` in the saved board): heavy limiting with
@@ -629,9 +635,11 @@ It is PipeBoard's own small LADSPA plugin, `native/pb_denoise.c`, around Speex's
 dereverb). `denoise.py` compiles it once, on demand, into `~/.cache/pipeboard/pb_denoise.so`
 (rebuilt when the source is newer); it runs like a dynamics node (`dynamics.py`), one plugin per
 channel, the graph at 48 kHz. Speex takes 10 ms frames of 16-bit samples: sent in at half level
-(6 dB of headroom) and brought back up. It is 20 ms late (reported on its latency port); the dry
-sound is delayed the same, so **Bypass** is a 20 ms crossfade to the input exactly (owner: a
-bypass is a pass-through). It replaced PipeWire's WebRTC echo-cancel module, which had no bypass
+(6 dB of headroom) and brought back up. It is 20 ms late (reported on its latency port, 0 while
+bypassed); **Bypass** is a 20 ms crossfade to the input as it arrives, exactly, with no delay
+(owner: a bypass is a pass-through; it first crossfaded to the input 20 ms late, in step, which
+kept the delay). The two copies 20 ms apart overlap during the fade, once per press; Speex keeps
+running underneath. It replaced PipeWire's WebRTC echo-cancel module, which had no bypass
 (ignored changes while running, and changed the sound even with suppression off).
 
 Measured offline at 48 kHz, −40 dB steady hiss under a voice (plan notes, M17):
@@ -929,7 +937,7 @@ total delay of the sound arriving there (owner's spec; renders in the plan's art
 - **Where the figures come from** (`graph.latency`, pure): a device's capture and playback delay
   are PipeWire's port Latency figures (block + ALSA headroom; `card["delay"]`). An effect of
   PipeBoard's adds what `dynamics.latency_ms` knows: the limiter its 5 ms lookahead, Noise
-  Suppression its two 10 ms Speex frames, the rest 0; gains and virtual devices 0. A plugin or
+  Suppression its two 10 ms Speex frames (bypassed, both 0: §5.5, §5.8), the rest 0; gains and virtual devices 0. A plugin or
   Easy Effects shows `?`. PipeWire's own totals are not used: every filter reports 0 and every
   null sink restarts at 0, so totals are added up along the wires, longest path in.
 - **Totals** start at an app (0) or a device's capture. `up to` when paths of different length

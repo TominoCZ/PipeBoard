@@ -156,7 +156,9 @@ def controls(dev: dict) -> dict:
     bypass = 1.0 if dev.get("bypass") else 0.0
     if dev["type"] == "limiter":
         smooth = 1.0 if dev.get("smooth") else 0.0
-        return {"Threshold (G)": _gain(get("ceiling_db")), "Bypass": bypass,
+        # LSP's own bypass keeps the lookahead (measured: still 5 ms late): it stays off, and
+        # the bypass is the crossfade around it (_limiter), go:Add 1 the dry input.
+        return {"Threshold (G)": _gain(get("ceiling_db")), "Bypass": 0.0,
                 "Automatic level regulation": smooth, "Operating mode": smooth}
     if dev["type"] == "gate":
         return {"Curve threshold (G)": _gain(get("threshold_db")),
@@ -177,6 +179,8 @@ def params(dev: dict) -> str:
     frequency too, on each of its biquads)."""
     node = KINDS[dev["type"]]["node"]
     live = {f"{node}:{k}": v for k, v in controls(dev).items()}
+    if dev["type"] == "limiter":
+        live["go:Add"] = 1.0 if dev.get("bypass") else 0.0
     if dev["type"] == "deesser":
         live |= {f"{b}:Freq": clean("deesser", "freq_hz", dev.get("freq_hz")) for b in XOVER}
     return " ".join(f'"{k}" {v!r}' for k, v in live.items())
@@ -200,12 +204,42 @@ def conf(dev: dict) -> str:
     n = k["node"]
     if dev["type"] == "deesser":
         return _deesser(dev, node)
+    if dev["type"] == "limiter":
+        return _limiter(dev, node)
     if dev["type"] == "denoise":  # mono: filter-chain copies it per channel; Speex is for 48 kHz
         pos = "audio.position = [ FL FR ]"  # (the streams resample to it)
         return eq.chain(dev, [node], [], f'"{n}:Input"', f'"{n}:Output"').replace(
             pos, f"{pos}\n      audio.rate = 48000")
     return eq.chain(dev, [node], [], f'"{n}:Input L" "{n}:Input R"',
                     f'"{n}:Output L" "{n}:Output R"')
+
+
+def _limiter(dev: dict, lim: str) -> str:
+    """Per channel: out = limited·(1 − fade) + input·fade, the input as it arrives: bypassed, the
+    sound skips the lookahead (owner: a bypass is a pass-through, no delay). The fade is the EQ's
+    (eq.conf: a ramp fed by `linear` nodes, per sample over eq.FADE_S); while it moves, the two
+    copies 5 ms apart overlap (a brief comb, once per press). LSP keeps running underneath, so
+    switching back fades into a limiter already settled on the sound."""
+    lin = lambda name, mult, add: (f'{{ type = builtin name = {name} label = linear '  # noqa: E731
+                                   f'control = {{ "Mult" = {mult} "Add" = {add} }} }}')
+    go = 1.0 if dev.get("bypass") else 0.0
+    nodes = [lim, lin("go", 0.0, go), lin("back", -1.0, 1.0), lin("len", 0.0, eq.FADE_S),
+             "{ type = builtin name = fade label = ramp }", lin("unfade", -1.0, 1.0)]
+    pairs = [("go:Notify", "fade:Stop"), ("go:Notify", "back:Control"),
+             ("back:Notify", "fade:Start"), ("len:Notify", "fade:Duration (s)"),
+             ("fade:Out", "unfade:In")]
+    for ch in "LR":
+        nodes += [f"{{ type = builtin name = in{ch} label = copy }}",
+                  f"{{ type = builtin name = wet{ch} label = mult }}",
+                  f"{{ type = builtin name = dry{ch} label = mult }}",
+                  f'{{ type = builtin name = mix{ch} label = mixer '
+                  f'control = {{ "Gain 1" = 1.0 "Gain 2" = 1.0 }} }}']
+        pairs += [(f"in{ch}:Out", f"lim:Input {ch}"), (f"lim:Output {ch}", f"wet{ch}:In 1"),
+                  ("unfade:Out", f"wet{ch}:In 2"), (f"in{ch}:Out", f"dry{ch}:In 1"),
+                  ("fade:Out", f"dry{ch}:In 2"), (f"wet{ch}:Out", f"mix{ch}:In 1"),
+                  (f"dry{ch}:Out", f"mix{ch}:In 2")]
+    links = [f'{{ output = "{a}" input = "{b}" }}' for a, b in pairs]
+    return eq.chain(dev, nodes, links, '"inL:In" "inR:In"', '"mixL:Out" "mixR:Out"')
 
 
 def _deesser(dev: dict, comp: str) -> str:
@@ -253,18 +287,22 @@ def capture(model: dict, key: str) -> list[tuple[int, str]]:
 DELAY = {"limiter": 240, "denoise": 1016}
 
 
-def latency_ms(kind: str) -> float:
+def latency_ms(kind: str, bypass: bool = False) -> float:
     """What an effect of PipeBoard's own adds itself, in ms: the limiter its lookahead, Noise
     Suppression its two 10 ms Speex frames (pb_denoise.c reports 2 frames); the rest none (no
-    lookahead set; the EQ's filters work sample by sample)."""
-    return {"limiter": LIMITER_FIXED["Lookahead (ms)"], "denoise": 20.0}.get(kind, 0.0)
+    lookahead set; the EQ's filters work sample by sample). Bypassed, none: both pass the input
+    as it arrives."""
+    own = {"limiter": LIMITER_FIXED["Lookahead (ms)"], "denoise": 20.0}.get(kind, 0.0)
+    return 0.0 if bypass else own
 
 
-def delays(kind: str, clock: dict | None) -> list[int]:
-    """The delays an effect's output may trail its input by now: its own plus 0, 1, 2 cycles."""
+def delays(kind: str, clock: dict | None, bypass: bool = False) -> list[int]:
+    """The delays an effect's output may trail its input by now: its own plus 0, 1, 2 cycles
+    (bypassed, without its own lookahead: the denoise's resampling stays)."""
     clock = clock or {}
     cycle = round((clock.get("quantum") or 1024) / (clock.get("rate") or 48000) * 48000)
-    return [DELAY.get(kind, 0) + k * cycle for k in range(3)]
+    own = DELAY.get(kind, 0) - round(48 * (latency_ms(kind) - latency_ms(kind, bypass)))
+    return [own + k * cycle for k in range(3)]
 
 
 def _match(a: array, b: array, d: int) -> float:

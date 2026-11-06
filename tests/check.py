@@ -1440,8 +1440,8 @@ async def check_limiter(board, page, next_state):
         board.gains.command = say
     node = card["ids"][card["names"].index(f"{board.ws['devices'][key]['node']}_in")]
     assert sent == [f'set-param {node} Props {{ params = [ "lim:Threshold (G)" 0.063096 '
-                    '"lim:Bypass" 1.0 "lim:Automatic level regulation" 0.0 '
-                    '"lim:Operating mode" 0.0 ] }'], sent
+                    '"lim:Bypass" 0.0 "lim:Automatic level regulation" 0.0 '
+                    '"lim:Operating mode" 0.0 "go:Add" 1.0 ] }'], sent
     sent.clear()
     board.gains.command = lambda line: sent.append(line) or asyncio.sleep(0)
     try:
@@ -1455,7 +1455,7 @@ async def check_limiter(board, page, next_state):
     assert limiter.clean("limiter", "ceiling_db", 3) == 0.0
     conf = limiter.conf(limiter.new("limiter"))
     assert '"Gain boost" = 0.0' in conf and '"Threshold (G)" = 0.944061' in conf, conf
-    assert 'inputs = [ "lim:Input L" "lim:Input R" ]' in conf
+    assert 'inputs = [ "inL:In" "inR:In" ]' in conf  # through the bypass fade (check_true_bypass)
     # The live panel: peaks in and out per 10 ms block, from the 4-channel capture.
     from array import array
     block = array("f", [0.5, -2.0, 0.9, -0.9] * limiter.BLOCK).tobytes()
@@ -1627,6 +1627,59 @@ def check_aligned():
     assert al.delay == d, al.delay  # it started on 240 and found 496
     late = got[-40:]
     assert len(got) == 160 and all(abs(i - o) < 1e-6 for i, o in late), late
+
+
+def check_true_bypass():
+    """A bypass is a pass-through with no delay (owner): the limiter's graph fades from LSP to the
+    input as it arrives (LSP's own Bypass stays off: it keeps the 5 ms lookahead), its fade value
+    sent with its settings; bypassed, the limiter and Noise Suppression add no delay to the totals
+    or the panel. Noise Suppression run offline: bypassed, its output is its input, sample for
+    sample; on, 20 ms late."""
+    import ctypes as C
+    import random
+
+    from pipeboard import denoise, dynamics
+
+    dev = {**dynamics.new("limiter"), "bypass": True}
+    conf = dynamics.conf(dev)
+    for link in ('"inL:Out" input = "lim:Input L"', '"lim:Output R" input = "wetR:In 1"',
+                 '"unfade:Out" input = "wetL:In 2"', '"inR:Out" input = "dryR:In 1"',
+                 '"fade:Out" input = "dryL:In 2"', 'inputs = [ "inL:In" "inR:In" ]',
+                 'outputs = [ "mixL:Out" "mixR:Out" ]', '"Mult" = 0.0 "Add" = 1.0', '"Bypass" = 0.0'):
+        assert link in conf, link
+    line = dynamics.params(dev)
+    assert '"lim:Bypass" 0.0' in line and line.endswith('"go:Add" 1.0'), line
+    assert dynamics.latency_ms("limiter", True) == 0.0 and dynamics.latency_ms("limiter") == 5.0
+    clock = {"rate": 192000, "quantum": 1024}
+    assert dynamics.delays("limiter", clock, True)[0] == 0
+    assert dynamics.delays("denoise", clock, True)[0] == 56  # its 48 kHz resampling stays
+
+    class Desc(C.Structure):  # LADSPA's descriptor, up to run()
+        _fields_ = [("id", C.c_ulong), ("label", C.c_char_p), ("props", C.c_int),
+                    *[(n, C.c_char_p) for n in ("name", "maker", "copy")], ("n", C.c_ulong),
+                    ("pd", C.c_void_p), ("pn", C.c_void_p), ("ph", C.c_void_p), ("impl", C.c_void_p),
+                    ("inst", C.CFUNCTYPE(C.c_void_p, C.c_void_p, C.c_ulong)),
+                    ("connect", C.CFUNCTYPE(None, C.c_void_p, C.c_ulong, C.c_void_p)),
+                    ("activate", C.CFUNCTYPE(None, C.c_void_p)),
+                    ("run", C.CFUNCTYPE(None, C.c_void_p, C.c_ulong))]
+    lib = C.CDLL(str(denoise.plugin()))
+    lib.ladspa_descriptor.restype = C.POINTER(Desc)
+    d = lib.ladspa_descriptor(0).contents
+    n, rnd = 9600, random.Random(5)
+    sig = [rnd.uniform(-0.2, 0.2) for _ in range(n)]
+    for bypass, late in ((1.0, 0), (0.0, 960)):
+        h = d.inst(C.addressof(d), 48000)
+        buf_in, buf_out = (C.c_float * n)(*sig), (C.c_float * n)()
+        ctl = [C.c_float(bypass), C.c_float(-12.0), C.c_float(0.0)]  # Bypass, Strength, latency
+        for port, at in enumerate([buf_in, buf_out, *ctl]):
+            d.connect(h, port, C.addressof(at))
+        d.activate(h)
+        d.run(h, n)
+        score = {lag: sum(sig[i] * buf_out[i + lag] for i in range(n - 1000)) for lag in (0, 960)}
+        assert max(score, key=score.get) == late, (bypass, score)
+        assert ctl[2].value == (0.0 if bypass else 960.0), ctl[2].value  # its latency port
+        if bypass:
+            assert all(abs(a - b) < 1e-7 for a, b in zip(sig, buf_out)), "bypassed: the input"
 
 
 def check_deesser():
@@ -2194,6 +2247,7 @@ def main():
     check_aligned()
     check_portals()
     check_deesser()
+    check_true_bypass()
     check_one_pw_cli()
     check_create_errors()
     asyncio.run(check_rename_stale())
