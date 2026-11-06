@@ -1369,6 +1369,57 @@ def check_eq_dynamic():
     assert runner.last["k"] == (None, [None, None]) and "k" not in runner.unrun
 
 
+def check_eq_shape():
+    """An EQ runs only the slots its bands need (steps of STEP) and dynamic stages only with a
+    dynamic band (each slot costs the same flat or not). A bigger one takes over by grow: started
+    silent, its second row gets the bands, both fade at once (old out, new in), the old one stops;
+    or, when it fails, the old one is kept as it was."""
+    import asyncio as aio
+
+    from pipeboard import eq
+
+    rate, bell = 192000, {"type": "bell", "freq": 1000, "gain": 3, "q": 1}
+    shape = lambda bands: eq.shape({"bands": eq.clean(bands)}, rate)  # noqa: E731
+    assert shape([]) == (4, 0) and shape([bell] * 4) == (4, 0) and shape([bell] * 5) == (8, 0)
+    assert shape([{"type": "low-cut", "slope": 48}, bell]) == (8, 0), "a steep cut is 4 slots"
+    assert shape([{"type": "high-shelf", "freq": 9000, "gain": 18}] * 4)[0] == 8, "makeup counts"
+    assert shape([{"type": "low-cut", "slope": 48}] * 3 + [bell])[0] == eq.SLOTS, "13 slots"
+    assert shape([{**bell, "dyn": True}]) == (4, eq.DYN_SLOTS)
+    assert shape([{**bell, "dyn": True, "on": False}]) == (4, 0), "an off band is not dynamic"
+    dev = {**eq.new(), "bands": eq.clean([bell] * 5)}
+    text = eq.conf(dev, rate)
+    assert text.count("label = bq_raw") == 2 * 8 and "dyna_processor" not in text, "8 slots, no stages"
+    assert '"s7:Out" input = "sx:In 1"' in text and "b0 = 0.0" not in text
+    quiet = eq.conf(dev, rate, (8, 0), silent=True)
+    assert quiet.count("b0 = 0.0 b1 = 0.0 b2 = 0.0") == 2 * 8, "silent: every slot says nothing"
+
+    sent = []
+    async def say(line):
+        sent.append(line)
+    runner = eq.Eqs(False, say, lambda *a: None)
+    small = {**eq.new(), "bands": eq.clean([bell] * 2)}
+    aio.run(runner.start("k", small, rate))
+    assert runner.size["k"] == (4, 0) and runner.fits("k", small, rate)
+    assert not runner.fits("k", dev, rate), "5 bells need 8 slots"
+    runner.on["k"] = 1  # the old one plays its second row
+    assert aio.run(runner.grow("k", dev, rate, silent=True)) and runner.size["k"] == (8, 0)
+    assert runner.last["k"][1][0] == [eq.SILENT] * 8, "the new one starts silent"
+    aio.run(runner.handover("k", 11, 22, dev, rate))
+    assert sent[0].startswith('set-param 22 Props { params = [ "t0:b0"'), sent[0]
+    assert '"s0:b0" 0.0' in sent[1] and sent[1].startswith("set-param 11"), "old: its idle row"
+    assert sent[2:] == ['set-param 11 Props { params = [ "go:Add" 0.0 ] }',
+                        'set-param 22 Props { params = [ "go:Add" 1.0 ] }'], sent[2:]
+    assert runner.heard("k") == eq.slots(dev["bands"], rate, size=8) and "k" not in runner.unrun
+    aio.run(runner.finish("k", True))
+    assert "k" not in runner.old and runner.size["k"] == (8, 0)
+    # Failed: back to the old one, as it was.
+    before = (runner.size["k"], runner.on["k"], runner.last["k"])
+    big = {**eq.new(), "bands": eq.clean([{**bell, "dyn": True}] * 5)}
+    assert aio.run(runner.grow("k", big, rate, silent=True)) and runner.size["k"] == (8, 4)
+    aio.run(runner.finish("k", False))
+    assert (runner.size["k"], runner.on["k"], runner.last["k"]) == before
+
+
 async def check_eq(board, page, next_state):
     """An EQ: one card, IN and OUT; bands sent as coefficients to its input node, only the slots
     that changed; bypass flattens every slot; saved; deleting it removes it."""
@@ -1396,7 +1447,7 @@ async def check_eq(board, page, next_state):
     assert len(lines) == 3 and '"t0:b0"' in lines[0] and '"t1:b0"' not in lines[0], lines
     assert '"s0:b0"' in lines[1] and '"s1:b0"' in lines[1] and '"s2:' not in lines[1], lines[1]
     assert lines[2].startswith('"t0:b0" 1.0 "t0:b1" 0.0') and '"t1:' not in lines[2], "bypass: flat"
-    assert board.eqs.heard(key) == eq.slots([], board.rate()) and board.eqs.on[key] == 1
+    assert board.eqs.heard(key) == eq.slots([], board.rate(), size=4) and board.eqs.on[key] == 1
     dev = board.ws["devices"][key]
     assert [b["freq"] for b in dev["bands"]] == [1000, 4000] and dev["bypass"]
     assert json.loads((board.store.board).read_text())["devices"][key]["bypass"], "saved"
@@ -1405,10 +1456,17 @@ async def check_eq(board, page, next_state):
     for f in (2000, 3000, 5000, 6000):
         await page.send_json({"op": "eq-set", "key": key, "bands": [{**bell, "freq": f}], "bypass": False})
     await asyncio.sleep(0.6)
-    want = eq.slots(eq.clean([{**bell, "freq": 6000}]), board.rate())
+    want = eq.slots(eq.clean([{**bell, "freq": 6000}]), board.rate(), size=4)
     assert board.eqs.heard(key) == want and len(board.eqs.sent) < 4, board.eqs.sent
     conf = eq.conf(dev, 48000)
-    assert conf.count("label = bq_raw") == 2 * eq.SLOTS + eq.DYN_SLOTS and '"go:Notify" input = "fade:Stop"' in conf
+    assert conf.count("label = bq_raw") == 2 * 4 and '"go:Notify" input = "fade:Stop"' in conf
+    # A 5th band needs 8 slots: a bigger EQ takes over (the fixture has no processes: its size),
+    # and the bands land on it.
+    five = [{**bell, "freq": f} for f in (100, 200, 400, 800, 1600)]
+    await page.send_json({"op": "eq-set", "key": key, "bands": five, "bypass": False})
+    await asyncio.sleep(0.6)
+    assert board.eqs.size[key] == (8, 0) and key not in board.resizing
+    assert board.eqs.heard(key) == eq.slots(eq.clean(five), board.rate(), size=8), "on the bigger one"
     await page.send_json({"op": "delete-device", "key": key})
     for _ in range(8):
         state = await next_state()
@@ -1937,7 +1995,7 @@ async def check_settings_revert():
         await asyncio.sleep(0.6)  # the gain's ramp
         await board.refresh()
         assert board.gains.sent and board.gains.sent[-1][1] == 0.0, board.gains.sent[-3:]
-        assert board.eqs.heard(keys["eq"]) == eq.slots([], board.rate()), "EQ flat again"
+        assert board.eqs.heard(keys["eq"]) == eq.slots([], board.rate(), size=board.eqs.size[keys["eq"]][0]), "EQ flat again"
         assert {"values": {"0": 0.6, "1": 0.5, "2": 0.0, "3": 1.0, "4": 0.0}} in sent and {"bypass": False} in sent, sent
         assert board.profile_state()["changes"] == [], board.profile_state()["changes"]
         assert not board.ws["devices"][keys["waveform"]].get("mono"), "Mono reverted to Stereo"
@@ -2243,6 +2301,7 @@ def main():
     check_eq_math()
     check_eq_range()
     check_eq_dynamic()
+    check_eq_shape()
     check_delete_races()
     check_aligned()
     check_portals()

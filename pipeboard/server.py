@@ -77,8 +77,9 @@ class Board:
         # node_names: every node name on the system at the last read (new devices avoid them)
         self.waiting, self.created, self.first_seen, self.gone, self.node_names = (
             set(), set(), {}, {}, set())
-        # Inserted device → the links it replaces; renamed device → its old node's newest serial.
-        self.replacing, self.remade = {}, {}
+        # Inserted device → the links it replaces; renamed device → its old node's newest serial;
+        # EQ → its swap for a bigger one (resize_eq).
+        self.replacing, self.remade, self.resizing = {}, {}, {}
         self.gains = gain.Gains(live=source.mode == "live")
         # Plugin hosts, plugins whose own window is open, EQ processes, the EQ panel each page
         # shows (page → key) and the one spectrum capture for it, with a dynamics panel's peaks
@@ -666,8 +667,79 @@ class Board:
         return None
 
     async def send_eq(self, key: str, dev: dict) -> None:
-        if (node := self.input_node(key, dev)) is not None:
+        if key in self.resizing or (node := self.input_node(key, dev)) is None:
+            return  # (a bigger EQ coming in gets dev's bands as it is heard)
+        if self.eqs.fits(key, dev, self.rate()):
             await self.eqs.set(key, dev, node, self.rate())
+        else:
+            self.resizing[key] = asyncio.create_task(self.resize_eq(key, dev, node))
+
+    async def resize_eq(self, key: str, dev: dict, old_node: int) -> None:
+        """An EQ whose bands need more slots than it runs, or its first dynamic band: a bigger one
+        takes over without a cut (swap_bigger). Edits meanwhile wait, and go to the new one after.
+        The board is not read meanwhile: it sees both as one card (as for a rename)."""
+        self.swapping, kept = True, False
+        self.settle(SETTLE_DROPS_S)
+        try:
+            kept = await self.swap_bigger(key, dev, old_node)
+        except Exception:  # noqa: BLE001 - the old EQ plays on
+            log.exception("eq: could not swap in a bigger EQ")
+        finally:
+            if key in self.eqs.old:
+                await self.eqs.finish(key, kept)
+            self.swapping = False
+            self.resizing.pop(key, None)
+        await self.refresh()
+        if kept:
+            await self.send_eq(key, dev)
+        elif (node := self.input_node(key, dev)) is not None:  # all the old one holds
+            await self.eqs.set(key, dev, node, self.rate())
+
+    async def swap_bigger(self, key: str, dev: dict, old_node: int) -> bool:
+        """A bigger EQ started beside the old one and wired like it; if the old one is running,
+        the new one starts silent and fades in as the old one fades out (eq.Eqs.grow). False: the
+        old one is kept."""
+        card, rate = self.owned(key), self.rate()
+        running = any(o["id"] == old_node and o["info"].get("state") == "running"
+                      for o in await self.source.snapshot())
+        if not card or not await self.eqs.grow(key, dev, rate, silent=running):
+            return False
+        if not self.eqs.live:  # the fixture: no processes, only the size
+            return True
+        new = await self.wire_twin(card, dev, running)
+        if new is not None and running:
+            await self.eqs.handover(key, old_node, new, dev, rate)
+        return new is not None
+
+    async def wire_twin(self, card: dict, dev: dict, run: bool) -> int | None:
+        """An EQ's second process (resize_eq) wired like the card's: each of its links again, on
+        the new nodes' ports. Its input node (with `run`, once it runs: coefficients sent before
+        are lost); None if it does not show its ports, or run, within 3 s."""
+        old, newest = set(card["ids"]), max(card["serials"])
+        for _ in range(60):
+            dump = await self.source.snapshot()
+            new = {o["info"]["props"].get("node.name"): o for o in dump
+                   if o["type"].endswith("Node")
+                   and o["info"]["props"].get("pipeboard.id") == dev["id"]
+                   and int(o["info"]["props"].get("object.serial", 0)) > newest}
+            if len(new) == 2 and (links := devices.moved_links(
+                    dump, old, {o["id"] for o in new.values()}, set())) is not None:
+                for a, b in links:
+                    if error := await self.source.link(a, b):
+                        log.warning("eq: a bigger EQ's link %s → %s: %s", a, b, error)
+                break
+            await asyncio.sleep(0.05)
+        else:
+            return None
+        node = new.get(f"{dev['node']}_in", {}).get("id")
+        if not run:
+            return node
+        for _ in range(60):
+            if any(o["id"] == node and o["info"].get("state") == "running"
+                   for o in await self.source.snapshot()):
+                return node
+            await asyncio.sleep(0.05)
+        return None
 
     async def op_dyn_set(self, op) -> None:
         """A limiter's or compressor's settings: checked, sent live, saved once they settle."""

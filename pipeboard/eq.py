@@ -37,10 +37,16 @@ log = logging.getLogger(__name__)
 # down and the difference added back as plain gain in MAKEUP spare slots (exact, see slots()).
 SLOTS, MAKEUP, LIMIT, MAX_BANDS = 16, 3, 8.0, 8
 BAND_SLOTS = SLOTS - MAKEUP
+# An EQ runs only the slots its bands need, in steps of STEP (each slot costs the same flat or not:
+# measured at 192 kHz / 256, 16 slots 52 µs a cycle, 4 slots 15), and its dynamic stages only once
+# a band is dynamic (4 stages: 29 µs more). More is a bigger EQ swapped in without a cut (Eqs.grow);
+# ponytail: it never shrinks while running (a smaller one comes at its next start).
+STEP = 4
 FREQ, GAIN, Q = (20.0, 20000.0), (-18.0, 18.0), (0.1, 18.0)
 TYPES = ("bell", "low-shelf", "high-shelf", "low-cut", "high-cut", "notch")
 SLOPES = {12: (0.7071,), 24: (0.5412, 1.3066), 48: (0.5098, 0.6013, 0.9000, 2.5629)}  # Butterworth
 FLAT = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)  # b0 b1 b2 a0 a1 a2: pass-through
+SILENT = (0.0, 0.0, 0.0, 1.0, 0.0, 0.0)  # a row with one of these says nothing
 RUN = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "pipeboard"
 # The swap: the silent row gets the new coefficients, rings out its reset for SETTLE_S, then the
 # ramp fades over FADE_S, per sample (the mixer's gains step once per cycle: measured, still
@@ -49,6 +55,7 @@ RUN = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "pipeboard"
 # for bells and shelves above ~50 Hz; a steep cut near 20 Hz rings longer and may thump faintly.
 # While dragging, the sound follows at ~8 swaps a second (the last position always lands).
 ROWS, SETTLE_S, FADE_S, LAG_S = ("s", "t"), 0.04, 0.03, 0.05
+GROW_SETTLE_S = 0.2  # a bigger EQ's row before it is faded in: rare, so long enough for low cuts
 
 
 def new(name: str = "EQ") -> dict:
@@ -120,11 +127,16 @@ def biquad(kind: str, freq: float, gain: float, q: float, rate: float) -> tuple:
     return tuple(v / coef[3] for v in coef[:3]) + (1.0,) + tuple(v / coef[3] for v in coef[4:])
 
 
-def slots(bands: list[dict], rate: float, bypass: bool = False) -> list[tuple]:
-    """Every slot's coefficients: the bands that are on, in order, then the makeup gain, then
-    pass-through. A biquad whose b0…b2 reach past LIMIT is divided down (its shape is the same,
-    only quieter) and the factor goes into plain-gain slots (b0 = factor), so the whole chain is
-    exactly what the bands ask for and every value stays inside PipeWire's range."""
+def slots(bands: list[dict], rate: float, bypass: bool = False, size: int = SLOTS) -> list[tuple]:
+    """A row's `size` slots: the bands that are on, in order, then the makeup gain, then
+    pass-through."""
+    return (_used(bands, rate, bypass) + [FLAT] * size)[:size]
+
+
+def _used(bands: list[dict], rate: float, bypass: bool = False) -> list[tuple]:
+    """The slots the bands use. A biquad whose b0…b2 reach past LIMIT is divided down (its shape
+    is the same, only quieter) and the factor goes into plain-gain slots (b0 = factor), so the
+    whole chain is exactly what the bands ask for and every value stays inside PipeWire's range."""
     out, makeup = [], 1.0
     for b in [] if bypass else [b for b in bands if b["on"]]:
         for q in _sections(b):
@@ -138,7 +150,15 @@ def slots(bands: list[dict], rate: float, bypass: bool = False) -> list[tuple]:
         step = min(makeup, LIMIT)
         out.append((step, 0.0, 0.0, 1.0, 0.0, 0.0))
         makeup /= step
-    return (out + [FLAT] * SLOTS)[:SLOTS]
+    return out
+
+
+def shape(dev: dict, rate: float) -> tuple[int, int]:
+    """(slots in a row, dynamic stages) an EQ needs for its bands, bypassed or not: the slots in
+    steps of STEP, the stages all or none."""
+    used = len(_used(dev["bands"], rate))
+    return (min(SLOTS, max(STEP, -(-used // STEP) * STEP)),
+            DYN_SLOTS if dynamic(dev["bands"]) else 0)
 
 
 def response(coefs: list[tuple], freq: float, rate: float) -> float:
@@ -150,19 +170,22 @@ def response(coefs: list[tuple], freq: float, rate: float) -> float:
     return 20 * math.log10(max(level, 1e-9))  # a notch's centre is silence
 
 
-def conf(dev: dict, rate: float) -> str:
-    """The filter-chain process's config: per channel, the input copied into two rows of SLOTS raw
-    biquads (both starting at the bands); out = s·(1 − fade) + t·fade, fade 0: the first row."""
+def conf(dev: dict, rate: float, size: tuple[int, int] | None = None, silent: bool = False) -> str:
+    """The filter-chain process's config: per channel, the input copied into two rows of raw
+    biquads (both starting at the bands, or silent); out = s·(1 − fade) + t·fade, fade 0: the
+    first row. `size`: (slots in a row, dynamic stages), shape() unless given."""
+    n, stages = size or shape(dev, rate)
+    row_slots = [SILENT] * n if silent else slots(dev["bands"], rate, dev.get("bypass"), n)
     nodes = ["{ type = builtin name = in label = copy }"]
     links = []
     for row in ROWS:
-        for i, (b0, b1, b2, a0, a1, a2) in enumerate(slots(dev["bands"], rate, dev.get("bypass"))):
+        for i, (b0, b1, b2, a0, a1, a2) in enumerate(row_slots):
             nodes.append(f"{{ type = builtin name = {row}{i} label = bq_raw config = {{ "
                          f"coefficients = [ {{ rate = {int(rate)} b0 = {b0!r} b1 = {b1!r} "
                          f"b2 = {b2!r} a0 = {a0!r} a1 = {a1!r} a2 = {a2!r} }} ] }} }}")
             before = f"{row}{i - 1}:Out" if i else "in:Out"
             links.append(f'{{ output = "{before}" input = "{row}{i}:In" }}')
-        links.append(f'{{ output = "{row}{SLOTS - 1}:Out" input = "{row}x:In 1" }}')
+        links.append(f'{{ output = "{row}{n - 1}:Out" input = "{row}x:In 1" }}')
         links.append(f'{{ output = "{row}x:Out" input = "mix:In {ROWS.index(row) + 1}" }}')
         nodes.append(f"{{ type = builtin name = {row}x label = mult }}")
     # The ramp's own controls have no range, so PipeWire clamps whatever is set on them to 0: they
@@ -178,7 +201,7 @@ def conf(dev: dict, rate: float) -> str:
         ("go:Notify", "fade:Stop"), ("go:Notify", "back:Control"), ("back:Notify", "fade:Start"),
         ("len:Notify", "fade:Duration (s)"), ("fade:Out", "unfade:In"), ("unfade:Out", "sx:In 2"),
         ("fade:Out", "tx:In 2"))]
-    stages, out = dyn_stages(dev, rate)
+    stages, out = dyn_stages(dev, rate, stages)
     return chain(dev, nodes + stages[0], links + stages[1], '"in:In"', f'"{out}"')
 
 
@@ -241,24 +264,25 @@ def dynamic(bands: list[dict]) -> list[dict]:
     return [b for b in bands if b.get("dyn") and b["on"] and b["type"] in DYN_TYPES][:DYN_SLOTS]
 
 
-def dyn_values(dev: dict, rate: float) -> list[tuple[tuple, dict]]:
-    """Every stage's filter coefficients and processor controls: the dynamic bands' first, the
-    rest at rest (pass-through filter, processor bypassed)."""
-    used = [] if dev.get("bypass") else dynamic(dev["bands"])
-    return ([(dyn_filter(b, rate), dyn_curve(b)) for b in used]
-            + [(FLAT, REST)] * (DYN_SLOTS - len(used)))
+def dyn_values(dev: dict, rate: float, n: int = DYN_SLOTS) -> list[tuple[tuple, dict]]:
+    """Each of n stages' filter coefficients and processor controls: the dynamic bands' first,
+    the rest at rest (pass-through filter, processor bypassed)."""
+    used = [] if dev.get("bypass") else dynamic(dev["bands"])[:n]
+    return [(dyn_filter(b, rate), dyn_curve(b)) for b in used] + [(FLAT, REST)] * (n - len(used))
 
 
-def dyn_stages(dev: dict, rate: float) -> tuple[tuple[list, list], str]:
+def dyn_stages(dev: dict, rate: float, n: int = DYN_SLOTS) -> tuple[tuple[list, list], str]:
     """The stages' nodes and links after `mix`, and the node the sound leaves from. None when
     LSP's plugins are missing (the EQ works; its bands just cannot be dynamic)."""
     from pipeboard import dynamics  # noqa: PLC0415 - it builds on this module
     try:
-        lsp = dynamics.plugin()
+        lsp = dynamics.plugin() if n else None
     except FileNotFoundError:
+        lsp = None
+    if not lsp:
         return ([], []), "mix:Out"
     nodes, links, prev = [], [], "mix:Out"
-    for j, ((b0, b1, b2, a0, a1, a2), ctl) in enumerate(dyn_values(dev, rate)):
+    for j, ((b0, b1, b2, a0, a1, a2), ctl) in enumerate(dyn_values(dev, rate, n)):
         values = " ".join(f'"{k}" = {v!r}' for k, v in {**DP_FIXED, **ctl}.items())
         nodes += [f"{{ type = builtin name = din{j} label = copy }}",
                   f"{{ type = builtin name = dbp{j} label = bq_raw config = {{ coefficients = [ "
@@ -349,15 +373,22 @@ class Eqs:
         self.sent: list[tuple[str, str]] = []
         self.dyn_last: dict[str, list] = {}  # key → each dynamic stage's (filter, controls) sent
         self.unrun: dict[str, str] = {}  # key → its input node's name, until that node first runs
+        self.size: dict[str, tuple[int, int]] = {}  # key → (slots in a row, stages) it runs
+        self.old: dict[str, tuple] = {}  # key → the EQ a bigger one replaces (grow), its state
 
-    async def start(self, key: str, dev: dict, rate: float) -> str | None:
-        """An EQ's process, or a limiter's or compressor's (the same kind, dynamics.py)."""
+    def _size(self, key: str) -> tuple[int, int]:
+        return self.size.get(key, (SLOTS, DYN_SLOTS))
+
+    async def start(self, key: str, dev: dict, rate: float, silent: bool = False) -> str | None:
+        """An EQ's process, or a limiter's or compressor's (the same kind, dynamics.py). An EQ
+        `silent` says nothing until a row gets its bands (grow)."""
         if key in self.procs:
             return None
         if dev["type"] == "eq":
-            coefs = slots(dev["bands"], rate, dev.get("bypass"))
+            self.size[key] = n, stages = shape(dev, rate)
+            coefs = [SILENT] * n if silent else slots(dev["bands"], rate, dev.get("bypass"), n)
             self.last[key], self.on[key] = (rate, [coefs, coefs]), 0
-            self.dyn_last[key] = dyn_values(dev, rate)  # what the conf starts it with
+            self.dyn_last[key] = dyn_values(dev, rate, stages)  # what the conf starts it with
             self.unrun[key] = f"{dev['node']}_in"
         if not self.live:
             return None
@@ -365,7 +396,8 @@ class Eqs:
         try:
             RUN.mkdir(parents=True, exist_ok=True)
             path = RUN / f"{dev['type']}-{dev['id']}.conf"
-            text = conf(dev, rate) if dev["type"] == "eq" else dynamics.conf(dev)
+            text = (conf(dev, rate, self.size[key], silent) if dev["type"] == "eq"
+                    else dynamics.conf(dev))
             path.write_text(text)
             proc = await asyncio.create_subprocess_exec(
                 "pipewire", "-c", str(path), stdout=asyncio.subprocess.DEVNULL,
@@ -388,7 +420,8 @@ class Eqs:
         """Move the EQ to dev's bands, by a swap of rows; changes while one runs: the last wins.
         Its dynamic stages change at once (a glitch there cancels while a band is at rest)."""
         await self._dyn(key, dev, node, rate)
-        self.want[key] = (node, rate, slots(dev["bands"], rate, dev.get("bypass")))
+        coefs = slots(dev["bands"], rate, dev.get("bypass"), self._size(key)[0])
+        self.want[key] = (node, rate, coefs)
         if key not in self.swaps or self.swaps[key].done():
             self.swaps[key] = asyncio.create_task(self._swaps(key))
 
@@ -437,7 +470,8 @@ class Eqs:
 
     async def _dyn(self, key: str, dev: dict, node: int, rate: float) -> None:
         """The dynamic stages that differ from what was last sent: their filter and controls."""
-        now, before = dyn_values(dev, rate), self.dyn_last.get(key) or [None] * DYN_SLOTS
+        n = self._size(key)[1]
+        now, before = dyn_values(dev, rate, n), self.dyn_last.get(key) or [None] * n
         line = " ".join(_stage_params(j, *stage) for j, stage in enumerate(now)
                         if stage != before[j])
         self.dyn_last[key] = now
@@ -445,27 +479,90 @@ class Eqs:
             self.sent.append((key, line))
             await self.say(f"set-param {node} Props {{ params = [ {line} ] }}")
 
+    def fits(self, key: str, dev: dict, rate: float) -> bool:
+        """Whether the running EQ has the slots and stages dev's bands need."""
+        (n, stages), (has, has_stages) = shape(dev, rate), self._size(key)
+        return n <= has and stages <= has_stages
+
+    async def grow(self, key: str, dev: dict, rate: float, silent: bool) -> bool:
+        """A bigger EQ for dev's bands, started beside the running one, which plays on: the caller
+        wires it like the old one, handover() fades from one to the other, finish() stops the one
+        not kept. `silent`: it starts saying nothing (the old one is heard). False: it did not
+        start, and the old one is kept."""
+        if (swap := self.swaps.get(key)) and not swap.done():
+            with contextlib.suppress(Exception):
+                await swap  # the old one's own swap lands first: handover() fades from its row
+        self.old[key] = (self.procs.pop(key, None), self.on.get(key, 0), self._size(key),
+                         self.last.get(key), self.dyn_last.get(key), self.unrun.get(key))
+        if error := await self.start(key, dev, rate, silent):
+            log.warning("eq: a bigger EQ did not start: %s", error)
+            await self.finish(key, False)
+            return False
+        return True
+
+    async def handover(self, key: str, old_node: int, node: int, dev: dict, rate: float) -> None:
+        """Both running, both wired, the new one silent: its second row gets dev's bands and
+        settles, the old one's silent row goes to zero, and both fade at once, the old one out and
+        the new one in. Two processes doing the same sound: no cut (a tone through it moved under
+        0.03 dB, plan notes)."""
+        _, on, (n_old, _), *_ = self.old[key]
+        n = self._size(key)[0]
+        coefs = slots(dev["bands"], rate, dev.get("bypass"), n)
+        line = params(coefs, None, ROWS[1])
+        self.sent.append((key, line))
+        await self.say(f"set-param {node} Props {{ params = [ {line} ] }}")
+        await asyncio.sleep(GROW_SETTLE_S)
+        quiet = params([SILENT] * n_old, None, ROWS[1 - on])
+        await self.say(f"set-param {old_node} Props {{ params = [ {quiet} ] }}")
+        await self.say(f'set-param {old_node} Props {{ params = [ "go:Add" {float(1 - on)} ] }}')
+        await self.say(f'set-param {node} Props {{ params = [ "go:Add" 1.0 ] }}')
+        await asyncio.sleep(FADE_S + LAG_S)
+        self.last[key], self.on[key] = (rate, [[SILENT] * n, coefs]), 1
+        self.unrun.pop(key, None)  # it runs: what was sent stays
+
+    async def finish(self, key: str, keep: bool) -> None:
+        """After grow(): stop the old EQ (keep the new one), or the new one (back to the old)."""
+        old, *state = self.old.pop(key, (None,))
+        if keep:
+            await _end(old)
+            return
+        new = self.procs.pop(key, None)
+        if old:
+            self.procs[key] = old
+        self.on[key], self.size[key], self.last[key], self.dyn_last[key], unrun = state
+        self.unrun.pop(key, None)
+        if unrun:
+            self.unrun[key] = unrun
+        await _end(new)
+
     async def stop(self, key: str) -> None:
         proc = self.procs.pop(key, None)
         self.last.pop(key, None)
         self.dyn_last.pop(key, None)
         self.unrun.pop(key, None)
         self.want.pop(key, None)
+        self.size.pop(key, None)
         if swap := self.swaps.pop(key, None):
             swap.cancel()
-        if not proc:
-            return
-        for end in (proc.terminate, proc.kill):
-            with contextlib.suppress(ProcessLookupError):
-                end()
-            try:
-                await asyncio.wait_for(asyncio.shield(proc.wait()), 3)
-                return
-            except TimeoutError:
-                continue
+        await _end(self.old.pop(key, (None,))[0])
+        await _end(proc)
 
     async def stop_all(self) -> None:
         await asyncio.gather(*(self.stop(k) for k in list(self.procs)))
+
+
+async def _end(proc: asyncio.subprocess.Process | None) -> None:
+    """A process stopped: asked, then made to."""
+    if not proc:
+        return
+    for end in (proc.terminate, proc.kill):
+        with contextlib.suppress(ProcessLookupError):
+            end()
+        try:
+            await asyncio.wait_for(asyncio.shield(proc.wait()), 3)
+            return
+        except TimeoutError:
+            continue
 
 
 SPECTRUM_RATE = 48000  # enough for 20 Hz–20 kHz; the page's FFT does the rest
