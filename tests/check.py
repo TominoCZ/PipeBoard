@@ -690,9 +690,12 @@ async def check_scope_remade(tmp):
     board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
     await server.startup(board)
     board.visible.add("page")
+    import time
+    board.settling = 0.0
     await board.sync_scope()
     first = board.scope
     assert first is not None
+    assert board.settling > time.monotonic() + 3, "the capture's own start is not counted as dropouts"
     await board.sync_scope()
     assert board.scope is first, "nothing changed: the same capture"
     key = first.sources[0][0]
@@ -1613,6 +1616,8 @@ async def check_settings_revert():
         for op in ({"type": "gain", "name": "Gain", "channels": 2}, {"type": "eq"},
                    {"type": "plugin", "plugin": hum}):
             assert await board.op_create_device(None, {**op, "x": 0, "y": 0}) is None
+        import time
+        assert board.settling > time.monotonic() + 20, "a device made: its own errors are not dropouts"
         for _ in range(3):
             await board.refresh()
         keys = {d["type"]: k for k, d in board.ws["devices"].items()}

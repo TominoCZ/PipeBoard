@@ -40,7 +40,8 @@ SETTLE_S = 0.15  # wait this long after a change before taking a snapshot
 # ends with PipeBoard and is started again at launch.
 FILTERS = ("eq", *dynamics.KINDS)
 RUNS_WITH = ("plugin", *FILTERS)
-SETTLE_DROPS_S = 30  # dropouts right after an engine change are its own, not counted
+SETTLE_DROPS_S = 30  # dropouts just after an engine change or a device made: its own, not counted
+SETTLE_CAPTURE_S = 5  # and just after the live wires' capture started or took new wires in
 TRIAL_S = 60  # a new audio engine setting is kept only if Keep is pressed within this
 BACK_SHOWN_S = 2.5  # how long the bar says the interface is back, before the trial's own
 GONE_S = 5.0  # how long a deleted device's nodes are looked past while PipeWire removes them
@@ -390,7 +391,15 @@ class Board:
         card = next((c for c in self.model["cards"] if c["key"] == key), None)
         return card if card and card["owned"] and key in self.ws.get("devices", {}) else None
 
+    def settle(self, seconds: float) -> None:
+        """PipeBoard changed the graph itself (a device or effect started, the engine set, the live
+        wires' capture started): PipeWire sets it up anew and the nodes waiting on it log errors
+        nobody hears. Not counted as dropouts for a while (owner: 1477 right after PipeBoard
+        started its six effects; the entry back for a moment each time the window came back)."""
+        self.settling = max(self.settling, time.monotonic() + seconds)
+
     async def make(self, key: str) -> str | None:
+        self.settle(SETTLE_DROPS_S)
         self.waiting.add(key)
         self.gone.pop(key, None)  # made again (a profile's, a Revert's): no longer looked past
         dev = self.ws["devices"][key]
@@ -985,6 +994,7 @@ class Board:
         if fresh:
             self.scope, self.scope_seen = fresh, (0, time.monotonic())
             self.scope_started = time.monotonic()
+            self.settle(SETTLE_CAPTURE_S)
             await fresh.start()
 
     async def follow_scope(self, key: tuple, sources: list) -> bool:
@@ -992,6 +1002,7 @@ class Board:
         every wire's sound. False: it cannot (see Scope.update), a fresh one is needed."""
         if not (self.scope and sources and await self.scope.update(sources)):
             return False
+        self.settle(SETTLE_CAPTURE_S)  # (its new links set the graph up anew too)
         self.scope_key = key
         await self.broadcast(json.dumps(
             {"type": "scope", "sources": self.scope_sources_sent(), "fresh": False}))
@@ -1288,7 +1299,7 @@ class Board:
         16 wires between PipeBoard's own nodes were gone, their ports far newer than the nodes)."""
         before = copy.deepcopy(self.ws)
         restart = engine.reopens(values, was)
-        self.settling = time.monotonic() + SETTLE_DROPS_S
+        self.settle(SETTLE_DROPS_S)
         # PipeBoard's effects are stopped first and started fresh after: WirePlumber's restart
         # sets their ports up anew while they run, they fail ("error changing node state"), and
         # PipeWire restarted the interface's stream over and over until they recovered, ~50 s
