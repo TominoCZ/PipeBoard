@@ -19,7 +19,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from pipeboard import devices
+from pipeboard import devices, plughost
 from pipeboard.scope import _die_with_parent
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,17 @@ def new(entry: dict) -> dict:
     return dev
 
 
+def listed(out: bytes, err: bytes, code: int | None) -> list[dict]:
+    """The installed plugins from `plughost --list`'s output; [] with one line logged (not a
+    traceback) when it said nothing: Carla failed to load, and its own words say why."""
+    lines = out.decode(errors="replace").splitlines()
+    if not lines:
+        why = (err.decode(errors="replace").strip().splitlines() or [f"exit {code}"])[-1]
+        log.warning("plugins: could not list them: %s", why)
+        return []
+    return json.loads(lines[-1])["plugins"]
+
+
 class Plugins:
     """Starts, talks to and stops plugin hosts. `heard(key, message)` gets what each host says."""
 
@@ -62,21 +73,26 @@ class Plugins:
         return self.found or []
 
     async def _list(self) -> None:
+        if not (Path(plughost.CARLA) / "carla_backend.py").is_file():
+            # (a friend's launch: a traceback at every start, for a choice the installer offered)
+            log.info("plugins: Carla is not installed, so there are none to add (optional)")
+            self.found, self.listing = [], None
+            return
         try:
             CACHE.mkdir(parents=True, exist_ok=True)
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "pipeboard.plughost", "--list", str(CACHE / "vst3.json"),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 preexec_fn=_die_with_parent)
             try:
-                out, _ = await proc.communicate()
+                out, err = await proc.communicate()
             except asyncio.CancelledError:  # quitting mid-listing: no child or pipe left behind
                 with contextlib.suppress(ProcessLookupError):
                     proc.kill()
                 await proc.wait()
                 proc._transport.close()
                 raise
-            self.found = json.loads(out.decode().splitlines()[-1])["plugins"]
+            self.found = listed(out, err, proc.returncode)
         except Exception:  # noqa: BLE001 - no list is an empty picker, not a crash
             log.exception("plugins: could not list them")
             self.found = []
