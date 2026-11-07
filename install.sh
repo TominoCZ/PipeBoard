@@ -36,10 +36,20 @@ after()  { printf '    %s%s%s\n' "$D" "$*" "$R"; }  # a line under the final one
 die()    { printf '\n  %s✗ %s%s\n\n' "$E" "$*" "$R" >&2; exit 1; }
 has()    { command -v "$1" >/dev/null 2>&1; }
 # A yes/no question, read from the terminal (also under `curl … | bash`). No terminal: no.
+# Whatever already waits on the terminal is dropped first: keys pressed during a package install,
+# or a terminal's reply to a program's query (an escape sequence, no newline), were read as the
+# answer and skipped the question.
 ask()  {
   local a
+  read -r -s -t 0.05 -n 4096 _ </dev/tty 2>/dev/null || true
   { printf '       %s [y/N] ' "$1" >/dev/tty && read -r a </dev/tty; } 2>/dev/null || return 1
   [[ $a == [yY]* ]]
+}
+# A command that may ask something itself (a package manager's "Is this ok?"), its input the
+# terminal. Under `curl … | bash` its stdin is the pipe the script came from, already at its end:
+# dnf took that as "no" and printed "Operation aborted by the user." without waiting (a friend).
+on_tty() {
+  if { true </dev/tty; } 2>/dev/null; then "$@" </dev/tty; else "$@"; fi
 }
 # busy <label> <command…>: a "⋯ label" line while it runs, turned into ✓ when it is done
 busy() {
@@ -83,7 +93,7 @@ offer() {  # offer <what> <debian> <fedora> <arch>: show the command; run it if 
   local cmd; cmd=$(install_cmd "$2" "$3" "$4")
   if [[ -z $cmd ]]; then note "Install $1 with your package manager."; return 1; fi
   note "To install $1: $cmd"
-  if ask "Run that now?"; then $cmd; else return 1; fi
+  if ask "Run that now?"; then on_tty $cmd; else return 1; fi
 }
 
 # ---- uninstall --------------------------------------------------------------------------------
