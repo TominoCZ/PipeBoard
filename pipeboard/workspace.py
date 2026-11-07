@@ -191,6 +191,9 @@ class Store:
                 "live_instant": bool(found.get("live_instant", False)),  # (off by default: owner)
                 "board": found.get("board"),  # this board's id, tagged on its nodes (devices.BOARD)
                 "engine_trial": found.get("engine_trial"),  # an audio engine setting on trial
+                # the interface the Audio engine shows (engine.pick), by its device.name
+                "engine_device": found.get("engine_device"),
+                "app_rt": found.get("app_rt", True),  # apps' audio threads in real time (apprt)
                 # the bar's Show latency: a view setting like Animate, not part of the board (a
                 # profile loaded at launch replaced the board, and the box came back off: owner)
                 "show_latency": bool(found.get("show_latency"))}

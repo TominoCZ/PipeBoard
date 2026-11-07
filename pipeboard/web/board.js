@@ -131,6 +131,15 @@ const PB = (() => {
       S.idlePending = S.kernelPending = null;
       if ($("engine")) drawEngine();
     }
+    // Another interface chosen, or what runs changed (block, margin, rate): the open panel starts
+    // again from what runs now, its own settings for that interface.
+    if ($("engine") && S.engine?.interface?.length) {
+      if (S.engine.trial) closeEngine();
+      else if (S.pick?.device !== S.engine.device || JSON.stringify(engineShown(S.engine)) !== S.engineShown) {
+        if (S.pick?.device !== S.engine.device) S.headroom = null;
+        openEngine();
+      }
+    }
     if (S.pathKey) (S.showLatency && S.model.latency?.[S.pathKey]?.path ? openPath(S.pathKey) : closePath());
     showTrial(S.engine?.trial);
     // Saved places, except just after a Tidy: a state the server sent before it saved them would
@@ -2313,14 +2322,44 @@ const PB = (() => {
     const e = S.engine;
     if (!e?.interface?.length) { toast("No audio interface clocks the graph: there is nothing to set.", "info"); return; }
     if (e.trial) { toast("A setting is being tried: keep or revert it first.", "info"); return; }
-    S.pick = { block: e.block, blocks: e.margin_blocks || 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, advanced: S.pick?.advanced || false };
+    S.pick = { block: e.block, blocks: e.margin_blocks || 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, rate: e.fixed_rate || null, device: e.device, advanced: S.pick?.advanced || false };
     drawEngine();
   }
   // The safety margin in whole blocks (owner: only values that work; under one block the input
   // dropped out, over one did not fit until the buffer is made to fit: engine.texts).
   function p0() { S.pick.margin = S.pick.block * S.pick.blocks; }
   // Whether trying these values makes the interface start again (engine.reopens).
-  const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) || (!p.tsched && p.block !== e.block);
+  const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) || (p.rate || null) !== (e.fixed_rate || null) ||
+    ((!p.tsched || !!e.irq_elsewhere) && p.block !== e.block);
+  const kHz = (r) => `${+(r / 1000).toFixed(1)} kHz`;
+  // What the open panel draws from the engine as it runs: drawn again when any of it changes.
+  // Before, only on opening: started after a change of rate, the bars and the round trip kept
+  // the figures of the moment it opened (a friend).
+  const engineShown = (e) => [e.device, e.block, e.margin, e.rate, e.dev_rate, e.margin_blocks, !!e.tsched, e.fixed_rate,
+    e.rates, e.blocks, e.prio, e.nice, (e.interfaces || []).map((x) => [x.key, x.rate])];
+  // Which interface the panel shows (a friend's: a motherboard card and a USB mic, each at its
+  // own rate): one button each, the choice remembered by the server (op engine-device). Its
+  // margin, scheduling and rate are its own; the block is the graph's, the same for all.
+  function interfacePicker(e) {
+    return h("div", { class: "segmented words", role: "radiogroup", "aria-label": "Interface" }, ...e.interfaces.map((x) => {
+      const b = h("button", { type: "button", role: "radio", "aria-checked": String(x.key === e.device), "data-k": `dev-${x.key}`,
+                              title: `${x.title}${x.rate ? ` · runs at ${kHz(x.rate)}` : " · closed now"}${x.clocks ? " · clocks part of the graph" : ""}`,
+                              text: x.title || x.key });
+      b.addEventListener("click", () => { if (x.key !== e.device) send({ op: "engine-device", device: x.key }); });
+      return b;
+    }));
+  }
+  // The rate the interface opens at, only when the card lists the ones it can (engine.rates).
+  // Auto: the graph's (what apps ask for); a rate: the card is fixed at it and its part of the
+  // graph follows (node.force-rate). The one PipeBoard fixed it at marked like the block's.
+  function rateSeg(p, e) {
+    return h("div", { class: "segmented", role: "radiogroup", "aria-label": "Sample rate" }, ...[null, ...e.rates].map((v) => {
+      const b = h("button", { type: "button", role: "radio", "aria-checked": String((p.rate || null) === v), class: v === (e.fixed_rate || null) ? "cur" : "",
+                              "data-k": `rate-${v || "auto"}`, text: v ? String(+(v / 1000).toFixed(1)) : "Auto" });
+      b.addEventListener("click", () => { p.rate = v; drawEngine(); });
+      return b;
+    }));
+  }
   // CPU idle states, one toggle each (owner): lit = allowed. By the names and wake times the CPU
   // reports, any vendor. Applied at once through the system's password prompt; nothing restarts.
   // Apps' audio in real time (apprt.py): each app's PipeWire audio thread raised when it did not
@@ -2426,15 +2465,19 @@ const PB = (() => {
     const d = S.headroom, e = S.engine, every = d?.every || 0.5, n = Math.round(60 / every);
     const top = (e.block + e.margin) / e.rate * 1000;  // the graph's scale: one half of the round trip
     const blockMs = e.block / e.rate * 1000, red = blockMs * HEAD_RED_BLOCK, warn = blockMs * HEAD_WARN_BLOCK;
-    const sides = [["out", "Output"], ["in", "Input"]].map(([k, name]) => {
+    // Only the sides the interface has (a USB mic may have no output); a side sampled but never
+    // running (nothing plays through it: its buffer is closed) says so, not "measuring…" for ever.
+    const sides = [["out", "Output"], ["in", "Input"]].filter(([k]) => !d?.sides || d.sides.includes(k)).map(([k, name]) => {
       const xs = (d?.[k] || []).slice(-n);
       let low = null;
       xs.forEach((v, i) => { if (v != null && (low == null || v < xs[low])) low = i; });
       return { k, name, xs, low: low == null ? null : xs[low], ago: low == null ? null : (xs.length - 1 - low) * every, at: low };
     });
     const level = (v) => (v < red ? "bad" : v < warn ? "warn" : "ok");
+    const idle = (x) => x.xs.length >= 4 && x.low == null;  // (two seconds sampled, never running)
     const line = h("div", { class: "hr-line" }, ...sides.map((x) => x.low == null
-      ? h("span", { class: "wait" }, `${x.name} measuring…`)
+      ? h("span", idle(x) ? { class: "wait", "data-tip": `${x.name}: not running. Nothing ${x.k === "out" ? "plays through" : "records from"} it now, so its buffer is closed.` } : { class: "wait" },
+          idle(x) ? `${x.name} not running` : `${x.name} measuring…`)
       : h("span", { "data-tip": `${x.name}: ${x.low.toFixed(2)} ms at its lowest, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}` },
         h("i", { class: `hr-dot ${level(x.low)}` }), `${x.name} `, h("b", { text: x.low.toFixed(1) }), " ms")));
     const X = (i, len) => ((i + n - len) / (n - 1)) * HEAD_W, Y = (v) => HEAD_H - (Math.min(v, top) / top) * HEAD_H;
@@ -2465,7 +2508,7 @@ const PB = (() => {
       h("div", { class: "hr-top" }, h("span", { text: "Buffer headroom" }), h("small", { text: "lowest, last minute" })),
       h("div", { class: "hr-box" }, line, graph,
         h("div", { class: "hr-foot" }, h("span", { text: "1 min ago" }),
-          h("span", { class: "key out", text: "Output" }), h("span", { class: "key in", text: "Input" }), h("span", { text: "now" }))),
+          ...sides.map((x) => h("span", { class: `key ${x.k}`, text: x.name })), h("span", { text: "now" }))),
       h("p", { class: "hr-note" }, "How close the buffers came to running out. ", h("span", { class: "red", text: "At 0 ms it clicks." })));
   }
   function drawEngine() {
@@ -2501,7 +2544,9 @@ const PB = (() => {
     };
     const row = (label, control, val) => h("div", { class: "eng-row" }, h("label", { text: label }), control, h("span", { class: "val", text: val }));
     const msOf = (n) => `${(n / rate * 1000).toFixed(1)} ms`;
-    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1);
+    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) ||
+      (p.rate || null) !== (e.fixed_rate || null);
+    S.engineShown = JSON.stringify(engineShown(e));
     const now = roundTrip(e, rate), next = roundTrip(shown, rate);
     const adv = h("button", { type: "button", class: "adv-head", "aria-expanded": String(p.advanced), "data-k": "advanced" },
       h("span", { class: "chev", text: p.advanced ? "▾" : "▸" }), "Advanced",
@@ -2510,11 +2555,15 @@ const PB = (() => {
     const cancel = h("button", { type: "button", class: "btn quiet", text: "Cancel" });
     const go = h("button", { type: "button", class: "btn go", text: "Try it", disabled: !changed });
     cancel.addEventListener("click", closeEngine);
-    go.addEventListener("click", () => { send({ op: "engine-try", block: p.block, margin: p.margin, prio: p.prio, nice: p.nice, tsched: p.tsched }); closeEngine(); });
+    go.addEventListener("click", () => { send({ op: "engine-try", block: p.block, margin: p.margin, prio: p.prio, nice: p.nice, tsched: p.tsched, rate: p.rate }); closeEngine(); });
     const close = h("button", { type: "button", class: "x", "aria-label": "Close", text: "×" });
     close.addEventListener("click", closeEngine);
+    // The interface's own rate (it can differ from the graph's default: a second card); none
+    // while it is closed.
+    const many = (e.interfaces || []).length > 1, runs = e.dev_rate || (many ? null : rate);
+    const sub = `${many ? "" : "clocked by "}${e.title || "the interface"}${runs ? ` · ${kHz(runs)}` : " · closed now"}`;
     const panel = h("div", { id: "engine", class: "eng", role: "dialog", "aria-label": "Audio engine" },
-      h("div", { class: "eng-head" }, h("b", { text: "Audio engine" }), h("span", { class: "sub", text: `clocked by ${e.title || "the interface"} · ${rate / 1000} kHz` }), h("span", { class: "sp" }), close),
+      h("div", { class: "eng-head" }, h("b", { text: "Audio engine" }), h("span", { class: "sub", text: sub }), h("span", { class: "sp" }), close),
       h("div", { class: "eng-body" },  // (scrolls in a short window; the head and its tip stay)
       h("div", { class: "rt" },
         h("div", { class: "rt-top" }, h("span", { class: "what", text: "Round trip" }),
@@ -2523,6 +2572,8 @@ const PB = (() => {
           h("span", { class: "new", text: next.toFixed(1) }, h("small", { text: "ms" }))),
         h("div", { class: "bars" }, resized ? bar(e, " ghost") : null, bar(shown, "")),
         h("div", { class: "legend" }, h("span", { text: "block, in and out" }), h("span", { class: "m", text: "safety margin" }))),
+      many ? row("Interface", interfacePicker(e), "") : null,
+      many ? h("p", { class: "hint", text: "Its margin, scheduling and rate are its own. The block is the same for every interface." }) : null,
       row("Block size", seg(offered, "block", "Block size"), msOf(p.block)),
       h("p", { class: "hint", text: e.usb_step
         ? `Whole ${msOf(e.usb_step).replace(".0 ", " ")} USB transfers of this interface. Smaller: less delay, more CPU.`
@@ -2531,6 +2582,8 @@ const PB = (() => {
         ? h("p", { class: "hint warn", text: `${e.block} (running) splits them: the buffer saws, PipeWire can click.` }) : null,
       row("Safety margin", marginSeg(p, e), msOf(p.margin)),
       h("p", { class: "hint", text: "More: fewer dropouts, more delay." }),
+      e.rates?.length ? row("Sample rate", rateSeg(p, e), p.rate ? kHz(p.rate) : e.dev_rate ? `auto · ${kHz(e.dev_rate)}` : "auto") : null,
+      e.rates?.length ? h("p", { class: "hint", text: "The rates this interface lists. Auto: the rate apps ask for. A rate: it opens at that one, and its part of the graph follows." }) : null,
       Object.keys(e.pcms || {}).length ? headroomBlock() : null,
       h("hr"), adv,
       p.advanced ? row("Scheduling", scheduling(p, e), p.tsched ? "timer" : "interrupts") : null,
@@ -2579,6 +2632,7 @@ const PB = (() => {
       const what = [`block ${v.block}`];
       if (v.margin !== v.block) what.push(`${v.margin / v.block}-block margin`);
       if (v.tsched !== trial.was.tsched) what.push(v.tsched ? "timer" : "interrupts");
+      if ((v.rate || null) !== (trial.was.rate || null)) what.push(v.rate ? kHz(v.rate) : "auto rate");
       // Design A (owner's pick): the seconds left in a ring, what is tried, then its numbers.
       bar = h("div", { id: "trial", class: "trial", role: "status", "data-sig": sig },
         h("span", { class: "ring", title: `Goes back to block ${trial.was.block} when it runs out` }, h("span", { class: "count" })),
@@ -3047,6 +3101,13 @@ const PB = (() => {
       // dropping back (the interface's clock 6.5 ppm slow against USB's), the input spiking.
       const saw = (i) => +(0.2 + 0.25 * (((i + 26) % 76) / 75) + 0.01 * Math.sin(i * 2.3)).toFixed(2);
       if (kind === "saw") { S.headroom = { every: 0.5, out: Array.from({ length: 120 }, (_, i) => saw(i)), in: Array.from({ length: 120 }, (_, i) => +(0.8 + (i % 9 === 4 ? 0.35 : 0.03 * Math.sin(i))).toFixed(2)) }; showHeadroom(); return; }
+      // "idle": nothing plays through the output (its buffer closed all minute); "input": a card
+      // with an input only (a USB mic).
+      if (kind === "idle" || kind === "input") {
+        S.headroom = { every: 0.5, sides: kind === "idle" ? ["in", "out"] : ["in"], out: kind === "idle" ? Array(120).fill(null) : [], in: wob(7.3, 0.6, { 40: 0.25 }) };
+        showHeadroom();
+        return;
+      }
       S.headroom = kind === "wait" ? null : kind === "close"
         ? { every: 0.5, out: wob(0.9, 0.35, { 70: 0.62, 71: 0.4, 101: 0.3 }), in: wob(4.2, 0.5, {}) }
         : { every: 0.5, out: wob(1.6, 0.18, { 88: 0.3, 89: 0.15, 30: 0.12 }), in: wob(7.3, 0.6, { 40: 0.25 }) };

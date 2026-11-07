@@ -307,6 +307,14 @@ SHOTS = {
     "engine-apps": ("machine", BIG, None, "PB.debug.engineOpen({}, true) || PB.debug.fakeHeadroom('ok', {app_rt: {on: true, apps: [{name: 'Firefox', state: 'own'}, {name: 'PipeWire ALSA [fluidsynth]', state: 'raised'}, {name: 'Spotify', state: 'raised'}]}})"),
     "engine-usb": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', {blocks: [192, 384, 768, 1536, 3072], usb_step: 192, block: 256, margin: 512, margin_blocks: 2})"),
     "engine-headroom-128": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('saw', {block: 128, margin: 128, margin_blocks: 1})"),
+    "engine-headroom-idle": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('idle')"),
+    "engine-headroom-input": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('input')"),
+    # Two interfaces (the pedal beside the Studio Interface): the picker, and a rate row for one
+    # that lists its rates, 96 kHz picked against the auto it runs at now.
+    "engine-two": ("pedal", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', "
+                   "{rates: [44100, 48000, 96000, 192000], fixed_rate: null}) || PB.debug.engineOpen({rate: 96000})"),
+    "engine-two-small": ("pedal", SMALL, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', "
+                         "{rates: [44100, 48000, 96000, 192000], fixed_rate: 48000})"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
     "engine-margin": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, blocks: 2})"),
     "engine-priority": ("machine", BIG, None, "PB.debug.engineOpen({prio: 90}, true)"),

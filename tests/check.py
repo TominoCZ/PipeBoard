@@ -253,11 +253,15 @@ async def check_engine_apply():
         assert sent == ["systemctl --user restart wireplumber.service",
                         "pw-metadata -n settings 0 clock.min-quantum 256",
                         "pw-metadata -n settings 0 clock.quantum 256",
-                        "pw-metadata -n settings 0 clock.max-quantum 256", "back 2",
-                        "chrt -f -R -p 88 101", "renice -n -11 -p 100"], sent
-        sent.clear()
+                        "pw-metadata -n settings 0 clock.max-quantum 256", "back 2"], sent
+        sent.clear()  # (a priority nobody changed is not set again: a friend's RTKit refused it)
         await engine.apply({**was, "prio": 90}, was, scenarios.load("machine"))
-        assert sent == ["chrt -f -R -p 90 101", "renice -n -11 -p 100"], sent
+        assert sent == ["chrt -f -R -p 90 101"], sent
+        sent.clear()
+        await engine.apply({**was, "nice": -5}, was, scenarios.load("machine"))
+        assert sent == ["renice -n -5 -p 100"], sent
+        assert "may not set it" in engine._plain("chrt: failed to set pid 7's policy: Operation not permitted")
+        assert engine._plain("pw-cli: oops") == "pw-cli: oops"
         sent.clear()  # on the timer a block change is live: no restart, no wait
         timer = {**was, "block": 256, "margin": 256, "tsched": True}
         await engine.apply({**timer, "block": 512, "margin": 512}, timer, scenarios.load("machine"))
@@ -2271,6 +2275,154 @@ def check_cells():
     assert profiles._moved({"x": 5, "y": 6}, {"x": 6, "y": 6}) and not profiles._moved({"x": 5, "y": 6}, {"x": 5, "y": 6})
 
 
+UR_DEV, PEDAL = "alsa_card.usb-Example_Studio_Interface-00", "alsa_card.usb-Example_Guitar_Pedal-00"
+
+
+def check_engine_devices():
+    """Two interfaces (a friend's: a motherboard card and a USB mic, each at its own rate): the
+    engine shows the one chosen, else the one clocking most of the graph; the margin is the one
+    each was made with, not PipeWire's latency figure (stale after a change of rate); each keeps
+    a rule of its own, its period the block at its own rate; a rate only of those the card lists."""
+    import copy
+    import os
+
+    from pipeboard import engine
+    pedal = scenarios.load("pedal")
+    now = engine.read(pedal)
+    assert now["device"] == UR_DEV and [x["key"] for x in now["interfaces"]] == [UR_DEV, PEDAL], now["interfaces"]
+    chosen = engine.read(pedal, PEDAL)
+    assert (chosen["device"], chosen["title"], chosen["dev_rate"]) == (PEDAL, "Pedal", 48000), chosen
+    assert chosen["interface"] == ["alsa_input.usb-Example_Guitar_Pedal-00.analog-stereo",
+                                   "alsa_output.usb-Example_Guitar_Pedal-00.analog-stereo"]
+    assert engine.read(pedal, "unplugged")["device"] == UR_DEV, "a chosen card that is gone: the clock's"
+    # PipeWire's latency figure, still scaled by the old rate: the margin is the headroom made.
+    stale = copy.deepcopy(scenarios.load("machine"))
+    for o in stale:
+        for lat in ((o.get("info") or {}).get("params") or {}).get("Latency") or []:
+            if lat.get("maxQuantum"):
+                lat["maxRate"] = lat["minRate"] = 2048
+    assert engine.read(stale)["margin"] == 1024, "the headroom it was made with"
+    for o in stale:
+        ((o.get("info") or {}).get("props") or {}).pop("api.alsa.headroom", None)
+    assert engine.read(stale)["margin"] == 2048, "no headroom said: PipeWire's figure, its own direction"
+    # The rates a card lists: USB, HDA codec, PipeWire's enumeration; a range lists none.
+    stream0 = ("Playback:\n  Interface 1\n    Rates: 44100, 48000, 96000\n  Interface 1\n    Rates: 192000\n"
+               "Capture:\n  Interface 2\n    Rates: 48000, 96000, 192000\n")
+    assert engine.usb_rates(stream0) == [48000, 96000, 192000], "both directions"
+    assert engine.usb_rates("Playback:\n    Rates: 8000 - 48000 (continuous)\n") is None
+    assert engine.usb_rates("Capture:\n    Rates: 48000\n") is None, "one rate: nothing to choose"
+    codec = "Codec: Realtek ALC1220\nDefault PCM:\n    rates [0x5f0]: 32000 44100 48000 88200 96000 192000\n    bits [0xe]: 16 20 24\n"
+    assert engine.codec_rates(codec) == [32000, 44100, 48000, 88200, 96000, 192000]
+    node = lambda rate: [{"id": 1, "type": scenarios.NODE, "info": {"params": {"EnumFormat": [{"rate": rate}]}}}]  # noqa: E731
+    assert engine._enum_rates(node({"default": 48000, "alt1": 44100, "alt2": 48000, "alt3": 96000}), {1}) == [44100, 48000, 96000]
+    assert engine._enum_rates(node({"default": 48000, "min": 1, "max": 384000}), {1}) is None
+    assert now["rates"] is None and chosen["rates"] is None, "the fixture's cards list none: no rate offered"
+    # A rate is asked only from those listed.
+    op = {"block": 1024, "margin": 2048, "prio": 88, "nice": -11}
+    assert engine.check({**op, "rate": 48000}, engine.BLOCKS, [44100, 48000])["rate"] == 48000
+    assert engine.check(op, engine.BLOCKS, None)["rate"] is None
+    for rates in ([44100, 96000], None):
+        try:
+            engine.check({**op, "rate": 48000}, engine.BLOCKS, rates)
+        except ValueError:
+            continue
+        raise AssertionError(f"a rate not listed accepted ({rates})")
+    # Each interface its own rule; the pedal at 48 kHz in a 192 kHz graph: a quarter of the block.
+    v = engine.check({**op, "rate": 48000}, engine.BLOCKS, [44100, 48000])
+    others = [{"nodes": ["alsa_output.other"], "blocks": 1, "tsched": True, "rate": None, "at": 0}]
+    wp = engine.texts(v, chosen["interface"], others, 192000, 44100)["wireplumber"]
+    assert ("api.alsa.period-size = 256 api.alsa.headroom = 512 api.alsa.period-num = 6 "
+            "audio.rate = 48000 node.force-rate = 48000 api.alsa.disable-tsched = true") in wp, wp
+    assert "api.alsa.period-size = 1024 api.alsa.headroom = 1024 api.alsa.disable-tsched = false" in wp, \
+        "the other interface kept, its period the new block"
+    assert [(r["nodes"], r["blocks"], r["tsched"], r["rate"]) for r in engine.own_rules(wp)] == [
+        (chosen["interface"], 2, False, 48000), (["alsa_output.other"], 1, True, None)]
+    assert "period-size = 1024" in engine.texts({**v, "rate": None}, ["a"], (), 192000, 0)["wireplumber"], \
+        "its rate unknown: the graph's"
+    with tempfile.TemporaryDirectory() as tmp:
+        was = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = tmp
+        try:
+            engine.write({"pipewire": None, "wireplumber": wp})
+            ruled = engine.read(pedal, PEDAL)
+            assert (ruled["margin_blocks"], ruled["fixed_rate"], ruled["irq_elsewhere"]) == (2, 48000, False), ruled
+            assert engine.read(pedal)["margin_blocks"] == 1, "the interface's own rule, not another's"
+        finally:
+            if was is None:
+                os.environ.pop("XDG_CONFIG_HOME")
+            else:
+                os.environ["XDG_CONFIG_HOME"] = was
+    # A new rate reopens the card; on the timer a new block does only if another one is on interrupts.
+    base = {"block": 256, "margin": 256, "tsched": True, "rate": None}
+    assert engine.reopens({**base, "rate": 96000}, base)
+    assert not engine.reopens({**base, "block": 512, "margin": 512}, base)
+    assert engine.reopens({**base, "block": 512, "margin": 512, "irq_elsewhere": True}, {**base, "irq_elsewhere": True})
+    # USB transfer steps, counted in the graph's samples for a card at another rate.
+    with tempfile.TemporaryDirectory() as tmp:
+        real, engine.ASOUND = engine.ASOUND, Path(tmp)
+        try:
+            (Path(tmp) / "card2").mkdir()
+            (Path(tmp) / "card2" / "stream0").write_text("Implicit Feedback Mode: Yes\n")
+            assert engine.blocks(2, 96000, 48000) == ([48, 96, 192, 384, 768], 48)
+            assert engine.blocks(2, 48000) == ([48, 96, 192, 384, 768], 48)
+            assert engine.blocks(2, 96000, 44100) == (None, None), "no whole graph samples a transfer"
+        finally:
+            engine.ASOUND = real
+
+
+async def check_engine_device(tmp):
+    """Choosing the interface the Audio engine shows: remembered across a start, its own minute
+    of buffer headroom, only one that is there, never during a trial; a trial is that card's."""
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("pedal")), tmp)
+    await server.startup(board)
+    assert board.engine["device"] == UR_DEV
+    board.head_hist["out"].append(1.0)
+    assert await board.op_engine_device(None, {"device": "unplugged"})
+    assert await board.op_engine_device(None, {"device": PEDAL}) is None
+    await board.refresh()
+    assert board.engine["device"] == PEDAL and board.settings["engine_device"] == PEDAL
+    assert not board.head_hist["out"], "its own minute"
+    assert json.loads(board.headroom_text())["sides"] == [], "no buffers known: no side waits for ever"
+    again = server.Board(pipewire.Fixture(scenarios.load("pedal")), tmp)
+    await server.startup(again)
+    assert again.engine["device"] == PEDAL, "remembered"
+    op = {"block": 512, "margin": 512, "prio": 88, "nice": -11}
+    assert "not one this interface lists" in await again.op_engine_try(None, {**op, "rate": 48000})
+    assert await again.op_engine_try(None, op) is None
+    trial = again.trial_state()
+    assert trial["values"]["device"] == trial["was"]["device"] == PEDAL and trial["was"]["rate"] is None, trial
+    assert "being tried" in await again.op_engine_device(None, {"device": UR_DEV})
+    await again.op_engine_keep(None, {})
+
+
+async def check_launch_makes_devices(tmp):
+    """Launched by hand as at login: the board's own devices gone from the system (PipeWire
+    restarted) are made again at launch, with no launch profile too (a friend's were made only
+    when PipeBoard started at login, which loads one)."""
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    assert await board.op_create_device(None, {"type": "mic", "name": "Stream Mic", "channels": 2}) is None
+    for _ in range(2):  # (wired as it arrives, saved with the next look)
+        await board.refresh()
+    dev = next(d for d in board.ws["devices"].values() if d["name"] == "Stream Mic")
+    assert not board.settings["launch"]
+    fresh = pipewire.Fixture(scenarios.load("machine"))  # (PipeWire restarted: it is gone)
+    again = server.Board(fresh, tmp)
+    await server.startup(again)
+    assert any(o["info"]["props"].get("pipeboard.id") == dev["id"] for o in fresh.dump
+               if o["type"].endswith("Node")), "made again at launch"
+
+
+def check_plugin_listing():
+    """No Carla, or Carla failing: an empty picker and one line said, never a traceback."""
+    from pipeboard import plugins
+    said = b"Traceback (most recent call last):\nModuleNotFoundError: No module named 'carla_backend'\n"
+    assert plugins.listed(b"", said, 1) == []
+    assert plugins.listed(b'carla says hi\n{"plugins": [{"name": "x"}]}\n', b"", 0) == [{"name": "x"}]
+
+
 def main():
     model = graph.build(scenarios.load("machine"))
     cards = {c["key"]: c for c in model["cards"]}
@@ -2296,6 +2448,8 @@ def main():
     check_cstates()
     check_kernel()
     check_engine()
+    check_engine_devices()
+    check_plugin_listing()
     check_missing()
     check_scope_math()
     check_eq_math()
@@ -2321,6 +2475,10 @@ def main():
         asyncio.run(check_engine_effects(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_engine_trial(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_engine_device(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_launch_makes_devices(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_diag(Path(tmp)))
     asyncio.run(check_plugin_startup())
