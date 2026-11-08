@@ -580,7 +580,7 @@ def check_dropouts():
     assert server.last_minute(seen, card, {"in": 2}, 70) == 0, "made again: it counts from 0"
     assert server.last_minute(seen, {"key": "x", "names": ["gone"]}, {"in": 1}, 70) == 0
     found = problems.dropouts({"cards": [{"key": "ur", "title": "Interface"}]}, {"ur": 3, "nope": 2})
-    assert [p["title"] for p in found] == ["Dropouts"] and "Interface: 3 in the last minute" in found[0]["text"] and found[0]["fix"]
+    assert [p["title"] for p in found] == ["Sound dropped out"] and "Interface: 3 short gaps" in found[0]["text"] and found[0]["fix"]
     both = problems.dropouts({"cards": [{"key": "ur", "title": "Interface"}, {"key": "sp", "title": "Spotify"}]}, {"ur": 3, "sp": 5})
     assert len(both) == 1 and both[0]["where"] == "Spotify, Interface" and both[0]["what"].startswith("5 "), both
     assert both[0]["cards"] == ["sp", "ur"]
@@ -2376,6 +2376,88 @@ def check_engine_devices():
             engine.ASOUND = real
 
 
+async def check_clipping_where_real(tmp):
+    """Clipping is warned only where it really happens (owner: warnings on nodes before their
+    limiter): at a sound card receiving more than full scale (its monitor, the sum), never on an
+    output upstream, whose float sound is clean until then."""
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    ur = next(c for c in board.model["cards"] if c["key"] == UR)
+    assert len(ur["hears"]) == 6, "its playback's monitor ports, what it receives"
+    sources = {(k, s): p for k, s, p in board.scope_sources()}
+    assert sources.get((UR, "hears")) == ur["hears"], "watched: something is wired into it"
+    effect = next(k for k, s in sources if s != "hears" and k != UR)
+    assert problems.clipping(board.model, [(effect, "out")]) == [], "upstream: float, clean"
+    found = problems.clipping(board.model, [(effect, "out"), (UR, "hears")])
+    assert [p["id"] for p in found] == [f"clipping:{UR}"] and "Limiter" in found[0]["fix"], found
+
+
+def check_missing_grace():
+    """A device is an event only once it has been missing for a while (owner: a restart logged
+    every effect "isn't running" while it started): within the grace nothing, and when it ends;
+    back meanwhile, its clock starts over."""
+    since = {}
+    pedal, eq = {"key": "pedal"}, {"key": "eq"}
+    now, due = problems.settled([pedal, eq], since, 100.0)
+    assert now == [] and due == 100.0 + problems.MISSING_GRACE_S
+    now, due = problems.settled([pedal], since, 105.0)  # the EQ started
+    assert now == [] and "eq" not in since
+    now, due = problems.settled([pedal, eq], since, 111.0)
+    assert now == [pedal] and due == 111.0 + problems.MISSING_GRACE_S, "the pedal is; the EQ's clock started over"
+    found = problems.not_installed({"cv": "Calf Vinyl"})
+    assert [p["title"] for p in found] == ["Calf Vinyl isn't installed"] and found[0]["cards"] == ["cv"]
+
+
+def check_events():
+    """The event log (owner): an event going on is one entry, updated in place; ended and back, it
+    is counted again and bumped to the top, new again even if seen; Seen hides it until then; a
+    week old or past 100 entries it goes; it survives a restart, nothing active after one."""
+    ev = lambda i, minute=1: {"id": i, "kind": i.split(":")[0], "severity": "warning", "title": i,  # noqa: E731
+                              "where": "", "what": "", "fix": "", "cards": [], "data": {"minute": minute}}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "events.json"
+        log = problems.Events(path)
+        log.note([ev("dropouts", 3)], 100.0)
+        log.note([ev("dropouts", 9), ev("clipping:a:out")], 101.0)
+        first = {e["id"]: e for e in log.entries()}
+        assert first["dropouts"]["count"] == 1 and first["dropouts"]["data"]["minute"] == 9
+        assert first["dropouts"]["peak"]["minute"] == 9 and first["dropouts"]["new"]
+        assert [e["id"] for e in log.entries()] == ["clipping:a:out", "dropouts"], "newest occurrence first"
+        log.seen(["dropouts"], 102.0)
+        log.note([ev("dropouts", 4)], 103.0)  # still going on: stays seen
+        assert not {e["id"]: e for e in log.entries()}["dropouts"]["new"]
+        log.note([], 104.0)  # both ended
+        assert all(not e["active"] for e in log.entries())
+        log.note([ev("dropouts", 2)], 200.0)  # back
+        top = log.entries()[0]
+        assert top["id"] == "dropouts" and top["count"] == 2 and top["new"], "bumped, counted, new again"
+        assert top["peak"]["minute"] == 9 and top["data"]["minute"] == 2, "its latest values, its worst kept"
+        log.happened(ev("stopped:eq1"), 201.0)
+        assert log.entries()[0]["id"] == "stopped:eq1" and not log.entries()[0]["active"]
+        log.seen(None, 202.0)
+        again = problems.Events(path)  # a restart
+        kept = {e["id"]: e for e in again.entries()}
+        assert set(kept) == {"dropouts", "clipping:a:out", "stopped:eq1"} and not any(e["active"] for e in kept.values())
+        assert not any(e["new"] for e in kept.values()), "seen is kept"
+        again.mute("clipping:a:out", True, 203.0)  # (owner: "I know, there's a limiter after it")
+        again.note([ev("clipping:a:out")], 204.0)
+        clip = {e["id"]: e for e in again.entries()}["clipping:a:out"]
+        assert clip["muted"] and not clip["new"], "muted: happening again is not news"
+        assert "clipping:a:out" in problems.Events(path).muted, "a mute is kept"
+        again.mute("clipping:a:out", False, 205.0)
+        again.note([], 206.0)
+        again.note([ev("clipping:a:out")], 207.0)
+        assert {e["id"]: e for e in again.entries()}["clipping:a:out"]["new"], "unmuted: news again"
+        again.mute("clipping:a:out", True, 208.0)
+        again.note([], 300.0 + problems.KEEP_S)
+        assert again.entries() == [], "a week old: gone"
+        for i in range(problems.KEEP_N + 5):
+            again.happened(ev(f"stopped:x{i}"), 1e6 + i)
+        assert len(again.entries()) == problems.KEEP_N and again.entries()[0]["id"] == f"stopped:x{problems.KEEP_N + 4}"
+        assert "clipping:a:out" in again.muted, "its entry aged out; its mute did not"
+
+
 def check_gpu():
     """The GPU's power level from each vendor's own reading, and the diagnosis: dropouts only while
     the GPU saves power (the owner's: ~28 a second, none with it up) name it; too few seconds of
@@ -2563,6 +2645,8 @@ def main():
     check_kernel()
     check_engine()
     check_engine_devices()
+    check_missing_grace()
+    check_events()
     check_gpu()
     check_gpu_full()
     check_plugin_listing()
@@ -2593,6 +2677,8 @@ def main():
         asyncio.run(check_engine_trial(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_engine_device(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_clipping_where_real(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_launch_makes_devices(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:

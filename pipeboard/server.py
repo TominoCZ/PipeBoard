@@ -129,6 +129,7 @@ class Board:
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
                     "headroom": self.op_headroom, "kernel": self.op_kernel,
                     "app-rt": self.op_app_rt, "gpu-full": self.op_gpu_full,
+                    "event-seen": self.op_event_seen, "event-mute": self.op_event_mute,
                     "cstates": self.op_cstates, "diag-on": self.op_diag_on,
                     "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
@@ -149,16 +150,19 @@ class Board:
         # head_seen: the sampler's memory across calls, the interface's restarts among it.
         # gpus, gpu_ev, gpu_total: the GPUs' power level, a sample a second beside the dropouts,
         # and the dropout total last seen (gpu.py: is the GPU's power saving the cause?);
-        # gpu_after: with the GPU at full speed, its seconds and dropouts since ({"s", "drops"}).
+        # gpu_after: with the GPU at full speed, its seconds and dropouts since ({"s", "drops"});
+        # events: the log of what happened (problems.Events), kept beside the board.
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
          self.dropped, self.settling, self.root, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
          self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_hist,
-         self.head_seen, self.gpus, self.gpu_ev, self.gpu_total, self.gpu_after) = (
+         self.head_seen, self.gpus, self.gpu_ev, self.gpu_total, self.gpu_after,
+         self.events, self.missing_since, self.not_installed, self.missing_timer) = (
             {}, None, (None, None), set(), None, {}, 0.0, engine.RootHelper(), None, None, None,
             {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(),
             {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}, {}, gpu.Watch(),
-            gpu.Evidence(), None, None)
+            gpu.Evidence(), None, None, problems.Events(self.store.board.parent / "events.json"),
+            {}, {}, None)
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -184,13 +188,28 @@ class Board:
 
     def state(self) -> str:
         prof = self.profile_state()
+        # Problems: how the board is now; events: what happened, logged (owner: two sections).
         found = problems.find(self.model)
-        found += problems.missing_devices(prof["missing"], self.ws["wires"])
-        found += problems.clipping(self.model, list(self.clipped))
-        found += problems.dropouts(self.model, self.dropped)
-        found.sort(key=lambda p: problems.ORDER[p["severity"]])
+        devices = self.ws.get("devices", {})
+        found += problems.not_installed({k: n for k, n in self.not_installed.items()
+                                         if k in devices})
+        # A device is missing once it has been for a while, and not while PipeBoard makes it
+        # (problems.settled: a launch or a PipeWire restart logged each effect "isn't running").
+        gone, due = problems.settled([m for m in prof["missing"] if m["key"] not in self.waiting
+                                      and m["key"] not in self.not_installed],
+                                     self.missing_since, time.time())
+        self.recheck_missing(due)
+        now = problems.missing_devices(gone, self.ws["wires"])
+        now += problems.clipping(self.model, list(self.clipped))
+        for ev in problems.dropouts(self.model, self.dropped):
+            g = self.engine.get("gpu") or {}
+            if g.get("verdict") and not g.get("full"):  # (its likely cause, found meanwhile)
+                ev["data"] = {**ev["data"], "cause": "gpu", **g["verdict"]}
+            now.append(ev)
+        self.events.note(now, time.time())
         return json.dumps({"type": "state", "model": self.model, "workspace": self.ws,
-                           "profile": prof, "problems": found, "mode": self.source.mode,
+                           "profile": prof, "problems": found, "events": self.events.entries(),
+                           "mode": self.source.mode,
                            "autostart": self.autostart, "editors": sorted(self.editors),
                            "takeover": {u: [c["title"] for c in cards]
                                         for u, cards in self.offer.items()},
@@ -305,8 +324,9 @@ class Board:
             return
         try:
             state = json.loads(self.last)
-            errors = [p for p in state["problems"] if p["severity"] == "error"]
-            warnings = [p for p in state["problems"] if p["severity"] == "warning"]
+            unseen = [e for e in state["events"] if e["new"]]  # (what was marked seen: not counted)
+            errors = [p for p in state["problems"] + unseen if p["severity"] == "error"]
+            warnings = [p for p in state["problems"] + unseen if p["severity"] == "warning"]
             parts = [state["profile"]["active"] or "No profile"]
             if errors or warnings:
                 n = len(errors) + len(warnings)
@@ -1026,6 +1046,31 @@ class Board:
         """An EQ's process ended by itself: its card turns missing; say so."""
         self.heard(key, {"ended": code})
 
+    def recheck_missing(self, due: float | None) -> None:
+        """A device still inside its grace: read the state again when it ends, so the event comes
+        though nothing else changes meanwhile. Not in the shots' and checks' one-off state."""
+        if due is None or self.missing_timer:
+            return
+        with contextlib.suppress(RuntimeError):  # (no running loop: a one-off state)
+            def again() -> None:
+                self.missing_timer = None
+                self.changed()
+            self.missing_timer = asyncio.get_running_loop().call_later(
+                max(0.1, due - time.time() + 0.1), again)
+
+    def log_stopped(self, key: str, name: str, why: str, error: bool) -> None:
+        """One event per stop: a plugin that would not load says why, then that its process
+        ended; the reason is kept (owner's "Calf Vinyl stopped: Its process ended (1)"). One not
+        installed here is a problem while its card is on the board, not an event per launch."""
+        if "find the requested plugin" in why:
+            self.not_installed[key] = name
+            return
+        if key in self.not_installed:  # (its process ending after it said so)
+            return
+        last, now = self.events.items.get(f"stopped:{key}"), time.time()
+        if error or not (last and last["data"].get("error") and now - last["last"] < 5):
+            self.events.happened(problems.stopped(name, why, key, error), now)
+
     def heard(self, key: str, msg: dict) -> None:
         """What a plugin's host says: its controls once it runs, a value its own window moved,
         its window opening or closing, or that it failed or stopped."""
@@ -1033,6 +1078,7 @@ class Board:
         if not dev or dev["type"] not in RUNS_WITH or ("ended" in msg and self.closing):
             return  # (quitting: they end with PipeBoard, nothing to tell)
         if "ready" in msg:
+            self.not_installed.pop(key, None)  # (installed since: it loads)
             ready = msg["ready"]
             dev.update(params=ready["params"], editor=ready["editor"],
                        bypassable=ready.get("bypassable", False), switch=ready.get("switch"))
@@ -1049,6 +1095,7 @@ class Board:
             self.editors.discard(key)
             why = msg.get("error") or f"its process ended ({msg.get('ended')})"
             text = f"{dev['name']} stopped: {why}"
+            self.log_stopped(key, dev["name"], why, "error" in msg)
             log.warning("%s", text)
             asyncio.ensure_future(self.broadcast(json.dumps({"type": "toast", "text": text,
                                                              "level": "error"})))
@@ -1236,6 +1283,10 @@ class Board:
             ports = next((s["ports"] for s in cards[key]["outputs"] if s["id"] == sock), None)
             if ports:
                 found[(key, sock)] = (key, sock, list(ports))
+            # What a sound card receives, where sound really clips (problems.clipping): not a
+            # wire (the page has none to draw it on), only watched.
+            if cards.get(to, {}).get("hears") and to not in hidden:
+                found[(to, "hears")] = (to, "hears", list(cards[to]["hears"]))
         return sorted(found.values())
 
     def recorded_serials(self, sources: list) -> dict[str, tuple]:
@@ -1422,6 +1473,19 @@ class Board:
         if not self.root.running:  # (a password was given this run: no prompt, no toast)
             await toast(page, "Asking for your password…", "info")
         asyncio.create_task(change())
+        return None
+
+    async def op_event_seen(self, _page, op) -> str | None:
+        """Events seen (op ids; none: all of them): hidden until they happen again."""
+        ids = op.get("ids")
+        self.events.seen([str(i) for i in ids] if isinstance(ids, list) else None, time.time())
+        return None  # (the state is read again after every action)
+
+    async def op_event_mute(self, _page, op) -> str | None:
+        """An event muted (op id, on): not shown or counted until unmuted, kept across restarts."""
+        if not isinstance(op.get("id"), str):
+            return "Which event?"
+        self.events.mute(op["id"], bool(op.get("on", True)), time.time())
         return None
 
     async def op_gpu_full(self, page, op) -> str | None:
@@ -1709,7 +1773,33 @@ class Board:
                 if None not in self.trial_drops else None}
 
     async def op_engine_try(self, _page, op) -> str | None:
-        """New engine settings for a minute: written, and put into the running PipeWire."""
+        """New engine settings: written, and put into the running PipeWire; tried for a minute,
+        unless only the priority or nice changed (owner: "Set", not "Try it"): nothing that can
+        break the sound, so at once. Decided here too, not only by the page: a request can never
+        skip the trial for the rest."""
+        asked = self.engine_request(op)
+        if isinstance(asked, str):
+            return asked
+        values, was, others = asked
+        live = self.source.mode == "live"
+        safe = all(values.get(k) == was.get(k) for k in ("block", "margin", "tsched", "rate"))
+        if not safe:
+            self._set(engine_trial={
+                "values": values, "was": was,
+                "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
+        if not live:  # the fixture: the bar and its countdown, nothing written or restarted
+            if not safe:
+                self.watch_trial()
+            return None
+        await self.write_engine(values, others)
+        if safe:
+            return await self.engine_apply(values, was)
+        self.watch_trial()
+        return await self.engine_apply(values, self.settings["engine_trial"]["was"])
+
+    def engine_request(self, op: dict) -> tuple[dict, dict, list[dict]] | str:
+        """A request's values, what runs now (`was`) and the other interfaces' rules; or why it
+        can't be done."""
         if self.settings.get("engine_trial"):
             return "A setting is being tried: keep or revert it first."
         if not self.engine.get("interface"):
@@ -1722,7 +1812,6 @@ class Board:
             values = engine.check(op, e.get("blocks") or engine.BLOCKS, e.get("rates"))
         except ValueError as err:
             return str(err)
-        live = self.source.mode == "live"
         was = {k: e.get(k) for k in values}
         # the margin asked for, in blocks (on the timer PipeWire reports a padded one); the rate
         # PipeBoard fixed the interface at (None: it follows the graph)
@@ -1734,28 +1823,18 @@ class Board:
         others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]
         for v in (values, was):
             v.update(device=e.get("device"), irq_elsewhere=any(not r["tsched"] for r in others))
-        # Only the priority or nice: nothing that can break the sound, so no minute on trial (owner:
-        # "Set", not "Try it"): written and applied at once. Anything else is tried. (Decided
-        # here too, not only by the page: a request can never skip the trial for the rest.)
-        safe = all(values.get(k) == was.get(k) for k in ("block", "margin", "tsched", "rate"))
-        if not safe:
-            self._set(engine_trial={
-                "values": values, "was": was,
-                "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
-        if not live:  # the fixture: the bar and its countdown, nothing written or restarted
-            if not safe:
-                self.watch_trial()
-            return None
+        return values, was, others
+
+    async def write_engine(self, values: dict, others: list[dict]) -> None:
+        """Both files for these values; the other interfaces' rules kept, each one's period at
+        its own rate when it runs now."""
+        e = self.engine
         running = {n: c["rate"] for c in engine.interfaces(await self.source.snapshot())
                    for n in c["nodes"]}
-        for r in others:  # (each one's period at its own rate, when it runs now)
+        for r in others:
             r["at"] = next((running[n] for n in r["nodes"] if running.get(n)), 0)
         engine.write(engine.texts(values, e["interface"], others, e["rate"],
                                   e.get("dev_rate") or 0))
-        if safe:
-            return await self.engine_apply(values, was)
-        self.watch_trial()
-        return await self.engine_apply(values, self.settings["engine_trial"]["was"])
 
     async def op_engine_device(self, _page, op) -> str | None:
         """The interface whose panel is open (None: closed; then the one clocking the graph): its
@@ -1939,6 +2018,7 @@ class Board:
         await self.eqs.stop_all()
         await self.root.stop()  # (the root helper ends with PipeBoard)
         await self.gpus.stop()
+        self.events.save(time.time())  # (what it learned since the last save)
         if self.listen:  # (its capture ends with PipeBoard too)
             self.listen.cancel()
         if self.taps:

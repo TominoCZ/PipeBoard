@@ -51,13 +51,10 @@
   </label>
 </header>
 <button id="problems-btn" type="button" class="problems-btn" aria-expanded="false"
-        aria-controls="problems" title="Problems in the graph">
-  <span class="sev-dot"></span><span id="problems-count">All good</span>
+        aria-controls="problems" title="Problems and what happened">
+  <span class="sev-dot"></span><span>Notifications</span><span id="problems-count" class="n" hidden></span>
 </button>
-<section id="problems" class="panel" hidden aria-label="Problems">
-  <h2>Problems</h2>
-  <ol id="problem-list"></ol>
-</section>
+<section id="problems" class="panel notif" hidden aria-label="Notifications"></section>
 <aside id="changes" class="changes" hidden aria-live="polite">
   <strong id="changes-title"></strong>
   <ul id="change-list"></ul>

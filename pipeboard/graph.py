@@ -342,6 +342,12 @@ def _card(group: str, ids: list[int], seen: dict, fixed: tuple) -> dict:
         else None,
         "clock": next((m["clock.name"] for m in members if m.get("clock.name")), None)
         if kind == "hardware" else None,
+        # Hardware only: its playback's monitor ports, what it really receives (the sum of all
+        # wired into it). Inside PipeWire sound is float: it clips only on its way to the card
+        # (problems.clipping watches these, not the outputs feeding it).
+        "hears": [p["id"] for p in sorted(
+            (p for p in seen["ports"].values() if p["node.id"] in set(ids) and p["echo"]),
+            key=lambda p: p.get("port.id", 0))] if kind == "hardware" else [],
     }
     card["detail"] = f"{' + '.join(names[:3])}{' …' if len(names) > 3 else ''}"
     return card

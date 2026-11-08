@@ -263,6 +263,12 @@ SHOTS = {
     "pedal": ("pedal", BIG, None, ""),
     "problems": ("problems", BIG, None, "PB.debug.openProblems()"),
     "problems-away": ("problems", BIG, None, "PB.debug.problemsAway()"),
+    # Notifications (owner): Problems, a separator, Events; the dropout found to come from the GPU.
+    "notifications": ("problems", BIG, None, "PB.debug.fakeEvents('mix')"),
+    "notifications-seen": ("problems", BIG, None, "PB.debug.fakeEvents('mix', true)"),
+    "notifications-muted": ("machine", BIG, None, "PB.debug.fakeEvents('mix', true)"),
+    "notifications-empty": ("machine", BIG, None, "PB.debug.fakeEvents('none')"),
+    "notifications-small": ("problems", SMALL, None, "PB.debug.fakeEvents('mix')"),
     "connecting": ("machine", BIG, None, "PB.debug.pending('music_player', 'out', 700, 640)"),
     "connecting-mono": ("machine", BIG, None, f"PB.debug.dragTo('music_player', 'out', '{UR}', 'in3')"),
     "connecting-held": ("machine", BIG, None, "PB.debug.dragFree('music_player', 'out', 760, 640)"),

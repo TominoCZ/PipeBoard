@@ -105,7 +105,7 @@ const PB = (() => {
   function load(msg) {
     S.lastState = msg;
     const first = !S.model.cards.length && !S.ws.view;
-    S.problems = msg.problems || []; S.ws = msg.workspace || { cards: {} };
+    S.problems = msg.problems || []; S.events = msg.events || []; S.ws = msg.workspace || { cards: {} };
     S.showLatency = !!msg.show_latency;
     $("show-latency").checked = S.showLatency;
     S.profile = msg.profile || null;
@@ -2287,10 +2287,13 @@ const PB = (() => {
   const SHORT = { "Feedback loop": "Feedback", "Connection failed": "Failed",
                   "Only one side of a stereo input": "One side", "Same sound arrives twice": "Doubled",
                   "Clipping": "Clipping", "Device missing": "Missing", "Dropouts": "Dropouts" };
+  // An event going on tags its card too, by its kind (its title names the card: too long here).
+  const KIND_TAG = { dropouts: "Dropouts", clipping: "Too loud", missing: "Missing", stopped: "Stopped" };
 
   function problemCards() {
     const flagged = {};
-    for (const p of S.problems) {  // worst first, so the first problem on a card names its tag
+    const live = (S.events || []).filter((e) => e.active && !e.muted).map((e) => ({ ...e, title: KIND_TAG[e.kind] || e.title }));
+    for (const p of [...S.problems, ...live].sort((a, b) => RANK[a.severity] - RANK[b.severity])) {  // worst first, so the first problem on a card names its tag
       if (p.severity === "info") continue;
       for (const k of new Set(p.cards)) {
         const f = flagged[k];
@@ -2301,25 +2304,103 @@ const PB = (() => {
     return flagged;
   }
 
+  // Notifications (owner: "Problems and Events, split by a separator and a label"): Problems, how
+  // the board is now; Events, what happened, a log that remembers (problems.Events). An event is
+  // new until Seen, and new again when it happens again.
+  const clockAt = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function ago(t) {
+    const s = Date.now() / 1000 - t;
+    if (s < 10) return "just now";
+    if (s < 60) return `${Math.round(s)} s ago`;
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    const d = new Date(t * 1000);
+    return d.toDateString() === new Date().toDateString() ? `at ${clockAt(t)}`
+      : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${clockAt(t)}`;
+  }
   function renderProblems() {
-    const list = $("problem-list"), btn = $("problems-btn"), ps = S.problems;
-    const worst = ps.length ? ps[0].severity : "ok";
-    const real = ps.filter((p) => p.severity !== "info").length;
+    const panel = $("problems"), btn = $("problems-btn"), ps = S.problems, evs = S.events || [];
+    // (muted, owner: "I know there's a limiter after it": out of the list and the count)
+    const heard = evs.filter((e) => !e.muted), muted = evs.filter((e) => e.muted);
+    const fresh = heard.filter((e) => e.new), seen = heard.filter((e) => !e.new);
+    const loud = [...ps.filter((p) => p.severity !== "info"), ...fresh];
+    const worst = ["error", "warning", "info"].find((sv) => [...ps, ...fresh].some((x) => x.severity === sv)) || "ok";
     btn.className = `problems-btn sev-${worst}`;
-    $("problems-count").textContent = real ? `${real} problem${real > 1 ? "s" : ""}`
-      : ps.length ? `${ps.length} note${ps.length > 1 ? "s" : ""}` : "All good";
-    list.textContent = "";
-    if (!ps.length) list.append(h("li", { class: "none", text: "Nothing to fix. Free sockets are fine." }));
-    for (const p of ps) {
-      const show = h("button", { type: "button", text: "Show" });
-      show.addEventListener("click", () => showProblem(p));
-      // Laid out (owner: concise, formatted): where in bold, what muted, the fix on its own line.
-      list.append(h("li", { class: `sev-${p.severity}` },
-        h("div", { class: "p-head" }, h("span", { class: "sev-dot" }), h("strong", { text: p.title }), p.cards.length ? show : null),
-        p.where ? h("p", { class: "p-where", text: p.where }) : null,
-        h("p", { class: "p-what", text: p.what ?? p.text }),
-        p.fix ? h("p", { class: "p-fix", text: p.fix }) : null));
+    const n = $("problems-count");
+    n.hidden = !loud.length;
+    n.textContent = String(loud.length);
+    btn.title = loud.length ? `${loud.length} to look at` : "All good";
+    const all = h("button", { type: "button", class: "quiet", text: "Mark all seen", "data-k": "seen-all" });
+    all.addEventListener("click", () => send({ op: "event-seen" }));
+    const more = h("button", { type: "button", class: "quiet more", text: S.showSeen ? "Hide seen" : `Show seen (${seen.length})`, "data-k": "show-seen" });
+    more.addEventListener("click", () => { S.showSeen = !S.showSeen; renderProblems(); });
+    const hush = h("button", { type: "button", class: "quiet more", text: S.showMuted ? "Hide muted" : `Muted (${muted.length})`, "data-k": "show-muted" });
+    hush.addEventListener("click", () => { S.showMuted = !S.showMuted; renderProblems(); });
+    // Each section its own block, its header a bar with its count (owner: "really hard to
+    // discern where the events and problems sections are and which cards are in what section").
+    const bar = (title, sub, n, sev, ...acts) => h("header", { class: "n-bar" },
+      h("span", { class: `n-title sev-${n ? sev : "ok"}` }, h("span", { class: "sev-dot" }), title),
+      h("span", { class: "n-sub", text: sub }), ...acts);
+    const pSev = ps.some((p) => p.severity === "error") ? "error" : ps.some((p) => p.severity === "warning") ? "warning" : "info";
+    const eSev = fresh.some((e) => e.severity === "error") ? "error" : "warning";
+    panel.replaceChildren(
+      h("section", { class: "n-block" },
+        bar("Problems", ps.length ? `${ps.length} on the board now` : "none", ps.length, pSev),
+        ps.length ? h("ol", {}, ...ps.map(problemItem)) : h("p", { class: "n-none", text: "Nothing to fix. Free sockets are fine." })),
+      h("section", { class: "n-block" },
+        bar("Events", fresh.length ? `${fresh.length} new` : "nothing new", fresh.length, eSev, fresh.length ? all : null),
+        fresh.length || S.showSeen || S.showMuted
+          ? h("ol", {}, ...fresh.map(eventItem), ...(S.showSeen ? seen.map(eventItem) : []), ...(S.showMuted ? muted.map(eventItem) : []))
+          : h("p", { class: "n-none", text: evs.length ? "What happened before is under Show seen." : "Nothing has happened yet." }),
+        // (replaceChildren would write a null as "null")
+        ...(seen.length || muted.length ? [h("div", { class: "n-more" }, seen.length ? more : null, muted.length ? hush : null)] : [])));
+  }
+  function problemItem(p) {
+    const show = h("button", { type: "button", text: "Show" });
+    show.addEventListener("click", () => showProblem(p));
+    // Laid out (owner: concise, formatted): where in bold, what muted, the fix on its own line.
+    return h("li", { class: `sev-${p.severity}` },
+      h("div", { class: "p-head" }, h("span", { class: "sev-dot" }), h("strong", { text: p.title }), p.cards.length ? show : null),
+      p.where ? h("p", { class: "p-where", text: p.where }) : null,
+      h("p", { class: "p-what", text: p.what ?? p.text }),
+      p.fix ? h("p", { class: "p-fix", text: p.fix }) : null);
+  }
+  // An event: what, where, when (going on now, or when it ended), how often; its own facts by
+  // kind; Show and Seen. A dropout found to come from the GPU's power saving says so and offers
+  // the fix (owner: identify it, explain it simply, say how to fix it).
+  function eventItem(e) {
+    const d = e.data || {}, peak = e.peak || {};
+    const when = e.active ? `now · since ${clockAt(e.since)}` : ago(e.ended || e.last);
+    const show = h("button", { type: "button", text: "Show" });
+    show.addEventListener("click", () => showProblem({ cards: e.cards, wires: [] }));
+    const seenBtn = h("button", { type: "button", text: "Seen", "data-k": `seen-${e.id}` });
+    seenBtn.addEventListener("click", () => send({ op: "event-seen", ids: [e.id] }));
+    const muteBtn = h("button", { type: "button", class: "quiet", text: e.muted ? "Unmute" : "Mute", "data-k": `mute-${e.id}`,
+                                  title: e.muted ? "Show it again when it happens" : `Never show ${e.title.toLowerCase()} here again, until you unmute it` });
+    muteBtn.addEventListener("click", () => send({ op: "event-mute", id: e.id, on: !e.muted }));
+    const facts = [];
+    if (e.kind === "dropouts") {  // (its numbers as they are now, not as when it was logged)
+      facts.push(e.active ? `${d.minute} short gaps or clicks in the last minute: the computer didn't hand over the sound in time.`
+        : "Short gaps or clicks: the computer didn't hand over the sound in time.");
+      if (peak.minute > (e.active ? d.minute : 0)) facts.push(`The worst minute had ${peak.minute}.`);
+    } else facts.push(e.what);
+    const gpuCause = e.kind === "dropouts" && d.cause === "gpu";
+    let cause = null;
+    if (gpuCause) {
+      const fix = h("button", { type: "button", class: "go", text: "Keep the graphics card at full speed", "data-k": "gpu-fix", disabled: !!S.gpuPending });
+      fix.addEventListener("click", () => { S.gpuPending = true; send({ op: "gpu-full", on: true }); renderProblems(); });
+      cause = h("div", { class: "n-cause" },
+        h("b", { text: "Likely cause: the graphics card saving power" }),
+        h("p", { text: `${d.saving} a second while it saves power, ${d.up} while it doesn't. While a graphics card saves power, some drivers keep the processor waiting on it for milliseconds: long enough to crackle, mostly while a video plays.` }),
+        fix, h("p", { class: "n-small", text: "It uses more power. Needs your password. To undo: Audio engine › Advanced › GPU." }));
     }
+    return h("li", { class: `sev-${e.severity} ev${e.new ? "" : " old"}${e.active ? " live" : ""}${e.muted ? " muted" : ""}` },
+      h("div", { class: "p-head" }, h("span", { class: "sev-dot" }), h("strong", { text: e.title }),
+        e.count > 1 ? h("span", { class: "n-count", title: `Happened ${e.count} times`, text: `×${e.count}` }) : null,
+        h("span", { class: "n-when", text: when })),
+      e.where ? h("p", { class: "p-where", text: e.where }) : null,
+      ...facts.map((t) => h("p", { class: "p-what", text: t })),
+      cause || (e.fix ? h("p", { class: "p-fix", text: e.fix }) : null),
+      h("div", { class: "n-acts" }, e.cards?.length ? show : null, e.new ? seenBtn : null, muteBtn));
   }
 
   function showProblem(p) {
@@ -3021,6 +3102,31 @@ const PB = (() => {
 
   const debug = {
     openProblems: () => toggleProblems(true),
+    // Notifications with made-up events: "mix" (a dropout going on with the GPU named as its cause,
+    // a clipping 4 times, an EQ that stopped, a device gone, already seen), or none ("none").
+    fakeEvents: (kind = "mix", showSeen = false) => {
+      const now = Date.now() / 1000, ur = S.model.cards.find((c) => c.kind === "hardware")?.key, ev = (o) => ({ cards: [], data: {}, peak: {}, count: 1, active: false, new: true, seen: null, ...o });
+      S.events = kind === "none" ? [] : [
+        ev({ id: "dropouts", kind: "dropouts", severity: "warning", title: "Sound dropped out", where: titleOf(byKey()[ur] || { title: "Studio Interface" }), what: "", fix: "Give it more room: a bigger safety margin (the gear on Studio Interface).",
+             cards: [ur], data: { minute: 1680, cause: "gpu", saving: 28.4, up: 0 }, peak: { minute: 1712 }, count: 3, since: now - 140, last: now, active: true }),
+        ev({ id: "clipping:music_player:out", kind: "clipping", severity: "warning", title: "Too loud", where: "Studio Interface", what: "It gets sound louder than it can play, so it distorts.", fix: "Turn down what feeds it, or put a Limiter right before it.",
+             cards: ["music_player"], count: 4, since: now - 600, last: now - 560, ended: now - 560 }),
+        ev({ id: "stopped:eq", kind: "stopped", severity: "error", title: "Calf Vinyl couldn't load", where: "Calf Vinyl", what: "This plugin isn't installed on this computer.", fix: "Install it, or remove its card.",
+             since: now - 3 * 3600, last: now - 3 * 3600, ended: now - 3 * 3600 }),
+        ev({ id: "clipping:desktop_mix:out", kind: "clipping", severity: "warning", title: "Too loud", where: "Desktop Mix", what: "It gets sound louder than it can play, so it distorts.", fix: "Turn down what feeds it, or put a Limiter right before it.",
+             cards: ["desktop_mix"], count: 31, since: now - 90, last: now - 80, ended: now - 80, new: false, muted: true }),
+        ev({ id: "missing:pedal", kind: "missing", severity: "warning", title: "Pedal isn't connected", where: "Pedal", what: "It's unplugged or turned off; its 3 connections wait for it and come back with it.", fix: "Plug it back in, or right-click its card to use another device.",
+             since: now - 26 * 3600, last: now - 25 * 3600, ended: now - 25 * 3600, new: false, seen: now - 24 * 3600 }),
+      ];
+      S.showSeen = S.showMuted = showSeen;
+      if (kind === "mix") {  // (a plugin not installed here: a problem, not an event per launch)
+        S.events = S.events.filter((e) => e.kind !== "stopped");
+        S.problems = [...S.problems, { severity: "warning", title: "Calf Vinyl isn't installed", where: "Calf Vinyl", what: "PipeBoard can't load this plugin: it isn't on this computer.",
+                                       fix: "Install it, or remove its card.", cards: [], wires: [] }];
+      }
+      renderProblems();
+      toggleProblems(true);
+    },
     pending: (key, sock, x, y) => { startWire(document.querySelector(`.sock[data-key="${key}"][data-sock="${sock}"]`), { clientX: x, clientY: y }); },
     select, wires: () => visibleWires(),
     // A wire from one socket held over another (not let go): the target lit, the channel tag up.
@@ -3467,15 +3573,8 @@ const PB = (() => {
           return bytes(peak);
         });
         feed(k, 0, values, tones[clip ? n % 3 : 2 + (n % 4)]);
-        // Clipping raises its warning, as the server's does (problems.clipping), so a picture with
-        // red on a wire also says why (owner).
-        if (values.some((v) => Math.abs(v) >= 127) && !S.problems.some((p) => p.title === "Clipping" && p.cards[0] === k.split("|")[0])) {
-          const c = byKey()[k.split("|")[0]];
-          S.problems = [...S.problems.filter((p) => p.severity === "error"),
-                        { severity: "warning", title: "Clipping", text: `${titleOf(c)} reaches full scale, so it distorts. Turn it down at its source.`, cards: [c.key], wires: [] },
-                        ...S.problems.filter((p) => p.severity !== "error")];
-          renderProblems();
-        }
+        // (no warning raised here: the server warns only where a sound card receives it,
+        // problems.clipping; the red on the wire is the picture)
       });
       clock.newest = clock.head = 7999;
       drawLive();
