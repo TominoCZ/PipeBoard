@@ -105,9 +105,9 @@ button { font: inherit; color: inherit; }
   flex: 1; min-width: 0; }
 .card .title[contenteditable="true"] { outline: 1px solid var(--c); border-radius: 3px;
   padding: 0 3px; text-overflow: clip; cursor: text; user-select: text; }
-/* The card's type icon, in its colour (owner: it should stand out), its centre as far from the
-   right edge as the pin's is from the left. */
-.card .icon { width: 14px; height: 14px; flex: none; color: var(--c); margin-right: -4.5px; }
+/* The card's type icon, in its colour (owner: it should stand out), first in the header where the
+   dot was. */
+.card .icon { width: 14px; height: 14px; flex: none; color: var(--c); margin-left: -2px; }
 .card .body { display: flex; justify-content: space-between; gap: 18px; padding: 0 0 14px; }
 .card .col { display: flex; flex-direction: column; min-width: 0; }
 .card .col.out { align-items: flex-end; }

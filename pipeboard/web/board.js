@@ -355,10 +355,10 @@ const PB = (() => {
     const role = c.kind === "diag" ? S.ws.devices?.[c.key]?.type : c.role || (c.kind === "effect" ? "effect" : c.kind === "app" ? "app" : "");
     const icon = ICON[role] || ICON[c.kind] || "";
     const title = h("span", { class: "title", text: titleOf(c) });
-    const head = h("header", {},
-      h("span", { class: "pin" }),
-      title);
-    if (icon) head.insertAdjacentHTML("beforeend", `<svg class="icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`);
+    // The type icon leads the title, in the card's colour (owner: it said what the old dot did, and
+    // the dot cost the room); a card with no icon keeps the dot.
+    const head = h("header", {}, icon ? null : h("span", { class: "pin" }), title);
+    if (icon) head.insertAdjacentHTML("afterbegin", `<svg class="icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`);
     head.dataset.tip = cardTip(c);
     const col = (side, socks) => h("div", { class: `col ${side}` },
       ...socks.map((sk) => sockEl(c, sk, side, wired.has(`${c.key}|${sk.id}`))));
