@@ -982,11 +982,12 @@ class Board:
         return None
 
     async def op_diag_set(self, _page, op) -> str | None:
-        """A diagnostic card's own setting: the Waveform's Stereo/Mono, Smooth and Zoom (owner),
-        kept with it (profiles count them: profiles._settings)."""
+        """A diagnostic card's own setting: the Waveform's Stereo/Mono, Smooth and Zoom, the
+        Stereo picture's Dots/Lines (owner), kept with it (profiles count them: _settings)."""
         dev = self.ws.get("devices", {}).get(op.get("key"))
-        for field in ("mono", "smooth", "zoom"):
-            if dev and dev["type"] == "waveform" and field in op:
+        fields = {"waveform": ("mono", "smooth", "zoom"), "stereo": ("lines",)}
+        for field in fields.get((dev or {}).get("type"), ()):
+            if field in op:
                 dev[field] = bool(op[field])
         return None
 

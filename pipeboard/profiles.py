@@ -204,7 +204,7 @@ def _settings(dev: dict) -> tuple:
     return (dev.get("gain_db"), dev.get("bands"), [dev.get(k) for k in dynamics.SETTINGS],
             bool(dev.get("smooth")),
             [(p["i"], p.get("value")) for p in dev.get("params", [])], bool(dev.get("bypass")),
-            bool(dev.get("mono")), dev.get("zoom", True))
+            bool(dev.get("mono")), dev.get("zoom", True), bool(dev.get("lines")))
 
 
 def _moved(a: dict, b: dict) -> bool:

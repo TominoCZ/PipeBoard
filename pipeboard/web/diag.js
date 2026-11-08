@@ -33,6 +33,7 @@ const DIAG = (() => {
   const mono = {};  // key → true: the waveform shows L and R combined (the card's Stereo/Mono switch)
   const smooth = {};  // key → true: the waveform smoothed (its Smooth toggle)
   const fixed = {};  // key → true: the waveform at full scale, not zoomed to fit (its Zoom toggle off)
+  const lines = {};  // key → true: the stereo picture's samples joined into a trace (its Dots/Lines switch)
   const seen = {};  // key → its last numbers: a card drawn again (any new state) shows them at once
   let raf = 0, lastInfo = -Infinity;  // (the first frame fills the readouts at once)
 
@@ -219,26 +220,43 @@ const DIAG = (() => {
     for (let i = n - fresh; i < n; i++) top = Math.max(top, Math.abs(l[i]), Math.abs(r[i]));
     // (up at once to a louder sample, down over ~1.5 s; never past −48 dB, so hiss stays small)
     v.zoom = Math.max(top, (v.zoom || top || 0.004) * Math.exp(-dt / 1.5), 0.004);
-    const dot = Math.max(1, Math.round(dpr));
+    const dot = Math.max(1, Math.round(dpr)), joined = !!lines[v.key];
+    // Lines (owner: a toggle between dots and a line): each sample joined to the one before, on
+    // from where the last frame stopped; broken where the picture folds (a sample under the mono
+    // axis is drawn mirrored above it: joined, it would jump across) or at silence.
+    if (joined) { g.lineWidth = dot; g.lineCap = "round"; }
+    let prev = joined && v.last && v.last.end === end - fresh ? v.last : null;
     for (let i = 0; i < n; i++) {
       const a = l[i], b = r[i];
       lr += a * b; ll += a * a; rr += b * b;
       let m = (a + b) * Math.SQRT1_2, s = (a - b) * Math.SQRT1_2;
       mm += m * m; ss += s * s;
       if (i < n - fresh) continue;  // drawn already: only what played since the last frame
-      if (m < 0) { m = -m; s = -s; }
+      const flip = m < 0;
+      if (flip) { m = -m; s = -s; }
       // distance: its level against the loudest of the last second (zoomed to fit, owner: a song
       // at −12 dB was a small blob; in dB the loud near-mono part sat at the rim, hollow under it)
       const lvl = Math.hypot(m, s) * Math.SQRT1_2, ang = Math.atan2(s, m);
-      if (lvl < 0.0005) continue;
+      if (lvl < 0.0005) { prev = null; continue; }
       const amp = Math.min(1, (lvl / v.zoom) * 0.95);
       // 0 full left, 1 mono, 2 full right; white only near mono itself (owner: vivid), the
       // side's colour from a little off the centre line
       const t = Math.min(1, Math.max(0, 0.5 - ang / Math.PI)) * 2, k = Math.sqrt(Math.abs(t - 1));
-      g.fillStyle = `rgb(${(t < 1 ? mix(MID, pal.lr, k) : mix(MID, pal.rr, k)).join(",")})`;
+      const colour = `rgb(${(t < 1 ? mix(MID, pal.lr, k) : mix(MID, pal.rr, k)).join(",")})`;
+      const x = cx - Math.sin(ang) * amp * rad, y = cy - Math.cos(ang) * amp * rad;
       g.globalAlpha = 0.55;
-      g.fillRect(cx - Math.sin(ang) * amp * rad, cy - Math.cos(ang) * amp * rad, dot, dot);
+      if (!joined) {
+        g.fillStyle = colour;
+        g.fillRect(x, y, dot, dot);
+        continue;
+      }
+      if (prev && prev.flip === flip) {
+        g.strokeStyle = colour;
+        g.beginPath(); g.moveTo(prev.x, prev.y); g.lineTo(x, y); g.stroke();
+      }
+      prev = { x, y, flip };
     }
+    v.last = prev && { ...prev, end };
     g.globalAlpha = 1;
     const corr = ll && rr ? lr / Math.sqrt(ll * rr) : 0;
     // Width: how far the picture fans out, against its guide lines (owner: "what am I supposed to
@@ -522,10 +540,16 @@ const DIAG = (() => {
     return { display, extra, info: null, v };
   }
 
-  // The Waveform's two-way switch, Stereo | Mono (owner): set(mono) is the board's (it saves it).
-  function modeSwitch(key, set) {
+  // A card's two-way switch (owner): the Waveform's Stereo | Mono, the Stereo picture's Dots |
+  // Lines. set(second chosen) is the board's (it saves it).
+  const SWITCHES = {
+    channels: { labels: ["Stereo", "Mono"], is: (k) => !!mono[k], aria: "Channels", tip: "Stereo: L and R each · Mono: the two combined" },
+    drawing: { labels: ["Dots", "Lines"], is: (k) => !!lines[k], aria: "Drawing", tip: "Dots: each sample a dot · Lines: the samples joined into a trace" },
+  };
+  function modeSwitch(key, set, what = "channels") {
+    const sw = SWITCHES[what];
     const btn = (m, text) => {
-      const b = h("button", { type: "button", text, "aria-pressed": String(!!mono[key] === m) });
+      const b = h("button", { type: "button", text, "aria-pressed": String(sw.is(key) === m) });
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         for (const x of b.parentElement.children) x.setAttribute("aria-pressed", String(x === b));
@@ -533,14 +557,17 @@ const DIAG = (() => {
       });
       return b;
     };
-    return h("span", { class: "diag-mode", role: "group", "aria-label": "Channels", "data-key": key,
-                       "data-tip": "Stereo: L and R each · Mono: the two combined" }, btn(false, "Stereo"), btn(true, "Mono"));
+    return h("span", { class: "diag-mode", role: "group", "aria-label": sw.aria, "data-key": key, "data-switch": what,
+                       "data-tip": sw.tip }, btn(false, sw.labels[0]), btn(true, sw.labels[1]));
   }
   // Every switch of a card shows the same (owner: the card's and its panel's could disagree).
   function showSwitches(key) {
     for (const el of document.querySelectorAll(".diag-mode, .diag-toggle")) {
       if (el.dataset.key !== key) continue;
-      if (el.classList.contains("diag-mode")) for (const b of el.children) b.setAttribute("aria-pressed", String((b.textContent === "Mono") === !!mono[key]));
+      if (el.classList.contains("diag-mode")) {
+        const sw = SWITCHES[el.dataset.switch || "channels"];
+        for (const b of el.children) b.setAttribute("aria-pressed", String((b.textContent === sw.labels[1]) === sw.is(key)));
+      }
       else el.setAttribute("aria-pressed", String(TOGGLES[el.dataset.toggle].is(key)));
     }
   }
@@ -559,6 +586,7 @@ const DIAG = (() => {
   }
   const setSmooth = (key, on) => { smooth[key] = !!on; showSwitches(key); };
   const setZoom = (key, on) => { fixed[key] = on === false; showSwitches(key); };
+  const setLines = (key, on) => { lines[key] = !!on; showSwitches(key); };
 
   const P = { key: null, el: null, ctx: null };
   function open(key, ctx) {
@@ -569,7 +597,8 @@ const DIAG = (() => {
                    h("span", { class: "eq-space" }),
                    ctx.type === "waveform" && ctx.setMono ? modeSwitch(key, ctx.setMono) : null,
                    ctx.type === "waveform" && ctx.set ? toggle("smooth", key, (on) => ctx.set("smooth", on)) : null,
-                   ctx.type === "waveform" && ctx.set ? toggle("zoom", key, (on) => ctx.set("zoom", on)) : null, shut);
+                   ctx.type === "waveform" && ctx.set ? toggle("zoom", key, (on) => ctx.set("zoom", on)) : null,
+                   ctx.type === "stereo" && ctx.set ? modeSwitch(key, (on) => ctx.set("lines", on), "drawing") : null, shut);
     P.el = h("section", { class: `eq-panel diag-panel ${ctx.type}`, tabindex: "-1", role: "dialog", "aria-label": ctx.title },
              head, h("div", { class: "diag-big" }, big.display, big.extra));
     Object.assign(P, { key, ctx });
@@ -599,11 +628,17 @@ const DIAG = (() => {
     return kick + bass + chord + shimmer + 0.012 * (Math.random() - 0.5);
   }
   const richSide = (s) => (0.06 + 0.03 * Math.sin(s * 2.3)) * (note(s, 440.6) - note(s, 659.9) * 0.6) + 0.01 * (Math.random() - 0.5);
-  function fake(keys, wide = 1, rich = false) {  // (wide: how far apart L and R are; 1 is a typical mix)
+  // (gen: a sound of its own, s → [l, r], to try what draws what)
+  function fake(keys, wide = 1, rich = false, gen = null) {  // (wide: how far apart L and R are; 1 is a typical mix)
     let t = 0;
     const step = () => {
       const n = 960, f = new Float32Array(n * keys.length * 2);
       for (let j = 0; j < n; j++, t++) {
+        if (gen) {
+          const [l, r] = gen(t / RATE);
+          for (let i = 0; i < keys.length; i++) { f[(j * keys.length + i) * 2] = l; f[(j * keys.length + i) * 2 + 1] = r; }
+          continue;
+        }
         const s = t / RATE, mid = rich ? richMid(s) : 0.5 * Math.sin(2 * Math.PI * 220 * s) + 0.2 * Math.sin(2 * Math.PI * 661 * s);
         const side = rich ? wide * richSide(s)
           : wide * (mid * 0.4 * Math.sin(2 * Math.PI * 3 * s) + 0.06 * Math.sin(2 * Math.PI * 330 * s) + 0.03 * (Math.random() - 0.5));
@@ -615,6 +650,6 @@ const DIAG = (() => {
     return setInterval(step, 20);
   }
 
-  return { pcm, keys, isFrame, frame, view, open, close, selftest, modeSwitch, setMono, toggle, setSmooth, setZoom, isOpen: (key) => P.key === key, openKey: () => P.key, fake, heard: (key) => !!rings[key]?.at,
+  return { pcm, keys, isFrame, frame, view, open, close, selftest, modeSwitch, setMono, toggle, setSmooth, setZoom, setLines, isOpen: (key) => P.key === key, openKey: () => P.key, fake, heard: (key) => !!rings[key]?.at,
            TYPES: { waveform: "Waveform", stereo: "Stereo", counter: "Counter", meter: "Meter", spectrum: "Spectrum" } };
 })();

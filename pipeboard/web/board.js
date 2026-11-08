@@ -485,6 +485,7 @@ const PB = (() => {
     DIAG.setMono(key, dev.mono);
     DIAG.setSmooth(key, dev.smooth);
     DIAG.setZoom(key, dev.zoom);
+    DIAG.setLines(key, dev.lines);
     const on = !dev.bypass;
     const power = cardBtn({ icon: "bypass", cls: "bypass", label: on ? "Turn off" : "Turn on", pressed: !on,
       tip: on ? "On · click to turn it off (it stops measuring, saving the work)" : "Off: not measuring · click to turn it on",
@@ -496,7 +497,8 @@ const PB = (() => {
     const box = h("div", { class: "diag-row" }, v.display, v.extra, h("div", { class: "card-foot" }, power,
       wave ? DIAG.modeSwitch(key, (m) => setDiag(key, "mono", m)) : null,
       wave ? DIAG.toggle("smooth", key, (m) => setDiag(key, "smooth", m)) : null,
-      wave ? DIAG.toggle("zoom", key, (m) => setDiag(key, "zoom", m)) : null, v.info));
+      wave ? DIAG.toggle("zoom", key, (m) => setDiag(key, "zoom", m)) : null,
+      dev.type === "stereo" ? DIAG.modeSwitch(key, (m) => setDiag(key, "lines", m), "drawing") : null, v.info));
     box.addEventListener("mousedown", (e) => e.stopPropagation());  // working it never drags the card
     return box;
   }
@@ -523,7 +525,7 @@ const PB = (() => {
     const dev = S.ws.devices?.[key];
     if (!dev) return;
     dev[field] = on;
-    ({ mono: DIAG.setMono, smooth: DIAG.setSmooth, zoom: DIAG.setZoom })[field](key, on);
+    ({ mono: DIAG.setMono, smooth: DIAG.setSmooth, zoom: DIAG.setZoom, lines: DIAG.setLines })[field](key, on);
     send({ op: "diag-set", key, [field]: on });
     render();
   }
@@ -3232,8 +3234,9 @@ const PB = (() => {
     // Tidy is the same at any zoom (owner: zoom is only how it looks): positions, portals and
     // socket offsets laid out at six zooms, every one compared with zoom 1.
     // Diagnostic cards fed made-up sound (no server in the shots); one opened large; one off.
-    fakeDiag: (wide = 1, rich = false) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide, rich); },
+    fakeDiag: (wide = 1, rich = false, gen = null) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide, rich, gen); },
     openDiag: (key) => { openDiag(key); if (!DIAG.isOpen(key)) S.errors.push("the diagnostic panel did not open"); },
+    diagSet: (key, field, on) => setDiag(key, field, on),
     diagMono: (key) => {
       [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();
       if (!S.ws.devices[key].mono) S.errors.push("the Mono switch did not take");

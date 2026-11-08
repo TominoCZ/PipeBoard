@@ -2376,6 +2376,18 @@ def check_engine_devices():
             engine.ASOUND = real
 
 
+async def check_stereo_lines(tmp):
+    """The Stereo picture's Dots/Lines (owner) is kept with the card, counts as a change of the
+    profile, and is only a Stereo card's (a Waveform has no lines)."""
+    from pipeboard import pipewire, server
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    board.ws.setdefault("devices", {}).update({"pb:s": {"type": "stereo"}, "pb:w": {"type": "waveform"}})
+    await board.op_diag_set(None, {"key": "pb:s", "lines": True})
+    await board.op_diag_set(None, {"key": "pb:w", "lines": True})
+    assert board.ws["devices"]["pb:s"]["lines"] is True and "lines" not in board.ws["devices"]["pb:w"]
+    assert profiles._settings({"type": "stereo", "lines": True}) != profiles._settings({"type": "stereo"})
+
+
 async def check_clipping_where_real(tmp):
     """Clipping is warned only where it really happens (owner: warnings on nodes before their
     limiter): at a sound card receiving more than full scale (its monitor, the sum), never on an
@@ -2720,6 +2732,8 @@ def main():
         asyncio.run(check_engine_device(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_clipping_where_real(Path(tmp)))
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_stereo_lines(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
         asyncio.run(check_launch_makes_devices(Path(tmp)))
     with tempfile.TemporaryDirectory() as tmp:
