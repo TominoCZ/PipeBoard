@@ -2799,8 +2799,9 @@ const PB = (() => {
         h("div", { class: "eng-head" }, h("b", { text: "Audio engine" }), h("span", { class: "sub", text: `clocked by ${e.title || "the interface"}${runs}` }), h("span", { class: "sp" }), close),
         h("div", { class: "eng-body" }, ...global()));  // (scrolls in a short window; the head and its tip stay)
     panel.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); closeEngine(); } });
-    if (again) panel.style.animation = "none";
+    // (the position first: cssText replaces the whole style, the animation:none with it)
     if (S.iface && old?.classList.contains("iface-panel")) panel.style.cssText = old.style.cssText;  // (where it was moved to)
+    if (again) panel.style.animation = "none";
     old?.remove();
     document.body.append(panel);
     if (focused) panel.querySelector(`[data-k="${focused}"]`)?.focus();
@@ -3359,6 +3360,12 @@ const PB = (() => {
       showHeadroom();
     },
     engineOpen: (pick, advanced) => { openEngine(); Object.assign(S.pick, pick || {}, { advanced: !!advanced }); drawEngine(); },
+    // A setting clicked in the docked (never moved) interface panel: no opening animation again (owner).
+    ifaceRedraw: () => {
+      openIface(S.engine.interfaces[0].key);
+      $("engine").querySelector(".margins button:not([aria-checked=true])").click();
+      if ($("engine").style.animationName !== "none") S.errors.push("a setting clicked replayed the interface panel's opening animation");
+    },
     // An interface's panel (its key, else the first listed), with values picked in it.
     ifaceOpen: (key, pick) => { openIface(key || S.engine.interfaces[0].key); if (pick && $("engine")) { Object.assign(S.pick, pick); drawEngine(); } },
     // Tidy, then a fractional zoom (the owner's) and the cards measured again, then Tidy: nothing
