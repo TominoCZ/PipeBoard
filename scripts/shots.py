@@ -301,14 +301,34 @@ SHOTS = {
                       "{name: 'preempt=full', now: false, ours: true, elsewhere: []}, "
                       "{name: 'rcu_nocbs=all', now: true, ours: false, elsewhere: ['/etc/default/grub']}]}})"),
     "engine-same": ("machine", BIG, None, "PB.debug.engineOpen()"),
-    "engine-headroom": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom()"),
-    "engine-headroom-close": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('close')"),
-    "engine-headroom-wait": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('wait')"),
+    "engine-headroom": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom()"),
+    "engine-headroom-close": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('close')"),
+    "engine-headroom-wait": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('wait')"),
     "engine-apps": ("machine", BIG, None, "PB.debug.engineOpen({}, true) || PB.debug.fakeHeadroom('ok', {app_rt: {on: true, apps: [{name: 'Firefox', state: 'own'}, {name: 'PipeWire ALSA [fluidsynth]', state: 'raised'}, {name: 'Spotify', state: 'raised'}]}})"),
     "engine-usb": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', {blocks: [192, 384, 768, 1536, 3072], usb_step: 192, block: 256, margin: 512, margin_blocks: 2})"),
-    "engine-headroom-128": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('saw', {block: 128, margin: 128, margin_blocks: 1})"),
+    "engine-headroom-128": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {block: 128, margin: 128, margin_blocks: 1}) || PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('saw')"),
+    "engine-headroom-idle": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('idle')"),
+    "engine-headroom-input": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('input')"),
+    # Two interfaces (the pedal beside the Studio Interface): the Audio engine lists them; the
+    # pedal's own panel, docked, with its rates and 96 kHz picked against the auto it runs at.
+    "engine-two": ("pedal", BIG, None, "PB.debug.engineOpen()"),
+    "engine-iface": ("pedal", BIG, None, "PB.debug.fakeHeadroom('ok', {device: 'alsa_card.usb-Example_Guitar_Pedal-00', title: 'Pedal', "
+                     "dev_rate: 48000, rates: [44100, 48000, 96000, 192000], fixed_rate: null}) || PB.debug.ifaceOpen('alsa_card.usb-Example_Guitar_Pedal-00', {rate: 96000}) "
+                     "|| PB.debug.fakeHeadroom('input')"),
+    "engine-iface-small": ("pedal", SMALL, None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 96000, 192000], fixed_rate: 48000}) "
+                           "|| PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
+    # Four interfaces, this machine's real names (long ones: does the list fit?).
+    "engine-many": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', {interfaces: ["
+                    "{key: 'ur', title: 'Steinberg UR44C', rate: 192000, clocks: true, tsched: false, margin_blocks: 1}, "
+                    "{key: 'hda', title: 'Family 17h/19h HD Audio Controller', rate: 48000, clocks: false, tsched: true, margin_blocks: 2, fixed_rate: 48000}, "
+                    "{key: 'cam', title: 'HD Pro Webcam C920', rate: null, clocks: false}, "
+                    "{key: 'nv', title: 'GA102 High Definition Audio Controller', rate: null, clocks: false}], device: 'ur'}) "
+                    "|| PB.debug.engineOpen({block: 512})"),
+    # The widest rate row: the UR44C's six rates and Auto (its value was cut off at the edge).
+    "engine-rates-many": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 88200, 96000, 176400, 192000], "
+                          "fixed_rate: 176400}) || PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
-    "engine-margin": ("machine", BIG, None, "PB.debug.engineOpen({block: 256, blocks: 2})"),
+    "engine-margin": ("machine", BIG, None, "PB.debug.ifaceOpen(null, {blocks: 2})"),
     "engine-priority": ("machine", BIG, None, "PB.debug.engineOpen({prio: 90}, true)"),
     "engine-small": ("machine", SMALL, None, "PB.debug.engineOpen({block: 512}, true)"),
     "engine-trial": ("machine", BIG, trying, ""),

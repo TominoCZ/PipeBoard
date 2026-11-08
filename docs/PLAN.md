@@ -825,6 +825,9 @@ to the tray, apply the launch profile, and make the virtual devices itself.
   unit `pipeboard.service` (`After`/`PartOf` graphical-session.target, `ExecStart` this checkout's
   Python with `-m pipeboard --background`, restarted on failure), enabled or disabled. It starts
   **minimized** (user): tray only, launch profile applied.
+- **The board's own devices at launch**, by hand or at login alike: any not on the system
+  (PipeWire restarted) are made; with a launch profile, that profile's (loading it). Before,
+  only effects and plugins were, and a friend's virtual devices came back only at login.
 - **One copy only:** a second launch shows "PipeBoard is already running: click its icon in the
   system tray" and closes.
 - **Taking over `a setup script`** (`takeover.py`; right-click menu "Take over devices…", shown
@@ -959,7 +962,30 @@ input drop out ~100 times a second, a larger one did not fit and the stream rest
 equal ran). It shows the round trip (block + margin, in and out) old → new,
 and under **Advanced** the realtime **priority** of PipeWire's audio thread (1 … 95) and the
 **nice** of its control thread (−19 … 0), with the honest note that those do not shorten the
-delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
+delay. A **sample rate** row shows only for an interface that lists its rates (below).
+
+- **Per interface** (built 2026-11-07; a friend's motherboard card and USB mic, each at its own
+  rate, and the panel followed whichever clocked more of the graph at the moment). **Split
+  2026-11-08 (owner):** the Audio engine panel keeps what is one for the whole graph and system
+  (block size, priority, nice, apps' real time, CPU idle states, kernel options) and lists the
+  interfaces (each one's rate, margin and scheduling at a glance). Each interface's own settings
+  (round trip, safety margin, sample rate, scheduling, buffer headroom) are in **its own panel,
+  docked at the bottom** like an effect's, opened by the gear on its card, "Interface settings…"
+  in its menu, or the list. While it is open the server reads that card (`engine-device`, not
+  saved; closed or the window gone: the clocking card again), and its buffer headroom and the
+  audible-dropout count follow it; a trial stays on its card until kept or reverted. Its margin,
+  scheduling and rate are its own: the WirePlumber file holds **one rule per interface**
+  (`engine.own_rules` reads them back; a card not plugged in keeps its rule). The block stays the
+  graph's, one for all: PipeWire scales `clock.quantum` by the card's rate over
+  `default.clock.rate` (context.c), so a block is the same milliseconds on every card, and each
+  rule's ALSA period is the block at its card's own rate. The panel counts block and margin at
+  the default rate for that reason; the head shows the card's own rate.
+- **Sample rate** (offered only when the card lists its rates, owner: "ONLY if we have supported
+  rates provided"): a USB card's `stream0` "Rates:" (both directions), an HDA codec's default
+  PCM, else PipeWire's EnumFormat when it is a list, not a range. /proc first: once a rate is
+  fixed, PipeWire lists only that one. Auto, or a rate: the rule sets `audio.rate` and
+  `node.force-rate` (its part of the graph follows, past `allowed-rates`). A new rate reopens the
+  card, like a new margin.
 
 - **Where it is kept** (`engine.py`): two files of PipeBoard's own, sorted after the user's
   so they win, never the user's own files: `~/.config/pipewire/pipewire.conf.d/99-pipeboard-engine.conf`
@@ -969,7 +995,8 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   nodes, matched by name: `api.alsa.period-size` = the block, `api.alsa.headroom` = the margin, 1 to 3 blocks; on
   interrupts `api.alsa.period-num` = 2 × (blocks + 1): PipeWire fills to block + headroom but
   clamps that to half the buffer, and a 3-period buffer had cut a 3-block margin to 1.5).
-  The interface is the ALSA node most of the graph follows (`node.driver-id`).
+  The interface is the one chosen in the panel, else the ALSA node most of the graph follows
+  (`node.driver-id`).
 - **Applied without restarting PipeWire** (`engine.apply`): a PipeWire restart drops every app's
   stream and most apps never reconnect (owner: they vanished from the board and went silent, yet
   kept "playing"; the first build did that). The block and the margin need the interface's node
@@ -986,14 +1013,21 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   second until two looks find nothing to make; not the apps', WirePlumber links those): WirePlumber's start sets
   up every audio node's ports anew, which drops **every** link on them, not only the
   interface's (owner: Spotify reached Music Mix and went no further). Priority and nice alone restart nothing: `chrt -f -R` on the audio thread (it
-  carries `SCHED_RESET_ON_FORK`; clearing it is not allowed) and `renice`. `pw-cli` exits 0 even
+  carries `SCHED_RESET_ON_FORK`; clearing it is not allowed) and `renice`, each only when
+  it was changed (a friend's Fedora, where RTKit gives PipeWire real time and the user may not
+  set it, got "Operation not permitted" after every block change; refused, it is said in words).
+  `pw-cli` exits 0 even
   when a command failed: its printed errors count as failures.
 - **A minute to keep it**: a bar under the bar shows the seconds left in a ring, what is tried,
   its round trip and dropouts, and Keep / a red Revert; with no Keep the server goes back by itself (window open or not; if PipeBoard was quit
   during the minute, at its next start): the files as they were, and the old values applied live
   the same way. The graph is read again after each change: if it does not run what was asked, the
-  bar says so. The margin shown is the one that runs: the headroom in PipeWire's latency figures
-  for the interface's ports.
+  bar says so. The margin shown is the headroom the interface's nodes were made with (its
+  `api.alsa.headroom`). PipeWire's latency figure for its ports was read before: it is that
+  headroom scaled by the graph's rate when the device opened, which after a change of rate still
+  held the old one (a friend: the margin drawn as long as before until it was set again), and it
+  adds what comes from upstream. Only with no headroom said: that figure, its own direction. The
+  open panel is drawn again whenever what runs changes.
 
 - **CPU idle states** (Advanced): one toggle per state the kernel's cpuidle list reports (any
   CPU vendor, any idle driver; by name and wake time; POLL, the busy-wait, never offered). A
@@ -1070,6 +1104,9 @@ delay. Sample rate is not offered (the owner pins 192 kHz on purpose).
   hear a dropout, then open the panel and see it; ~2 % of a core; the files stay open and are read
   again, a fresh open each time cost ~6 %). Opening the panel sends the minute so far at once. The owner's machine at
   block 512 with two blocks of margin: output 1.3 ms, input 7 ms, so the output is the tight side.
+  Only the sides the interface has are shown (a USB mic with no output showed "Output
+  measuring…" for ever), and a side sampled but never running says "not running" (nothing plays
+  through it: its buffer is closed). Frames are converted at the card's own rate.
 
 - **Clipping is seen by a second capture** (`scope.py`): the 8 kHz live-wires capture filters a
   full-scale peak away (a clipped 6 kHz burst read 0.34 there), so beside it runs one at 1 kHz in

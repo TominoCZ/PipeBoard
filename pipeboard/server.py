@@ -103,6 +103,7 @@ class Board:
         # One restart at a time: overlapping ones each started a capture and forgot all but the
         # last (20 quick wire changes left 12 captures running).
         self.scope_lock = asyncio.Lock()
+        self.engine_device: str | None = None  # the interface whose panel is open (op_engine_device)
         self.scope_started = 0.0  # (values captured, when that last changed): spots a stall
         self.clipped: dict[tuple, float] = {}  # source socket → when it last clipped
         self.ops = {"connect": self.op_connect, "disconnect": self.op_disconnect,
@@ -123,6 +124,7 @@ class Board:
                     "live-setting": self.op_live_setting,
                     "engine-try": self.op_engine_try, "engine-keep": self.op_engine_keep,
                     "engine-back": self.op_engine_back, "show-latency": self.op_show_latency,
+                    "engine-device": self.op_engine_device,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
                     "headroom": self.op_headroom, "kernel": self.op_kernel,
                     "app-rt": self.op_app_rt,
@@ -198,13 +200,22 @@ class Board:
         """The audio engine as it runs, the CPU idle states and the kernel options (their
         attempts counted on)."""
         tries = lambda k: self.engine.get(k, {}).get("tries", 0)  # noqa: E731
-        self.engine = {**engine.read(dump),
+        was = self.engine.get("device")
+        # The card shown: a trial's own while it runs, else the one whose panel is open, else the
+        # one clocking the graph (its dropouts and buffer headroom are the ones watched).
+        trial = self.settings.get("engine_trial")
+        shown = (trial or {}).get("values", {}).get("device") or self.engine_device
+        self.engine = {**engine.read(dump, shown),
                        "cstates": {**engine.cstates(), "tries": tries("cstates")},
                        "kernel": {**engine.kernel(), "tries": tries("kernel")}}
         e = self.engine  # (the blocks this interface's USB transfers line up with: engine.blocks)
         live = self.source.mode == "live"
-        e["blocks"], e["usb_step"] = (engine.blocks(e.get("card"), e["rate"]) if live
-                                      else (None, None))
+        e["blocks"], e["usb_step"] = (engine.blocks(e.get("card"), e.get("dev_rate") or e["rate"],
+                                                    e["rate"]) if live else (None, None))
+        if not live:  # (a fixture's card numbers are this machine's real ones: not its rates)
+            e["rates"] = None
+        if was and e.get("device") != was:  # another interface: its buffers, not the last one's
+            self.forget_headroom()
         on = self.settings.get("app_rt", True)  # (apps' audio threads in real time: apprt)
         e["app_rt"] = {"on": on, "apps": apprt.sync(dump, on) if live else []}
 
@@ -1319,6 +1330,8 @@ class Board:
 
     async def forget(self, page: web.WebSocketResponse) -> None:
         self.pages.discard(page)
+        if not self.pages:  # (the window closed with an interface's panel open)
+            self.engine_device = None
         self.drop_pages.discard(page)
         self.head_pages.discard(page)
         self.visible.discard(page)
@@ -1510,8 +1523,19 @@ class Board:
         return None
 
     def headroom_text(self) -> str:
+        """The minute so far, and the sides the interface has (a USB mic may have no output: its
+        side was shown "measuring…" for ever, a friend's)."""
         return json.dumps({"type": "headroom", "every": HEAD_EVERY_S,
+                           "sides": sorted(self.engine.get("pcms") or {}),
                            **{k: list(v) for k, v in self.head_hist.items()}})
+
+    def forget_headroom(self) -> None:
+        """Another interface is shown: its buffers start a minute of their own. Its restarts
+        count on from the last one's (a dropout total never goes back)."""
+        for h in self.head_hist.values():
+            h.clear()
+        for side in ("out", "in"):
+            self.head_seen.pop(side, None)
 
     async def watch_headroom(self) -> None:
         """Every half second, each of the interface's buffers' lowest headroom in it (ms), kept
@@ -1524,10 +1548,15 @@ class Board:
                 if not found or self.closing:
                     await asyncio.sleep(HEAD_EVERY_S)
                     continue
+                device = self.engine.get("device")
                 low = await asyncio.to_thread(
                     headroom.sample, {k: Path(v) for k, v in found.items()}, HEAD_EVERY_S,
                     headroom.EVERY_S, self.head_seen)
-                rate = self.engine.get("rate") or 48000
+                if self.engine.get("device") != device:
+                    continue  # (another interface chosen meanwhile: not its buffers)
+                # Its frames are the card's own: at its rate, not the graph's (a card beside the
+                # one clocking the graph can run at another).
+                rate = self.engine.get("dev_rate") or self.engine.get("rate") or 48000
                 for side, h in self.head_hist.items():
                     v = low.get(side)
                     h.append(None if v is None else round(v / rate * 1000, 2))
@@ -1622,7 +1651,9 @@ class Board:
         v, now = trial["values"], self.engine
         # (on the timer PipeWire pads the margin itself: only the block and the mode are asked)
         keys = ("block", "tsched") if v.get("tsched") else ("block", "margin", "tsched")
-        took = self.source.mode != "live" or all(now.get(k) == v.get(k) for k in keys)
+        took = self.source.mode != "live" or (
+            all(now.get(k) == v.get(k) for k in keys)
+            and (not v.get("rate") or now.get("dev_rate") in (None, v["rate"])))
         return {"values": v, "was": trial["was"], "took": took,
                 "left": max(0, round(trial["until"] - time.time())),
                 "dropouts": self.trial_drops[1] - self.trial_drops[0]
@@ -1634,23 +1665,47 @@ class Board:
             return "A setting is being tried: keep or revert it first."
         if not self.engine.get("interface"):
             return "No audio interface clocks the graph: there is nothing to set."
+        e = self.engine
+        if op.get("device") and op["device"] != e.get("device"):  # (the page asked before it saw the switch)
+            return "That interface was not read yet: try again in a moment."
         try:
-            values = engine.check(op, self.engine.get("blocks") or engine.BLOCKS)
-        except ValueError as e:
-            return str(e)
+            values = engine.check(op, e.get("blocks") or engine.BLOCKS, e.get("rates"))
+        except ValueError as err:
+            return str(err)
         live = self.source.mode == "live"
-        was = {k: self.engine.get(k) for k in values}
-        # the margin asked for, in blocks (on the timer PipeWire reports a padded one)
-        was["margin"] = self.engine.get("margin_blocks", 1) * (was["block"] or 1)
+        was = {k: e.get(k) for k in values}
+        # the margin asked for, in blocks (on the timer PipeWire reports a padded one); the rate
+        # PipeBoard fixed the interface at (None: it follows the graph)
+        was["margin"] = e.get("margin_blocks", 1) * (was["block"] or 1)
+        was["rate"] = e.get("fixed_rate")
+        # The other interfaces keep their own rules; one on interrupts reopens for a new block.
+        others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]
+        for v in (values, was):
+            v.update(device=e.get("device"), irq_elsewhere=any(not r["tsched"] for r in others))
         self._set(engine_trial={
             "values": values, "was": was,
             "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
         if not live:  # the fixture: the bar and its countdown, nothing written or restarted
             self.watch_trial()
             return None
-        engine.write(engine.texts(values, self.engine["interface"]))
+        running = {n: c["rate"] for c in engine.interfaces(await self.source.snapshot())
+                   for n in c["nodes"]}
+        for r in others:  # (each one's period at its own rate, when it runs now)
+            r["at"] = next((running[n] for n in r["nodes"] if running.get(n)), 0)
+        engine.write(engine.texts(values, e["interface"], others, e["rate"],
+                                  e.get("dev_rate") or 0))
         self.watch_trial()
         return await self.engine_apply(values, self.settings["engine_trial"]["was"])
+
+    async def op_engine_device(self, _page, op) -> str | None:
+        """The interface whose panel is open (None: closed; then the one clocking the graph): its
+        settings, buffer headroom and dropouts are the ones read. Not saved: a panel open when
+        PipeBoard quit is not open at the next start."""
+        device = op.get("device")
+        if device is not None and device not in {c["key"] for c in self.engine.get("interfaces") or []}:
+            return "That interface is not there (any more)."
+        self.engine_device = device
+        return None  # (the engine is read again after every action)
 
     async def engine_apply(self, values: dict, was: dict) -> str | None:
         """Apply engine values (engine.apply). When that restarts WirePlumber, the board's wires
@@ -1946,8 +2001,14 @@ async def startup(board: Board) -> None:
     await board.refresh()
     board.first_profile()
     board.undo_around()
-    for key, dev in list(board.ws.get("devices", {}).items()):  # these end with PipeBoard
-        if dev["type"] in RUNS_WITH and key not in board.model.get("present", []):
+    # The board's own devices that are not on the system are made: its effects and plugins end
+    # with PipeBoard, and its virtual devices are gone after PipeWire restarted. Only the effects
+    # were, and the virtual devices came back only through a launch profile: launched by hand,
+    # PipeBoard showed them as missing until it was started at login (a friend). With a launch
+    # profile, that profile's devices are made by loading it (not the board's: it replaces it).
+    launch = board.settings["launch"] and board.settings["launch"] in board.store.names()
+    for key, dev in list(board.ws.get("devices", {}).items()):
+        if (dev["type"] in RUNS_WITH or not launch) and key not in board.model.get("present", []):
             await board.make(key)
     await board.apply_names()
     if board.settings["launch"]:

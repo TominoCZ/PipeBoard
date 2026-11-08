@@ -57,53 +57,198 @@ def _driver(nodes: dict[int, dict]) -> dict | None:
     return nodes[alsa[0]] if alsa else None
 
 
-def read(dump: list[dict]) -> dict:
-    """What runs now: the rate and block, the interface clocking the graph (its ALSA nodes, its
-    period and safety margin), and the priority PipeBoard's file sets (else PipeWire's own)."""
-    nodes = {o["id"]: (o.get("info") or {}).get("props") or {} for o in dump
-             if o["type"].endswith("Node")}
-    names = {o["id"]: ((o.get("info") or {}).get("props") or {}).get("device.description")
-             for o in dump if o["type"].endswith("Device")}
-    driver, clock = _driver(nodes), graph._clock(dump)
-    iface = [p for p in nodes.values() if driver and p.get("device.api") == "alsa"
-             and p.get("device.id") == driver.get("device.id")
-             and p.get("media.class", "").startswith("Audio/")]
-    # The margin that runs: the headroom in PipeWire's latency figures for the interface's ports
-    # (block + headroom). A live change shows there once the device reopened; its creation
-    # properties keep the value it was made with.
-    ids = {int(p["object.id"]) for p in iface if p.get("object.id") is not None}
-    ran = [lat.get("maxRate", 0) for o in dump if o["type"].endswith("Port")
-           and ((o.get("info") or {}).get("props") or {}).get("node.id") in ids
-           for lat in ((o.get("info") or {}).get("params") or {}).get("Latency") or []
-           if lat.get("maxQuantum")]
+_props = graph._props
+
+
+def interfaces(dump: list[dict]) -> list[dict]:
+    """Every sound card with audio nodes, by its device: a key that stays across restarts (its
+    device.name), its name, its ALSA nodes, and the rate it runs at now (its nodes' format: a
+    card can run at its own rate, beside another at the graph's; None while it is closed).
+    Ordered by how much of the graph each one clocks, the busiest first."""
+    nodes = {o["id"]: o for o in dump if o["type"].endswith("Node")
+             and _props(o).get("device.api") == "alsa"
+             and str(_props(o).get("media.class", "")).startswith("Audio/")}
+    devs = {o["id"]: _props(o) for o in dump if o["type"].endswith("Device")}
+    follows = Counter(_props(o).get("node.driver-id") for o in dump if o["type"].endswith("Node"))
+    cards: dict = {}
+    for nid, o in nodes.items():
+        p = _props(o)
+        dev = devs.get(p.get("device.id"), {})
+        key = dev.get("device.name") or f"card{p.get('alsa.card', p.get('device.id'))}"
+        c = cards.setdefault(key, {"key": key, "nodes": [], "props": [], "ids": set(),
+                                   "title": dev.get("device.description")
+                                   or p.get("api.alsa.card.name") or p.get("node.description"),
+                                   "rate": None, "clocks": 0})
+        c["nodes"].append(p.get("node.name"))
+        c["props"].append(p)
+        c["ids"].add(nid)
+        c["clocks"] += follows.get(nid, 0)
+        c["rate"] = c["rate"] or graph._rate(o)
+    for c in cards.values():
+        c["nodes"].sort()
+    return sorted(cards.values(), key=lambda c: (-c["clocks"], c["title"] or c["key"]))
+
+
+def pick(dump: list[dict], choice: str | None = None,
+         cards: list[dict] | None = None) -> dict | None:
+    """The interface the Audio engine shows: the one chosen (by key) while it is there, else the
+    one most of the graph follows. A friend's two cards (on the motherboard, and a USB mic) each
+    ran at their own rate, and the panel followed whichever clocked more at the moment."""
+    cards = interfaces(dump) if cards is None else cards
+    chosen = next((c for c in cards if c["key"] == choice), None)
+    if chosen:
+        return chosen
+    nodes = {o["id"]: _props(o) for o in dump if o["type"].endswith("Node")}
+    driver = _driver(nodes)
+    return next((c for c in cards if driver and driver.get("node.name") in c["nodes"]), None)
+
+
+def read(dump: list[dict], choice: str | None = None) -> dict:
+    """What runs now: the rate and block, the interface shown (`pick`: its ALSA nodes, its period
+    and safety margin, its own rate and the rates it could run at), every interface there is, and
+    the priority PipeBoard's file sets (else PipeWire's own).
+
+    Block, period and margin are counted at the graph's default rate (`rate`), as PipeWire counts
+    its block: a card running at another rate gets the block scaled to it (quantum × its rate ÷
+    the default), so a block is the same milliseconds on every card."""
+    clock, cards = graph._clock(dump), interfaces(dump)
+    iface = pick(dump, choice, cards)
+    found = iface["props"] if iface else []
+    ids = iface["ids"] if iface else set()
+    at = (iface or {}).get("rate") or clock["rate"]
+    scale = lambda n: round(n * clock["rate"] / at) if at else n  # noqa: E731 - to graph samples
     own = files()["pipewire"]
     text = own.read_text() if own.is_file() else ""
-    def found(key: str, dflt: int) -> int:
+    def setting(key: str, dflt: int) -> int:
         m = re.search(rf"{key}\s*=\s*(-?\d+)", text)
         return int(m[1]) if m else dflt
+    rules = own_rules()
+    rule_of = lambda c: next((r for r in rules if c and set(r["nodes"]) & set(c["nodes"])), None)  # noqa: E731
+    rule = rule_of(iface)
     return {"rate": clock["rate"], "block": clock["quantum"],
-            "interface": sorted(p["node.name"] for p in iface),
-            "pcms": headroom.folders(iface),  # (its buffers' status, for Buffer headroom)
-            "card": next((p["alsa.card"] for p in iface if p.get("alsa.card") is not None), None),
-            "title": (names.get(driver.get("device.id")) or driver.get("node.description"))
-            if driver else None,
-            "period": max((int(p.get("api.alsa.period-size") or 0) for p in iface), default=0),
-            "margin": max(ran) if ran else max((int(p.get("api.alsa.headroom") or 0)
-                                                 for p in iface), default=0),
+            "device": iface["key"] if iface else None,
+            # (each one's own margin, scheduling and fixed rate: the panel's list of them)
+            "interfaces": [{"key": c["key"], "title": c["title"], "rate": c["rate"],
+                            "clocks": c["clocks"] > 0, "tsched": _timer(dump, c["ids"]),
+                            "margin_blocks": (rule_of(c) or {}).get("blocks", 1),
+                            "fixed_rate": (rule_of(c) or {}).get("rate")} for c in cards],
+            "interface": iface["nodes"] if iface else [],
+            "pcms": headroom.folders(found),  # (its buffers' status, for Buffer headroom)
+            "card": next((p["alsa.card"] for p in found if p.get("alsa.card") is not None), None),
+            "title": iface["title"] if iface else None,
+            "dev_rate": iface["rate"] if iface else None,  # (None while it is closed)
+            "rates": rates(found, dump, ids),
+            "fixed_rate": (rule or {}).get("rate"),
+            "period": scale(max((int(p.get("api.alsa.period-size") or 0) for p in found),
+                                default=0)),
+            "margin": scale(_margin(dump, found, ids)),
             "tsched": _timer(dump, ids),
-            "margin_blocks": _margin_blocks(),
-            "prio": found("rt.prio", DEFAULT_PRIO), "nice": found("nice.level", DEFAULT_NICE),
+            "margin_blocks": (rule or {}).get("blocks", 1),
+            # (another interface PipeBoard set runs on interrupts: a new block reopens it too)
+            "irq_elsewhere": any(not r["tsched"] for r in rules if r is not rule),
+            "prio": setting("rt.prio", DEFAULT_PRIO), "nice": setting("nice.level", DEFAULT_NICE),
             "own": own.is_file()}
 
 
-def _margin_blocks() -> int:
-    """The safety margin, in blocks, PipeBoard's rule gives the interface (1 without one)."""
-    path = files()["wireplumber"]
-    text = path.read_text() if path.is_file() else ""
-    size, head = (re.search(rf"api\.alsa\.{k}\s*=\s*(\d+)", text)
-                  for k in ("period-size", "headroom"))
-    found = int(head[1]) // int(size[1]) if size and head and int(size[1]) else 1
-    return found if found in MARGIN_BLOCKS else 1
+def _margin(dump: list[dict], found: list[dict], ids: set) -> int:
+    """The margin the interface was made with, in its own samples: its nodes' headroom (from
+    PipeBoard's rule, or the user's). PipeWire's latency figure for its ports was read before: it
+    is the headroom scaled by the graph's rate when the device opened, which after a change of
+    rate still held the old one (a friend: the margin drawn as long as before the change until
+    the margin was set again), and it adds what comes from upstream. Only when no node says its
+    headroom: that figure, its own direction only."""
+    said = max((int(p.get("api.alsa.headroom") or 0) for p in found), default=0)
+    if said:
+        return said
+    own = {"input": "Input", "output": "Output"}
+    ran = [lat.get("maxRate", 0) for o in dump if o["type"].endswith("Port")
+           and _props(o).get("node.id") in ids
+           for lat in ((o.get("info") or {}).get("params") or {}).get("Latency") or []
+           if lat.get("maxQuantum") and lat.get("direction") == own.get(
+               (o.get("info") or {}).get("direction"))]
+    return max(ran, default=0)
+
+
+# The rates a card can run at, offered only when the card itself lists them (owner: "ONLY if we
+# have supported rates provided"): a USB card's stream0 ("Rates: 44100, 48000, 96000"), an HDA
+# codec's default PCM ("rates [0x560]: 44100 48000 96000 192000"), else PipeWire's own list of
+# them for the node (an enumeration, not a range). /proc first: once PipeBoard fixes a card's rate,
+# PipeWire lists only that one.
+RATES_LINE = re.compile(r"^\s*Rates:\s*([\d,\s]+)$", re.M)
+CODEC_RATES = re.compile(r"Default PCM:\s*\n\s*rates \[0x[0-9a-f]+\]:\s*([\d ]+)")
+
+
+def usb_rates(stream0: str) -> list[int] | None:
+    """The rates both directions of a USB card offer (stream0's Playback and Capture parts)."""
+    sides = [part for part in re.split(r"^(?=Playback:|Capture:)", stream0, flags=re.M)
+             if part.startswith(("Playback:", "Capture:"))]
+    found = None
+    for part in sides:
+        here = {int(r) for line in RATES_LINE.findall(part) for r in re.findall(r"\d+", line)}
+        if not here:  # ("8000 - 48000 (continuous)": no list)
+            return None
+        found = here if found is None else found & here
+    return sorted(found) if found and len(found) > 1 else None
+
+
+def codec_rates(codec: str) -> list[int] | None:
+    m = CODEC_RATES.search(codec)
+    found = sorted({int(r) for r in m[1].split()}) if m else []
+    return found if len(found) > 1 else None
+
+
+def _enum_rates(dump: list[dict], ids: set) -> list[int] | None:
+    """PipeWire's EnumFormat rates for the nodes, when they are a list: pw-dump writes a choice of
+    values as {"default": …, "alt1": …}, a range as {"min": …, "max": …} (no list: None)."""
+    found: set[int] = set()
+    for o in dump:
+        if o["id"] not in ids:
+            continue
+        for f in ((o.get("info") or {}).get("params") or {}).get("EnumFormat") or []:
+            r = f.get("rate") if isinstance(f, dict) else None
+            if isinstance(r, dict) and "min" not in r:
+                found |= {v for v in r.values() if isinstance(v, int)}
+            elif isinstance(r, list):
+                found |= {v for v in r if isinstance(v, int)}
+    return sorted(found) if len(found) > 1 else None
+
+
+def rates(found: list[dict], dump: list[dict], ids: set) -> list[int] | None:
+    """The rates this card lists, or None: then no rate is offered."""
+    card = next((p["alsa.card"] for p in found if p.get("alsa.card") is not None), None)
+    if card is not None:
+        folder = ASOUND / f"card{card}"
+        with contextlib.suppress(OSError):
+            if (listed := usb_rates((folder / "stream0").read_text())) is not None:
+                return listed
+        with contextlib.suppress(OSError):
+            for codec in sorted(folder.glob("codec#*")):
+                if (listed := codec_rates(codec.read_text())) is not None:
+                    return listed
+    return _enum_rates(dump, ids)
+
+
+RULE = re.compile(r"matches\s*=\s*\[(.*?)\]\s*actions\s*=\s*\{\s*update-props\s*=\s*\{(.*?)\}",
+                  re.S)
+
+
+def own_rules(text: str | None = None) -> list[dict]:
+    """PipeBoard's WirePlumber rules, one per interface (a file from before held one): its node
+    names, margin in blocks, scheduling and the rate it fixes (None: the graph's). A card that is
+    not plugged in keeps its rule."""
+    if text is None:
+        path = files()["wireplumber"]
+        text = path.read_text() if path.is_file() else ""
+    out = []
+    for names, props in RULE.findall(text):
+        kv = dict(re.findall(r"([\w.-]+)\s*=\s*(\S+)", props))
+        size, head = int(kv.get("api.alsa.period-size", 0)), int(kv.get("api.alsa.headroom", 0))
+        blocks = head // size if size else 1
+        out.append({"nodes": re.findall(r'node\.name\s*=\s*"([^"]*)"', names),
+                    "blocks": blocks if blocks in MARGIN_BLOCKS else 1,
+                    "tsched": kv.get("api.alsa.disable-tsched") == "false",
+                    "rate": int(kv["audio.rate"]) if kv.get("audio.rate", "").isdigit() else None})
+    return out
 
 
 def _timer(dump: list[dict], ids: set) -> bool:
@@ -128,21 +273,26 @@ def usb_step(stream0: str, rate: int) -> int | None:
     return rate // 1000
 
 
-def blocks(card: int | None, rate: int) -> tuple[list[int] | None, int | None]:
+def blocks(card: int | None, rate: int, base: int = 0) -> tuple[list[int] | None, int | None]:
     """The block sizes to offer for the interface on this ALSA card and its transfer step, or
-    (None, None) when any size lines up (the panel's own list then)."""
+    (None, None) when any size lines up (the panel's own list then). `rate`: the card's own;
+    `base`: the graph's default rate, which blocks are counted at (0: the same)."""
     try:
         step = usb_step((ASOUND / f"card{card}" / "stream0").read_text(), rate)
     except OSError:  # (not USB, or no card)
         step = None
+    if step and base and base != rate:  # (a millisecond's transfer, in the graph's samples)
+        step = step * base // rate if step * base % rate == 0 else None
     return ([step * m for m in STEP_MS], step) if step else (None, None)
 
 
-def check(op: dict, allowed=BLOCKS) -> dict:
-    """A request's values, or ValueError: only the steps the panel offers, in the allowed range."""
+def check(op: dict, allowed=BLOCKS, offered: list[int] | None = None) -> dict:
+    """A request's values, or ValueError: only the steps the panel offers, in the allowed range,
+    and a rate only of those the interface lists (`offered`; none listed: none may be asked)."""
     try:
         v = {k: int(op[k]) for k in ("block", "margin", "prio", "nice")}
         v["tsched"] = bool(op.get("tsched", False))
+        v["rate"] = int(op["rate"]) if op.get("rate") else None
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError("The audio engine needs a block size, a margin and priorities.") from e
     if v["block"] not in allowed:
@@ -151,25 +301,43 @@ def check(op: dict, allowed=BLOCKS) -> dict:
         raise ValueError("The safety margin is 1, 2 or 3 blocks.")
     if not (PRIO[0] <= v["prio"] <= PRIO[1] and NICE[0] <= v["nice"] <= NICE[1]):
         raise ValueError(f"Priority is {PRIO[0]}…{PRIO[1]} and nice {NICE[0]}…{NICE[1]}.")
+    if v["rate"] is not None and v["rate"] not in (offered or ()):
+        raise ValueError("That sample rate is not one this interface lists.")
     return v
 
 
-def texts(v: dict, interface: list[str]) -> dict[str, str]:
-    """Both files' text for these values (the interface: its ALSA node names)."""
+def _rule(nodes: list[str], block: int, r: dict, scale: tuple[int, int]) -> str:
+    """One interface's rule: its ALSA period is the block at its own rate (PipeWire scales the
+    block by the card's rate over the default one: `scale`), its margin whole periods, and the
+    rate it is fixed at with the graph made to follow it (node.force-rate), if one was chosen."""
+    at, base = scale
+    period = block * at // base if at and base else block
+    matches = " ".join(f"{{ node.name = {json.dumps(n)} }}" for n in nodes)
+    # On interrupts the buffer holds twice the block and margin (half of it is all PipeWire fills).
+    buffer = "" if r.get("tsched") else f"api.alsa.period-num = {2 * (r['blocks'] + 1)} "
+    rate = f"audio.rate = {r['rate']} node.force-rate = {r['rate']} " if r.get("rate") else ""
+    return (f"  {{\n    matches = [ {matches} ]\n"
+            f"    actions = {{ update-props = {{ api.alsa.period-size = {period} "
+            f"api.alsa.headroom = {period * r['blocks']} {buffer}{rate}"
+            f"api.alsa.disable-tsched = {str(not r.get('tsched', False)).lower()} }} }}\n  }}\n")
+
+
+def texts(v: dict, interface: list[str], others: list[dict] = (), base: int = 0,
+          at: int = 0) -> dict[str, str]:
+    """Both files' text for these values (the interface: its ALSA node names). `others`: the
+    other interfaces' rules (own_rules), kept, each with its period fitted to the new block;
+    `base` the graph's default rate and `at` the interface's own (0: the same)."""
     pw = (f"{HEAD}context.properties = {{\n"
           f"    default.clock.quantum     = {v['block']}\n"
           f"    default.clock.min-quantum = {v['block']}\n"
           f"    default.clock.max-quantum = {v['block']}\n"
           f"    module.rt.args = {{ rt.prio = {v['prio']} nice.level = {v['nice']} }}\n}}\n")
-    matches = " ".join(f"{{ node.name = {json.dumps(n)} }}" for n in interface)
-    # On interrupts the buffer holds twice the block and margin (half of it is all PipeWire fills).
-    periods = 2 * (v["margin"] // v["block"] + 1)
-    buffer = "" if v.get("tsched") else f"api.alsa.period-num = {periods} "
-    wp = (f"{HEAD}monitor.alsa.rules = [\n  {{\n    matches = [ {matches} ]\n"
-          f"    actions = {{ update-props = {{ api.alsa.period-size = {v['block']} "
-          f"api.alsa.headroom = {v['margin']} {buffer}"
-          f"api.alsa.disable-tsched = {str(not v.get('tsched', False)).lower()} }} }}\n  }}\n]\n")
-    return {"pipewire": pw, "wireplumber": wp if interface else None}
+    mine = {"blocks": v["margin"] // v["block"], "tsched": v.get("tsched"), "rate": v.get("rate")}
+    rules = [_rule(interface, v["block"], mine, (v.get("rate") or at, base))] if interface else []
+    rules += [_rule(r["nodes"], v["block"], r, (r.get("rate") or r.get("at") or 0, base))
+              for r in others if r["nodes"] and not set(r["nodes"]) & set(interface)]
+    wp = f"{HEAD}monitor.alsa.rules = [\n{''.join(rules)}]\n"
+    return {"pipewire": pw, "wireplumber": wp if rules else None}
 
 
 def write(contents: dict[str, str | None]) -> None:
@@ -425,12 +593,16 @@ class RootHelper:
 def reopens(v: dict, was: dict) -> bool:
     """Whether these values need the interface's node made again (WirePlumber restarted): a new
     scheduling or safety margin (in blocks: its headroom and buffer are fixed when the node is
-    made), or on interrupts a new block (its ALSA period, which must equal the block). On
-    PipeWire's timer the period is its own: the block alone changes live."""
+    made), a new rate (the card opens at it), or on interrupts a new block (its ALSA period,
+    which must equal the block; `irq_elsewhere`: another interface with a rule of PipeBoard's
+    runs on interrupts, its period follows the block too). On PipeWire's timer the period is its
+    own: the block alone changes live."""
     blocks = lambda x: (x.get("margin") or 0) // (x.get("block") or 1)  # noqa: E731
-    if v.get("tsched") != was.get("tsched") or blocks(v) != blocks(was):
+    if v.get("tsched") != was.get("tsched") or blocks(v) != blocks(was) \
+            or v.get("rate") != was.get("rate"):
         return True
-    return not v.get("tsched") and v.get("block") != was.get("block")
+    irq = not v.get("tsched") or v.get("irq_elsewhere") or was.get("irq_elsewhere")
+    return bool(irq) and v.get("block") != was.get("block")
 
 
 async def node_errors() -> dict[str, int]:
@@ -526,7 +698,10 @@ async def apply(v: dict, was: dict, dump: list[dict]) -> str | None:
     from the rule file already written; apps are PipeWire's and keep their streams); the block is
     set while the interface is away, so it never runs against the wrong period; the caller makes
     the board's wires to it again. Priority and nice are set on the running PipeWire: chrt -R (its
-    audio thread keeps SCHED_RESET_ON_FORK; clearing it is not allowed) and renice."""
+    audio thread keeps SCHED_RESET_ON_FORK; clearing it is not allowed) and renice, only when
+    they were changed: set every time, a block change on a system where RTKit gives PipeWire its
+    real time and the user may not (Fedora) ended in "chrt: failed to set pid …'s policy:
+    Operation not permitted", a toast for a priority nobody had touched (a friend)."""
     errors = []
     reopen = reopens(v, was)
     if reopen:
@@ -536,10 +711,20 @@ async def apply(v: dict, was: dict, dump: list[dict]) -> str | None:
         for key in keys if v["block"] > was["block"] else keys[::-1]:
             errors.append(await _run("pw-metadata", "-n", "settings", "0", f"clock.{key}",
                                      str(v["block"])))
-    if reopen and not await _back(set(read(dump)["interface"])):
+    if reopen and not await _back(set(read(dump, v.get("device"))["interface"])):
         errors.append("the interface did not come back within 15 s")
-    pid, threads = await _daemon()
-    errors += [await _run("chrt", "-f", "-R", "-p", str(v["prio"]), t) for t in threads]
-    if pid not in ("", "0"):
-        errors.append(await _run("renice", "-n", str(v["nice"]), "-p", pid))
-    return next((e for e in errors if e), None)
+    if v["prio"] != was.get("prio") or v["nice"] != was.get("nice"):
+        pid, threads = await _daemon()
+        if v["prio"] != was.get("prio"):
+            errors += [await _run("chrt", "-f", "-R", "-p", str(v["prio"]), t) for t in threads]
+        if pid not in ("", "0") and v["nice"] != was.get("nice"):
+            errors.append(await _run("renice", "-n", str(v["nice"]), "-p", pid))
+    return next((_plain(e) for e in errors if e), None)
+
+
+def _plain(error: str) -> str:
+    """A tool's complaint, in words when it is about permission to set a priority."""
+    if error.startswith(("chrt:", "renice:")) and "not permitted" in error:
+        return ("PipeWire's priority was not changed: this account may not set it (here "
+                "PipeWire gets real time through RTKit).")
+    return error
