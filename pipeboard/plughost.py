@@ -67,7 +67,11 @@ def _engine(spec: dict, cb):
             (cb.ENGINE_OPTION_PATH_RESOURCES, 0, f"{LIB}/resources"),
             (cb.ENGINE_OPTION_PROCESS_MODE, cb.ENGINE_PROCESS_MODE_MULTIPLE_CLIENTS, ""),
             (cb.ENGINE_OPTION_CLIENT_NAME_PREFIX, 0, f"pb-{spec['id']}"),
-            (cb.ENGINE_OPTION_PREFER_PLUGIN_BRIDGES, 1, "")):
+            (cb.ENGINE_OPTION_PREFER_PLUGIN_BRIDGES, 1, ""),
+            # Where LV2 plugins are, as the picker lists them: Carla's own default left out
+            # Ubuntu's /usr/lib/x86_64-linux-gnu/lv2, so a plugin picked there never loaded
+            # ("Failed to find the requested plugin": the owner's Calf Vinyl since 2026-11-06).
+            (cb.ENGINE_OPTION_PLUGIN_PATH, cb.PLUGIN_LV2, lv2_path())):
         host.set_engine_option(option, value, text)
     if not host.engine_init("JACK", f"pb-{spec['id']}"):
         raise RuntimeError(f"Carla could not start: {host.get_last_error()}")
@@ -176,13 +180,18 @@ LV2_PATH = ("~/.lv2", "/usr/local/lib/lv2", "/usr/lib/lv2", "/usr/lib/x86_64-lin
 VST3_PATH = ("~/.vst3", "/usr/local/lib/vst3", "/usr/lib/vst3")
 
 
+def lv2_path() -> str:
+    """Where LV2 plugins are looked for: listing them and loading one alike."""
+    return os.environ.get("LV2_PATH") or ":".join(os.path.expanduser(p) for p in LV2_PATH)
+
+
 def _lv2() -> list[dict]:
     """LV2 effects (audio in and out), from Carla's own LV2 cache: ~1 s for 335 plugins."""
     from carla_backend import PLUGIN_LV2  # noqa: PLC0415
     from carla_utils import CarlaUtils  # noqa: PLC0415
 
     utils = CarlaUtils(f"{LIB}/libcarla_utils.so")
-    path = os.environ.get("LV2_PATH") or ":".join(os.path.expanduser(p) for p in LV2_PATH)
+    path = lv2_path()
     found = []
     for i in range(utils.get_cached_plugin_count(PLUGIN_LV2, path)):
         p = utils.get_cached_plugin_info(PLUGIN_LV2, i)

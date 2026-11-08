@@ -2393,6 +2393,45 @@ async def check_clipping_where_real(tmp):
     assert [p["id"] for p in found] == [f"clipping:{UR}"] and "Limiter" in found[0]["fix"], found
 
 
+def check_plugin_engine_path():
+    """A plugin host's Carla looks for LV2 plugins where the picker lists them (owner: Calf Vinyl,
+    in Ubuntu's /usr/lib/x86_64-linux-gnu/lv2, listed and picked but never loaded): checked on a
+    stand-in Carla that only notes what it is told."""
+    import os
+
+    from pipeboard import plughost
+
+    class Host:
+        def __init__(self, *_):
+            self.options = []
+        def set_engine_option(self, option, value, text):
+            self.options.append((option, value, text))
+        def engine_init(self, *_):
+            return True
+        def add_plugin(self, *_):
+            return True
+    cb = type("cb", (), {k: i for i, k in enumerate((
+        "ENGINE_OPTION_PATH_BINARIES", "ENGINE_OPTION_PATH_RESOURCES", "ENGINE_OPTION_PROCESS_MODE",
+        "ENGINE_PROCESS_MODE_MULTIPLE_CLIENTS", "ENGINE_OPTION_CLIENT_NAME_PREFIX",
+        "ENGINE_OPTION_PREFER_PLUGIN_BRIDGES", "ENGINE_OPTION_PLUGIN_PATH", "PLUGIN_LV2",
+        "PLUGIN_VST3", "BINARY_NATIVE"))} | {"CarlaHostDLL": Host})
+    host = plughost._engine({"id": "x", "format": "lv2", "label": "http://calf.sourceforge.net/plugins/Vinyl"}, cb)
+    assert (cb.ENGINE_OPTION_PLUGIN_PATH, cb.PLUGIN_LV2, plughost.lv2_path()) in host.options
+    assert "/usr/lib/x86_64-linux-gnu/lv2" in plughost.lv2_path() or os.environ.get("LV2_PATH")
+
+
+def check_unseen_device():
+    """A device of the board's own that never appeared on this system (owner: a plugin not
+    installed, started at every launch but never drawn, so it could not be removed) is drawn
+    missing, from its definition; one removed from the board is not."""
+    board = {"cards": {"pb:cv": {"x": -20, "y": 14}, "pb:gone": {"hidden": True}},
+             "devices": {"pb:cv": {"type": "plugin", "name": "Calf Vinyl", "ins": 2, "outs": 2},
+                         "pb:gone": {"type": "plugin", "name": "Old", "ins": 2, "outs": 2}}}
+    found = profiles.missing(board, {"cards": [], "present": []})
+    assert [(m["key"], m["title"], m["kind"]) for m in found] == [("pb:cv", "Calf Vinyl", "plugin")], found
+    assert found[0]["inputs"][0]["n"] == 2 and found[0]["outputs"][0]["n"] == 2
+
+
 def check_missing_grace():
     """A device is an event only once it has been missing for a while (owner: a restart logged
     every effect "isn't running" while it started): within the grace nothing, and when it ends;
@@ -2406,7 +2445,7 @@ def check_missing_grace():
     now, due = problems.settled([pedal, eq], since, 111.0)
     assert now == [pedal] and due == 111.0 + problems.MISSING_GRACE_S, "the pedal is; the EQ's clock started over"
     found = problems.not_installed({"cv": "Calf Vinyl"})
-    assert [p["title"] for p in found] == ["Calf Vinyl isn't installed"] and found[0]["cards"] == ["cv"]
+    assert [p["title"] for p in found] == ["Calf Vinyl can't be found"] and found[0]["cards"] == ["cv"]
 
 
 def check_events():
@@ -2645,6 +2684,8 @@ def main():
     check_kernel()
     check_engine()
     check_engine_devices()
+    check_plugin_engine_path()
+    check_unseen_device()
     check_missing_grace()
     check_events()
     check_gpu()

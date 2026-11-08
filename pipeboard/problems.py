@@ -292,8 +292,8 @@ def settled(gone: list[dict], since: dict[str, float], now: float,
 def not_installed(plugins: dict[str, str]) -> list[dict]:
     """Plugins on the board their host could not find on this computer: how things are, a
     problem, not an event at every launch (owner: "Calf Vinyl couldn't load" x6)."""
-    return [_problem("warning", f"{name} isn't installed",
-                     (name, "PipeBoard can't load this plugin: it isn't on this computer.",
+    return [_problem("warning", f"{name} can't be found",
+                     (name, "PipeBoard can't find this plugin on this computer, so it can't load.",
                       "Install it, or remove its card."), [key])
             for key, name in sorted(plugins.items())]
 
@@ -302,7 +302,7 @@ def stopped(name: str, why: str, key: str, error: bool = False) -> dict:
     """An effect or plugin whose process ended by itself, or a plugin that would not load (not
     installed here): over at once, logged (Events). `error`: the host said why."""
     if "find the requested plugin" in why:  # (Carla: not installed here)
-        said = (f"{name} couldn't load", "This plugin isn't installed on this computer.",
+        said = (f"{name} couldn't load", "PipeBoard can't find this plugin on this computer.",
                 "Install it, or remove its card.")
     elif error:
         said = (f"{name} couldn't start", f"{why[:1].upper()}{why[1:]}.",

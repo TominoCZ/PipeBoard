@@ -2421,6 +2421,7 @@ const PB = (() => {
     const panel = $("problems"), btn = $("problems-btn");
     panel.hidden = !(open ?? panel.hidden);
     if (!panel.hidden) { closeMenu(); if (!S.iface) closeEngine(); }  // (one popover at a time)
+    else if (S.showSeen || S.showMuted) { S.showSeen = S.showMuted = false; renderProblems(); }  // (folded again when it closes, owner)
     btn.setAttribute("aria-expanded", String(!panel.hidden));
   }
 

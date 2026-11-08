@@ -64,8 +64,27 @@ def missing(board: dict, model: dict) -> list[dict]:
     cards the user removed from the board.
     """
     live = set(model.get("present") or (c["key"] for c in model["cards"]))
-    return [{"key": k, **c["seen"]} for k, c in board.get("cards", {}).items()
-            if k not in live and "seen" in c and c["seen"]["kind"] != "app" and not c.get("hidden")]
+    devices = board.get("devices", {})
+    return [{"key": k, **(c.get("seen") or _unseen(devices[k]))}
+            for k, c in board.get("cards", {}).items()
+            if k not in live and ("seen" in c or k in devices) and not c.get("hidden")
+            and (c.get("seen") or {}).get("kind") != "app"]
+
+
+def _unseen(dev: dict) -> dict:
+    """A device of the board's own that never appeared here (owner: a plugin not installed,
+    started at every launch, never drawn, so it could not be removed): what its definition says,
+    so it is drawn missing and can be removed or replaced."""
+    kind = ("plugin" if dev["type"] == "plugin" else "virtual" if dev["type"] in ("mic", "speaker")
+            else "diag" if dev["type"] in ("waveform", "stereo", "counter", "meter", "spectrum")
+            else "effect")
+    n = dev.get("channels") or 2
+    ins, outs = dev.get("ins", n), dev.get("outs", n)
+    return {"title": dev.get("name") or dev["type"], "kind": kind,
+            "role": dev["type"] if kind == "virtual" else "",
+            "inputs": [{"id": "in", "label": "IN", "n": ins}] if ins else [],
+            "outputs": [{"id": "out", "label": "OUT", "n": outs}]
+            if outs and kind != "diag" else []}
 
 
 def _name(board: dict, key: str) -> str:
