@@ -125,10 +125,10 @@ const PB = (() => {
     // The idle states or kernel options changed (a password prompt answered): the open panel
     // shows it, drawn again only then, so a click elsewhere in it is never lost to a rebuild
     // (owner: "they don't toggle").
-    const rootWas = JSON.stringify([S.engine?.cstates, S.engine?.kernel]);
+    const rootWas = JSON.stringify([S.engine?.cstates, S.engine?.kernel, S.engine?.gpu?.full, S.engine?.gpu?.tries]);
     S.engine = msg.engine || null;
-    if (JSON.stringify([S.engine?.cstates, S.engine?.kernel]) !== rootWas) {
-      S.idlePending = S.kernelPending = null;
+    if (JSON.stringify([S.engine?.cstates, S.engine?.kernel, S.engine?.gpu?.full, S.engine?.gpu?.tries]) !== rootWas) {
+      S.idlePending = S.kernelPending = S.gpuPending = null;
       if ($("engine")) drawEngine();
     }
     // An interface's panel: closed when the card is gone; drawn once the server reads that card
@@ -2451,6 +2451,26 @@ const PB = (() => {
     return [row("CPU idle states", chips, ""),  // (the chips say which are off)
             h("p", { class: "hint", text: `How deeply the processor may sleep. The deeper ones save power but wake too slowly for sound: turn them off if you hear crackles. Needs your password.${kept ? ` Boot rule: ${kept}.` : ""}` })];
   }
+  // The GPU at full speed (gpu.py): saving power, it made the owner's 1 ms blocks drop out while a
+  // video played (measured: none at its stock top memory clock). PipeBoard watches in the
+  // background and says when that is the cause; the switch sets it, with the password, and holds
+  // it at every start. Afterwards it says what changed.
+  function gpuSpeed(e, row) {
+    const g = e.gpu || {};
+    if (!g.gpus?.length) return [];
+    const v = g.verdict, a = g.after, min = a ? Math.round(a.s / 60) : 0;
+    const b = h("button", { type: "button", class: `chip-state${S.gpuPending ? " pending" : ""}`, "aria-pressed": String(!!g.full), "data-k": "gpu-full",
+                            disabled: !!S.gpuPending, title: g.gpus.map((x) => x.name).join(", ") }, h("b", { text: "Full speed" }));
+    b.addEventListener("click", () => { S.gpuPending = true; send({ op: "gpu-full", on: !g.full }); drawEngine(); });
+    // Why it is there at all (owner: "needs an explanation as to why that setting even matters"):
+    // what goes wrong, in a sentence; then what PipeBoard found here, or what the fix did.
+    const why = "Why: while the GPU saves power, some drivers keep the processor waiting on it for milliseconds, which is enough for small blocks to crackle, mostly while a video plays.";
+    const now = g.full
+      ? `${min >= 1 ? `Since then: ${a.drops} dropout${a.drops === 1 ? "" : "s"} in ${min} min. ` : ""}Kept at its normal top clocks (not an overclock); it uses more power.`
+      : v ? `It happens here: ${v.saving} dropouts a second while it saves power, ${v.up} while it's up. Full speed stops that, for more power use.`
+        : "PipeBoard watches for it and tells you if it happens here. Full speed uses more power; needs your password.";
+    return [row("GPU", b, ""), h("p", { class: "hint", text: why }), h("p", { class: `hint${v && !g.full ? " warn" : ""}`, text: now })];
+  }
   // Low-latency kernel options, one toggle each: what linux-lowlatency adds to Ubuntu's kernel.
   // Lit = on at the next boot (PipeBoard's GRUB snippet); set in another GRUB file = not ours to
   // take off. Needs the password and a restart.
@@ -2617,14 +2637,17 @@ const PB = (() => {
     const kernelWaits = (e.kernel?.opts || []).some((x) => (x.ours || x.elsewhere.length > 0) !== x.now);
     const prioPart = h("span", { class: pending ? "warn-text" : "", text: `priority ${prioNow}${pending ? ` (asked ${e.prio})` : ""}` });
     const summary = [sleepOff.length ? `${sleepOff.join(", ")} off` : null, kernelWaits ? "kernel on restart" : null,
-      prioPart, (e.app_rt || { on: true }).on ? "apps real time" : "apps normal"].filter(Boolean).flatMap((x, i) => (i ? [" · ", x] : [x]));
+      prioPart, (e.app_rt || { on: true }).on ? "apps real time" : "apps normal", e.gpu?.full ? "GPU full speed" : null].filter(Boolean).flatMap((x, i) => (i ? [" · ", x] : [x]));
     // (its name in the labels' column: the triangle at the right end, owner)
     const adv = h("button", { type: "button", class: "adv-head", "aria-expanded": String(p.advanced), "data-k": "advanced" },
       h("span", { class: "name", text: "Advanced" }), p.advanced ? null : h("small", {}, ...summary),
       h("span", { class: "chev", "aria-hidden": "true" }));
     adv.addEventListener("click", () => { p.advanced = !p.advanced; drawEngine(); });
     const cancel = h("button", { type: "button", class: "btn quiet", text: "Cancel" });
-    const go = h("button", { type: "button", class: "btn go", text: "Try it", disabled: !changed });
+    // Only the priority or nice changed: nothing that can break the sound, so it is set, not
+    // tried for a minute (owner: "Save" or "Set"); the server decides the same way.
+    const tried = p.block !== e.block || p.blocks !== (e.margin_blocks || 1) || p.tsched !== !!e.tsched || rateAsked(p, e) !== (e.fixed_rate || null);
+    const go = h("button", { type: "button", class: "btn go", text: changed && !tried ? "Set" : "Try it", disabled: !changed });
     cancel.addEventListener("click", closeEngine);
     go.addEventListener("click", () => { send({ op: "engine-try", device: e.device, block: p.block, margin: p.margin, prio: p.prio, nice: p.nice, tsched: p.tsched, rate: rateAsked(p, e) }); closeEngine(); });
     const close = h("button", { type: "button", class: S.iface ? "eq-close" : "x", "aria-label": "Close", text: S.iface ? "✕" : "×" });
@@ -2641,7 +2664,8 @@ const PB = (() => {
         h("span", { class: "more", "data-tip": "The card's converters and its USB transfers add their own delay, not counted here.", text: "+ the card's own delay" })));
     // Cards on interrupts: their ALSA period is the block, a new block reopens them.
     const irq = (e.interfaces || []).filter((x) => x.rate && !x.tsched).map((x) => x.title);
-    const note = !reopensNow(p, e) ? "Applies at once. A minute to Keep."
+    const note = changed && !tried ? "Applies at once, and stays."
+      : !reopensNow(p, e) ? "Applies at once. A minute to Keep."
       : S.iface || p.block === e.block || !irq.length ? "The interface restarts: silent until it is back. Then a minute to Keep."
         : `${irq.join(", ")} restart${irq.length > 1 ? "" : "s"}: silent until back. Then a minute to Keep.`;
     const foot = h("div", { class: "eng-foot" }, h("span", { class: "note", text: note }), cancel, go);
@@ -2659,6 +2683,7 @@ const PB = (() => {
       adv,  // (no line above it: the box is its own edge)
       ...(p.advanced ? deepSleep(e, row) : []),
       ...(p.advanced ? kernelOpts(e, row) : []),
+      ...(p.advanced ? gpuSpeed(e, row) : []),
       p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), pending ? `runs ${prioNow}` : "") : null,
       p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), pending ? `runs ${niceNow}` : "") : null,
       p.advanced ? h("p", { class: `hint${pending ? " warn" : ""}`, text: pending

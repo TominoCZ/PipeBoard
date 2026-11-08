@@ -2376,6 +2376,98 @@ def check_engine_devices():
             engine.ASOUND = real
 
 
+def check_gpu():
+    """The GPU's power level from each vendor's own reading, and the diagnosis: dropouts only while
+    the GPU saves power (the owner's: ~28 a second, none with it up) name it; too few seconds of
+    either, or dropouts as often with it up, name nothing."""
+    from pipeboard import gpu
+    g = gpu.nvidia_line("0, NVIDIA GeForce RTX 3080 Ti, 810, 9501")
+    assert g and g["vendor"] == "nvidia" and (g["clock"], g["top"]) == (810, 9501) and gpu.low(g)
+    assert not gpu.low({**g, "clock": 9501}), "at its top: not saving"
+    assert gpu.nvidia_line("[N/A]") is None and gpu.nvidia_line("0, x, [N/A], 9501") is None
+    assert gpu.amd_levels("0: 96Mhz\n1: 456Mhz *\n2: 1000Mhz\n") == (456, 1000)
+    assert gpu.amd_levels("0: 96Mhz\n1: 456Mhz\n") is None, "no level marked: unknown"
+    with tempfile.TemporaryDirectory() as tmp:  # sysfs as AMD and Intel lay it out
+        real, gpu.DRM = gpu.DRM, Path(tmp)
+        try:
+            amd, intel = Path(tmp) / "card0", Path(tmp) / "card1"
+            for d in (amd, intel):
+                (d / "device").mkdir(parents=True)
+            (Path(tmp) / "card0-DP-1").mkdir()
+            (amd / "device" / "vendor").write_text("0x1002\n")
+            (amd / "device" / "pp_dpm_mclk").write_text("0: 96Mhz *\n1: 1000Mhz\n")
+            (intel / "device" / "vendor").write_text("0x8086\n")
+            for f in ("gt_cur_freq_mhz", "gt_RP0_freq_mhz"):
+                (intel / f).write_text("1300\n")
+            found = {x["vendor"]: x for x in gpu._sysfs()}
+            assert set(found) == {"amd", "intel"} and gpu.low(found["amd"]) and not gpu.low(found["intel"]), found
+        finally:
+            gpu.DRM = real
+    ev = gpu.Evidence()
+    for _ in range(60):
+        ev.add(28, True)
+    assert ev.verdict() is None, "never seen with the GPU up: nothing to compare"
+    for _ in range(60):
+        ev.add(0, False)
+    v = ev.verdict()
+    assert v and v["saving"] == 28 and v["up"] == 0, v
+    ev.clear()
+    for i in range(120):
+        ev.add(5, i % 2 == 0)
+    assert ev.verdict() is None, "as many with the GPU up: not the GPU"
+    ev.clear()
+    for i in range(120):
+        ev.add(0, i % 2 == 0)
+    assert ev.verdict() is None, "no dropouts: nothing to name"
+
+
+def check_gpu_full():
+    """GPU at full speed through the root helper (run without root on a made-up sysfs, a stand-in
+    nvidia-smi and systemctl): on, every vendor's GPU at its top clocks and the boot service
+    written; off, all of it back; anything else refused."""
+    from pipeboard import engine, gpu
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        drm, log = t / "drm", t / "smi.log"
+        for card, files in (("card0", {"device/vendor": "0x1002", "device/power_dpm_force_performance_level": "auto"}),
+                            ("card1", {"gt_RP0_freq_mhz": "1300", "gt_RPn_freq_mhz": "300", "gt_min_freq_mhz": "300"})):
+            for name, text in files.items():
+                (drm / card / name).parent.mkdir(parents=True, exist_ok=True)
+                (drm / card / name).write_text(text + "\n")
+        smi = t / "nvidia-smi"  # answers like one RTX 3080 Ti, and notes what it was asked
+        smi.write_text(f"""#!/bin/sh
+echo "$@" >> {log}
+case "$*" in *index*) echo 0;; *clocks.max.mem*) echo 9501;; esac
+""")
+        smi.chmod(0o755)
+        real = gpu.DRM, gpu.NVIDIA_SMI, gpu.SYSTEMCTL, gpu.SCRIPT, gpu.UNIT
+        gpu.DRM, gpu.NVIDIA_SMI, gpu.SYSTEMCTL = drm, str(smi), "true"
+        gpu.SCRIPT, gpu.UNIT = t / "sbin" / "pipeboard-gpu-full-speed", t / "pipeboard-gpu.service"
+        try:
+            asyncio.run(_gpu_session(engine, gpu, drm, log))
+        finally:
+            gpu.DRM, gpu.NVIDIA_SMI, gpu.SYSTEMCTL, gpu.SCRIPT, gpu.UNIT = real
+
+
+async def _gpu_session(engine, gpu, drm, log):
+    level = lambda: (drm / "card0/device/power_dpm_force_performance_level").read_text().strip()  # noqa: E731
+    floor = lambda: (drm / "card1/gt_min_freq_mhz").read_text().strip()  # noqa: E731
+    helper = engine.RootHelper(("sh", "-c"))
+    assert not gpu.full()
+    assert await helper.gpu(True) is None
+    assert gpu.full() and gpu.SCRIPT.read_text() == gpu.full_script() and gpu.UNIT.read_text() == gpu.unit()
+    assert level() == "high" and floor() == "1300", "AMD at its high level, Intel's floor at its top"
+    assert "--lock-memory-clocks=9501,9501" in log.read_text(), "NVIDIA's memory clock at its own top"
+    assert await helper.gpu(False) is None
+    assert not gpu.full() and not gpu.SCRIPT.exists(), "the service and its script gone"
+    assert level() == "auto" and floor() == "300" and "--reset-memory-clocks" in log.read_text()
+    helper.proc.stdin.write(b"gpu on; touch /tmp/pipeboard-pwned\n")
+    await helper.proc.stdin.drain()
+    assert (await helper.proc.stdout.readline()).decode().strip() == "bad"
+    assert not Path("/tmp/pipeboard-pwned").exists()
+    await helper.stop()
+
+
 async def check_engine_device(tmp):
     """An interface's panel open: the engine reads that card (its own minute of buffer headroom),
     only one that is there; closed (None), the one clocking the graph again; not saved across a
@@ -2405,6 +2497,13 @@ async def check_engine_device(tmp):
     await board.op_engine_keep(None, {})
     await board.refresh()
     assert board.engine["device"] == UR_DEV, "kept: the clocking one again"
+    e = board.engine  # only the priority and nice: set at once, no minute on trial (owner: "Set")
+    same = {"block": e["block"], "margin": e.get("margin_blocks", 1) * e["block"], "tsched": e["tsched"]}
+    assert await board.op_engine_try(None, {**same, "prio": 50, "nice": -5}) is None
+    assert board.trial_state() is None, "a priority alone is not tried"
+    assert await board.op_engine_try(None, {**same, "block": 512, "margin": 512, "prio": 50, "nice": -5}) is None
+    assert board.trial_state(), "a block is"
+    await board.op_engine_keep(None, {})
     await board.op_engine_device(None, {"device": PEDAL})
     again = server.Board(pipewire.Fixture(scenarios.load("pedal")), tmp)
     await server.startup(again)
@@ -2464,6 +2563,8 @@ def main():
     check_kernel()
     check_engine()
     check_engine_devices()
+    check_gpu()
+    check_gpu_full()
     check_plugin_listing()
     check_missing()
     check_scope_math()

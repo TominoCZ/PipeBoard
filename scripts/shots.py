@@ -329,6 +329,11 @@ SHOTS = {
     # The widest rate row: the UR44C's six rates and Auto (its value was cut off at the edge).
     "engine-rates-many": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 88200, 96000, 176400, 192000], "
                           "fixed_rate: 176400}) || PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
+    # The GPU: PipeBoard has found its power saving behind the dropouts; and after the fix.
+    "engine-gpu-cause": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {gpu: {gpus: [{vendor: 'nvidia', name: 'NVIDIA GeForce RTX 3080 Ti', clock: 810, top: 9501}], "
+                         "verdict: {saving: 28.4, up: 0, saving_s: 180, up_s: 95}, full: false}}) || PB.debug.engineOpen({}, true)"),
+    "engine-gpu-full": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {gpu: {gpus: [{vendor: 'nvidia', name: 'NVIDIA GeForce RTX 3080 Ti', clock: 9501, top: 9501}], "
+                        "verdict: null, full: true, after: {s: 1260, drops: 0}}}) || PB.debug.engineOpen({}, true)"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
     "engine-one-popover": ("machine", BIG, None, "PB.debug.onePopover()"),
     "engine-iface-away": ("machine", BIG, None, "PB.debug.ifaceAway()"),

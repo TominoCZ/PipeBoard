@@ -22,7 +22,7 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
-from pipeboard import graph, headroom
+from pipeboard import gpu, graph, headroom
 
 BLOCKS = (64, 128, 256, 512, 1024, 2048)
 # An interface with implicit feedback (its playback follows its capture's packets, the UR44C)
@@ -396,7 +396,8 @@ def running() -> dict:
     try:
         prios = [int(stat(t / "stat")[37]) for t in Path(f"/proc/{pid}/task").iterdir()
                  if (t / "comm").read_text().startswith("data-loop")]
-        return {"prio_now": max(prios, default=0) or None, "nice_now": int(stat(Path(f"/proc/{pid}/stat"))[16])}
+        nice = int(stat(Path(f"/proc/{pid}/stat"))[16])
+        return {"prio_now": max(prios, default=0) or None, "nice_now": nice}
     except (OSError, IndexError, ValueError):
         return {}
 
@@ -558,7 +559,7 @@ def helper_script() -> str:
       if [ -n "$was" ]; then printf '%s\\n' "$was" > {snippet}; else rm -f {snippet}; fi
       echo failed
     fi;;
-  *) echo bad;;
+{gpu.helper_lines()}  *) echo bad;;
   esac
 done
 """
@@ -582,6 +583,11 @@ class RootHelper:
         """These states off, the rest on; a complaint, or None."""
         assert all(STATE_NAME.match(n) for n in off)
         return await self._ask("idle " + " ".join(off))
+
+    async def gpu(self, on: bool) -> str | None:
+        """Every GPU at its stock top clocks, now and at every start (gpu.py), or back; a
+        complaint, or None."""
+        return await self._ask("gpu on" if on else "gpu off")
 
     async def kernel(self, opts: list[str]) -> str | None:
         """PipeBoard's GRUB snippet with these options (none: no snippet); a complaint, or None."""

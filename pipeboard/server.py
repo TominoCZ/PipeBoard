@@ -26,6 +26,7 @@ from pipeboard import (
     engine,
     eq,
     gain,
+    gpu,
     graph,
     headroom,
     moment,
@@ -102,8 +103,8 @@ class Board:
         self.scope_tries, self.scope_seen, self.scope_serials = 0, (0, 0.0), {}
         # One restart at a time: overlapping ones each started a capture and forgot all but the
         # last (20 quick wire changes left 12 captures running).
-        self.scope_lock = asyncio.Lock()
-        self.engine_device: str | None = None  # the interface whose panel is open (op_engine_device)
+        # (engine_device: the interface whose panel is open, op_engine_device)
+        self.scope_lock, self.engine_device = asyncio.Lock(), None
         self.scope_started = 0.0  # (values captured, when that last changed): spots a stall
         self.clipped: dict[tuple, float] = {}  # source socket → when it last clipped
         self.ops = {"connect": self.op_connect, "disconnect": self.op_disconnect,
@@ -127,7 +128,7 @@ class Board:
                     "engine-device": self.op_engine_device,
                     "live-instant": self.op_live_instant, "drops": self.op_drops,
                     "headroom": self.op_headroom, "kernel": self.op_kernel,
-                    "app-rt": self.op_app_rt,
+                    "app-rt": self.op_app_rt, "gpu-full": self.op_gpu_full,
                     "cstates": self.op_cstates, "diag-on": self.op_diag_on,
                     "diag-set": self.op_diag_set, "diag-reset": self.op_diag_reset}
         # The audio engine as it runs (engine.read), and the task that goes back when a trial's
@@ -146,14 +147,18 @@ class Board:
         # was doing each second, told with every dropout logged (moment.py). head_pages: the
         # pages showing Buffer headroom, and its last minute, sampled all along (headroom.py);
         # head_seen: the sampler's memory across calls, the interface's restarts among it.
+        # gpus, gpu_ev, gpu_total: the GPUs' power level, a sample a second beside the dropouts,
+        # and the dropout total last seen (gpu.py: is the GPU's power saving the cause?);
+        # gpu_after: with the GPU at full speed, its seconds and dropouts since ({"s", "drops"}).
         (self.engine, self.trial_task, self.trial_drops, self.drop_pages, self.drops_task,
          self.dropped, self.settling, self.root, self.starting, self.listen, self.taps,
          self.diag_ports, self.tallies, self.clipping, self.counted, self.shown_counts,
          self.diag_keys, self.err_seen, self.moment, self.head_pages, self.head_hist,
-         self.head_seen) = (
+         self.head_seen, self.gpus, self.gpu_ev, self.gpu_total, self.gpu_after) = (
             {}, None, (None, None), set(), None, {}, 0.0, engine.RootHelper(), None, None, None,
             {}, {}, set(), False, 0.0, {}, {}, moment.Moment(), set(),
-            {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}, {})
+            {side: deque(maxlen=HEAD_KEEP) for side in ("out", "in")}, {}, gpu.Watch(),
+            gpu.Evidence(), None, None)
 
     # ---- state ------------------------------------------------------------------------------
     def first_profile(self) -> None:
@@ -218,6 +223,9 @@ class Board:
             e["rates"] = None
         if was and e.get("device") != was:  # another interface: its buffers, not the last one's
             self.forget_headroom()
+        e["gpu"] = {"gpus": self.gpus.now() if live else [], "verdict": self.gpu_ev.verdict(),
+                    "full": gpu.full(), "after": self.gpu_after,
+                    "tries": self.engine.get("gpu", {}).get("tries", 0)}
         on = self.settings.get("app_rt", True)  # (apps' audio threads in real time: apprt)
         e["app_rt"] = {"on": on, "apps": apprt.sync(dump, on) if live else []}
 
@@ -876,6 +884,21 @@ class Board:
                 changed = True
         return changed
 
+    def sample_gpu(self, errors: dict[str, int], settling: bool) -> None:
+        """This second's new dropouts of the clocking card beside whether a GPU saves power
+        (gpu.Evidence), with the window open or not: open, its drawing keeps the GPU up, so the
+        two states get compared as the user uses the machine (owner: no Try with a countdown,
+        watching it would hide what it tests). An engine change's own burst is not a sample."""
+        total = sum(errors.values())
+        was, self.gpu_total = self.gpu_total, total
+        gpus = self.gpus.now()
+        if settling or was is None or total < was or not gpus or not self.engine.get("interface"):
+            return  # (another interface shown, or made again: its count starts over)
+        self.gpu_ev.add(total - was, any(gpu.low(g) for g in gpus))
+        if gpu.full():  # (what the fix did: the dropouts since, window open or not)
+            after = self.gpu_after or {"s": 0, "drops": 0}
+            self.gpu_after = {"s": after["s"] + 1, "drops": after["drops"] + total - was}
+
     def count_second(self, errors: dict[str, int], settling: bool) -> bool:
         """This second's errors: the Counters' tallies (saved when they changed) and the log line.
         True if a Counter's totals changed."""
@@ -1401,6 +1424,29 @@ class Board:
         asyncio.create_task(change())
         return None
 
+    async def op_gpu_full(self, page, op) -> str | None:
+        """Every GPU at its stock top clocks, now and at every start, or back to its driver's
+        choice (gpu.py): as root, in the background like the idle states. Its dropouts are
+        counted from now (gpu_after)."""
+        if self.source.mode != "live":
+            return "The GPU can only be set on the real system."
+        if not self.gpus.now():
+            return "No GPU PipeBoard knows how to set was found."
+        on = bool(op.get("on"))
+
+        async def change() -> None:
+            error = await self.root.gpu(on)
+            self.gpu_after = {"s": 0, "drops": 0} if on and not error else None
+            tries = self.engine.get("gpu", {}).get("tries", 0) + 1
+            self.engine["gpu"] = {**self.engine.get("gpu", {}), "full": gpu.full(), "tries": tries}
+            await self.broadcast(self.state())
+            if error:
+                await toast(page, error)
+        if not self.root.running:
+            await toast(page, "Asking for your password…", "info")
+        asyncio.create_task(change())
+        return None
+
     async def op_kernel(self, page, op) -> str | None:
         """Which low-latency kernel options the next boot gets (Audio engine › Advanced): as root
         through pkexec, in the background like op_cstates."""
@@ -1477,6 +1523,7 @@ class Board:
                     c["key"]: n for c in heard(self.model)
                     if (n := last_minute(seen, c, errors, now))}
                 counted = self.count_second(errors, now < self.settling)
+                self.sample_gpu(errors, now < self.settling)
                 if recent != self.dropped or counted:
                     self.dropped = recent
                     await self.broadcast(self.state())
@@ -1668,7 +1715,8 @@ class Board:
         if not self.engine.get("interface"):
             return "No audio interface clocks the graph: there is nothing to set."
         e = self.engine
-        if op.get("device") and op["device"] != e.get("device"):  # (the page asked before it saw the switch)
+        # (the page asked before it saw the switch)
+        if op.get("device") and op["device"] != e.get("device"):
             return "That interface was not read yet: try again in a moment."
         try:
             values = engine.check(op, e.get("blocks") or engine.BLOCKS, e.get("rates"))
@@ -1686,11 +1734,17 @@ class Board:
         others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]
         for v in (values, was):
             v.update(device=e.get("device"), irq_elsewhere=any(not r["tsched"] for r in others))
-        self._set(engine_trial={
-            "values": values, "was": was,
-            "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
+        # Only the priority or nice: nothing that can break the sound, so no minute on trial (owner:
+        # "Set", not "Try it"): written and applied at once. Anything else is tried. (Decided
+        # here too, not only by the page: a request can never skip the trial for the rest.)
+        safe = all(values.get(k) == was.get(k) for k in ("block", "margin", "tsched", "rate"))
+        if not safe:
+            self._set(engine_trial={
+                "values": values, "was": was,
+                "before": engine.current() if live else {}, "until": time.time() + TRIAL_S})
         if not live:  # the fixture: the bar and its countdown, nothing written or restarted
-            self.watch_trial()
+            if not safe:
+                self.watch_trial()
             return None
         running = {n: c["rate"] for c in engine.interfaces(await self.source.snapshot())
                    for n in c["nodes"]}
@@ -1698,6 +1752,8 @@ class Board:
             r["at"] = next((running[n] for n in r["nodes"] if running.get(n)), 0)
         engine.write(engine.texts(values, e["interface"], others, e["rate"],
                                   e.get("dev_rate") or 0))
+        if safe:
+            return await self.engine_apply(values, was)
         self.watch_trial()
         return await self.engine_apply(values, self.settings["engine_trial"]["was"])
 
@@ -1706,7 +1762,8 @@ class Board:
         settings, buffer headroom and dropouts are the ones read. Not saved: a panel open when
         PipeBoard quit is not open at the next start."""
         device = op.get("device")
-        if device is not None and device not in {c["key"] for c in self.engine.get("interfaces") or []}:
+        there = {c["key"] for c in self.engine.get("interfaces") or []}
+        if device is not None and device not in there:
             return "That interface is not there (any more)."
         self.engine_device = device
         return None  # (the engine is read again after every action)
@@ -1881,6 +1938,7 @@ class Board:
         await self.plugins.stop_all()
         await self.eqs.stop_all()
         await self.root.stop()  # (the root helper ends with PipeBoard)
+        await self.gpus.stop()
         if self.listen:  # (its capture ends with PipeBoard too)
             self.listen.cancel()
         if self.taps:
@@ -2124,6 +2182,7 @@ def lifecycle(application: web.Application, board: Board) -> None:
         _app["headroom"] = asyncio.create_task(board.watch_headroom())
         if board.source.mode == "live":
             _app["journal"] = asyncio.create_task(board.moment.follow())
+            board.gpus.start()
 
     async def stop(_app: web.Application) -> None:
         board.closing = True
