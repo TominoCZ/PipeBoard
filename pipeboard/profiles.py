@@ -158,13 +158,15 @@ def changes(saved: dict, now: dict) -> list[str]:
     """What changed between a saved profile and the board now, one line each, for the user."""
     key = lambda w: (tuple(w["from"]), tuple(w["to"]), tuple(map(tuple, w["pairs"])))  # noqa: E731
     before, after = {key(w): w for w in saved.get("wires", [])}, {key(w): w for w in now["wires"]}
+    # Only what the user did here (owner: "when something changes in the graph because of
+    # something other than PipeBoard, do we still get a revert/save popup?"): a wire they made
+    # (`made`) or unplugged (`cut`). One another program made or removed (Easy Effects rewiring
+    # itself, WirePlumber moving an app or a virtual device, qpwgraph) is not theirs to save.
+    made, cut = set(now.get("made", [])), set(now.get("cut", []))
     lines = [f"+ {describe(now, after[k])}" for k in after
-             if k not in before and not routed(now, after[k])]
-    # An app closing (or WirePlumber moving it) takes the system's wire with it: no change either,
-    # unless the user unplugged it.
-    cut = set(now.get("cut", []))
-    lines += [f"− {describe(saved, before[k])}" for k in before if k not in after
-              and (not routed(saved, before[k]) or _wid(before[k]) in cut)]
+             if k not in before and _wid(after[k]) in made]
+    lines += [f"− {describe(saved, before[k])}" for k in before
+              if k not in after and _wid(before[k]) in cut]
     lines = list(dict.fromkeys(lines))
     moved = 0
     for k in set(saved.get("cards", {})) | set(now["cards"]):
@@ -184,8 +186,11 @@ def changes(saved: dict, now: dict) -> list[str]:
               if k not in before]
     lines += [f"Deleted {WHAT.get(before[k]['type'], 'the')} {before[k]['name']}" for k in before
               if k not in after]
+    # (a plugin's controls count once the profile has them: the first time it loads, it reports
+    # them itself, and that read as the user's edit, owner's "Changed the settings of Calf Vinyl")
     lines += [f"Changed the settings of {after[k]['name']}" for k in after
-              if k in before and _settings(before[k]) != _settings(after[k])]
+              if k in before and _settings(before[k]) != _settings(
+                  after[k] if before[k].get("params") else {**after[k], "params": []})]
     return lines
 
 

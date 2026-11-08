@@ -151,11 +151,12 @@ def check_profiles():
     later = graph.build([o for o in dump if o["id"] not in music_player])
     todo = profiles.plan(saved, later)
     assert len(todo["make"]) == 2 and not todo["remove"], todo
-    # The app's system wire going (the app closed, or WirePlumber moved it): not a change (user);
-    # a wire the user made to it going: one.
+    # A wire going by itself (the app closed, WirePlumber or another program moved it): not a
+    # change, even one the user made (owner: only what they did here asks to be saved); one the
+    # user unplugged: one.
     assert profiles.changes(saved, profiles.snapshot(later, saved)) == []
     mine = {**saved, "made": ["music_player:out>desktop_mix:in"]}
-    assert profiles.changes(mine, profiles.snapshot(later, mine)) == ["− Music Player → Desktop Mix"]
+    assert profiles.changes(mine, profiles.snapshot(later, mine)) == [], "gone by itself"
     unplugged = profiles.snapshot(later, {**saved, "cut": ["music_player:out>desktop_mix:in"]})
     assert profiles.changes(saved, unplugged) == ["− Music Player → Desktop Mix"], "the user unplugged it"
     assert profiles.snapshot(model, unplugged)["cut"] == [], "back: no longer cut"
@@ -165,6 +166,19 @@ def check_profiles():
     assert profiles.changes(bare, now) == [], profiles.changes(bare, now)
     now["made"] = ["music_player:out>desktop_mix:in"]
     assert profiles.changes(bare, now) == ["+ Music Player → Desktop Mix"], profiles.changes(bare, now)
+    # Another program wiring two devices (not an app; Easy Effects, qpwgraph): not the user's.
+    other = [w for w in now["wires"] if w["from"][0] == "easyeffects:out"][:1]
+    assert other, "the fixture has a device-to-device wire"
+    assert profiles.changes({**now, "wires": [w for w in now["wires"] if w not in other], "made": []},
+                            {**now, "made": []}) == [], "made by another program"
+    # A plugin's controls reported the first time it loads: not an edit; changed later: one.
+    plug = {"type": "plugin", "name": "Calf Vinyl"}
+    first = {**plug, "params": [{"i": 0, "value": 0.5}]}
+    assert profiles.changes({"wires": [], "cards": {}, "devices": {"p": plug}},
+                            {"wires": [], "cards": {}, "devices": {"p": first}}) == []
+    assert profiles.changes({"wires": [], "cards": {}, "devices": {"p": first}},
+                            {"wires": [], "cards": {}, "devices": {"p": {**plug, "params": [{"i": 0, "value": 0.9}]}}}) \
+        == ["Changed the settings of Calf Vinyl"]
     for bad in ("", "../etc", "a/b", ".hidden", "x" * 41):
         assert not profiles.valid_name(bad), bad
     assert profiles.valid_name("Studio (night)")
