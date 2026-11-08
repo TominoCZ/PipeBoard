@@ -483,8 +483,10 @@ button { font: inherit; color: inherit; }
 .eq-title { font-weight: 600; }
 .eq-count { color: var(--faint); font-size: 11px; }
 .eq-space { flex: 1; }
-.eq-close { width: 26px; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--muted);
-  cursor: pointer; font: 13px var(--font); }
+/* (32 px, the glyph 16: at 26 and 13 it was a small target, owner) */
+.eq-close { width: 32px; height: 32px; margin-right: -4px; border: 0; border-radius: 8px; background: none; color: var(--muted);
+  cursor: pointer; font: 16px var(--font); }
+.eq-head .icon { width: 15px; height: 15px; flex: none; color: var(--c); margin-left: -1px; }
 .eq-close:hover { background: #353535; color: var(--text); }
 .eq-plot { position: relative; height: clamp(140px, 30vh, 280px); margin: 0 46px 24px 14px; border-radius: 8px; background: #1a1a1a;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05); }
@@ -655,6 +657,8 @@ button { font: inherit; color: inherit; }
 .bar.ghost i { opacity: 0.32; }
 .legend { display: flex; gap: 14px; margin-top: 8px; font-size: 10.5px; color: var(--faint); }
 .legend span::before { content: ""; display: inline-block; width: 9px; height: 7px; border-radius: 2px; margin-right: 5px; background: var(--hardware); }
+.legend span.more { margin-left: auto; }
+.legend span.more::before { display: none; }
 .legend span.m::before { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--hardware) 55%, transparent) 0 2px, transparent 2px 4px);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hardware) 45%, transparent); }
 .eng-row { display: grid; grid-template-columns: 100px auto 1fr; align-items: center; gap: 8px; padding: 10px 16px 0; }
@@ -666,11 +670,12 @@ button { font: inherit; color: inherit; }
    click opens that one's panel. A name too long ends in …, the whole one in its tooltip. */
 .ifaces { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 2px; background: #1f1f1f;
   border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; }
-.ifaces button { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 5px 8px; border: 0; border-radius: 6px;
-  background: none; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
+/* Each one: its name on a line of its own (beside its settings it was cut), its settings under it. */
+.ifaces button { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; row-gap: 1px; min-width: 0; padding: 5px 8px;
+  border: 0; border-radius: 6px; background: none; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
 .ifaces button:hover, .ifaces button:focus-visible { background: #333; outline: none; }
-.ifaces .name { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ifaces .what { flex: 1 0 auto; color: var(--faint); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+.ifaces .name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ifaces .what { grid-column: 1 / -1; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .ifaces .chev { color: var(--faint); }
 .eng-row:has(.ifaces) { grid-template-columns: 100px 1fr; }
 /* An interface's own panel: docked at the bottom like an effect's (.eq-panel), the Audio engine's
@@ -729,13 +734,21 @@ button { font: inherit; color: inherit; }
 .hr-note .red { color: var(--red); opacity: 0.85; white-space: nowrap; }
 .eng hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.07); margin: 13px 16px 0; }
 /* Advanced: a plain button, not faint text (owner: "really hard to see"). */
-.eng .adv-head { display: flex; align-items: center; gap: 8px; width: calc(100% - 32px); margin: 12px 16px 0; padding: 7px 10px;
+/* Its edge 10 px out from the labels' column, so "Advanced" itself stands in that column (owner). */
+.eng .adv-head { display: flex; align-items: center; gap: 8px; width: calc(100% - 12px); margin: 16px 6px 0; padding: 7px 10px 7px 9px;
   border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; background: #2d2d2d; color: var(--text); font-size: 12.5px;
   cursor: pointer; text-align: left; }
 .eng .adv-head:hover, .eng .adv-head:focus-visible { background: #363636; outline: none; border-color: rgba(255, 255, 255, 0.14); }
 .eng .adv-head[aria-expanded="true"] { background: #303030; }
-.eng .adv-head .chev { color: var(--muted); font-size: 11px; width: 12px; }
-.eng .adv-head small { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* A drawn triangle, centred by the flex row: the ▸ glyph sat a pixel under the label's middle
+   (the font's own placement), and the row read as crooked (owner). Turned down when open. */
+.eng .adv-head .chev { width: 0; height: 0; margin: 0 2px 0 4px; border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.12s; }
+.eng .adv-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.eng .adv-head .name { flex: 1 0 auto; }
+/* (more idle states on another CPU: it ends in … rather than push the triangle out) */
+.eng .adv-head small { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eng .adv-head small .warn-text { color: #e8a060; }  /* (PipeWire runs another priority than asked) */
 .stepper { display: inline-flex; align-items: center; background: #1f1f1f; border-radius: 7px; padding: 2px; gap: 2px; }
 .stepper span { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .stepper button { width: 24px; height: 22px; border: 0; border-radius: 5px; background: #333; color: var(--muted); padding: 0; cursor: pointer; }

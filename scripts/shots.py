@@ -303,6 +303,8 @@ SHOTS = {
     "engine-same": ("machine", BIG, None, "PB.debug.engineOpen()"),
     "engine-headroom": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom()"),
     "engine-headroom-close": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('close')"),
+    # The output running dry (below 0: frames short), the owner's at 1 ms blocks with the window hidden.
+    "engine-headroom-dry": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('dry')"),
     "engine-headroom-wait": ("machine", BIG, None, "PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('wait')"),
     "engine-apps": ("machine", BIG, None, "PB.debug.engineOpen({}, true) || PB.debug.fakeHeadroom('ok', {app_rt: {on: true, apps: [{name: 'Firefox', state: 'own'}, {name: 'PipeWire ALSA [fluidsynth]', state: 'raised'}, {name: 'Spotify', state: 'raised'}]}})"),
     "engine-usb": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', {blocks: [192, 384, 768, 1536, 3072], usb_step: 192, block: 256, margin: 512, margin_blocks: 2})"),
@@ -319,8 +321,8 @@ SHOTS = {
                            "|| PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
     # Four interfaces, this machine's real names (long ones: does the list fit?).
     "engine-many": ("machine", BIG, None, "PB.debug.engineOpen() || PB.debug.fakeHeadroom('ok', {interfaces: ["
-                    "{key: 'ur', title: 'Steinberg UR44C', rate: 192000, clocks: true, tsched: false, margin_blocks: 1}, "
-                    "{key: 'hda', title: 'Family 17h/19h HD Audio Controller', rate: 48000, clocks: false, tsched: true, margin_blocks: 2, fixed_rate: 48000}, "
+                    "{key: 'ur', title: 'Steinberg UR44C', rate: 192000, clocks: true, tsched: false, margin_ms: 1.0, fixed_rate: 192000}, "
+                    "{key: 'hda', title: 'Family 17h/19h HD Audio Controller', rate: 48000, clocks: false, tsched: true, margin_ms: 10.7}, "
                     "{key: 'cam', title: 'HD Pro Webcam C920', rate: null, clocks: false}, "
                     "{key: 'nv', title: 'GA102 High Definition Audio Controller', rate: null, clocks: false}], device: 'ur'}) "
                     "|| PB.debug.engineOpen({block: 512})"),
@@ -328,7 +330,15 @@ SHOTS = {
     "engine-rates-many": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 88200, 96000, 176400, 192000], "
                           "fixed_rate: 176400}) || PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
+    "engine-one-popover": ("machine", BIG, None, "PB.debug.onePopover()"),
+    "engine-iface-away": ("machine", BIG, None, "PB.debug.ifaceAway()"),
     "engine-margin": ("machine", BIG, None, "PB.debug.ifaceOpen(null, {blocks: 2})"),
+    # PipeWire running 88 and -11 while its file asks 95 and -19 (the owner's, 2026-11-08).
+    "engine-priority-pending": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {prio: 95, nice: -19, prio_now: 88, nice_now: -11}) || PB.debug.engineOpen({prio: 95, nice: -19}, true)"),
+    # Advanced closed, its summary at its longest: idle states off, a kernel option waiting, apps.
+    "engine-adv-summary": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {cstates: {states: [{name: 'C1', us: 1, off: false}, {name: 'C2', us: 18, off: true}, {name: 'C3', us: 350, off: true}], rules: []}, "
+                           "kernel: {grub: true, opts: [{name: 'preempt=full', now: false, ours: true, elsewhere: []}, {name: 'rcu_nocbs=all', now: false, ours: false, elsewhere: []}]}, prio_now: 88, prio: 95}) || PB.debug.engineOpen({prio: 95})"),
+    "engine-priority-pending-shut": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {prio: 95, nice: -19, prio_now: 88, nice_now: -11}) || PB.debug.engineOpen({prio: 95, nice: -19})"),
     "engine-priority": ("machine", BIG, None, "PB.debug.engineOpen({prio: 90}, true)"),
     "engine-small": ("machine", SMALL, None, "PB.debug.engineOpen({block: 512}, true)"),
     "engine-trial": ("machine", BIG, trying, ""),

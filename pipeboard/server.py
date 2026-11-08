@@ -212,6 +212,8 @@ class Board:
         live = self.source.mode == "live"
         e["blocks"], e["usb_step"] = (engine.blocks(e.get("card"), e.get("dev_rate") or e["rate"],
                                                     e["rate"]) if live else (None, None))
+        if live:  # what PipeWire runs at (prio, nice: what its file asks, from the next start)
+            e.update(engine.running())
         if not live:  # (a fixture's card numbers are this machine's real ones: not its rates)
             e["rates"] = None
         if was and e.get("device") != was:  # another interface: its buffers, not the last one's
@@ -1677,6 +1679,8 @@ class Board:
         # the margin asked for, in blocks (on the timer PipeWire reports a padded one); the rate
         # PipeBoard fixed the interface at (None: it follows the graph)
         was["margin"] = e.get("margin_blocks", 1) * (was["block"] or 1)
+        # what runs, not the file's: a Try sets the asked priority on the running PipeWire
+        was["prio"], was["nice"] = e.get("prio_now") or e["prio"], e.get("nice_now", e["nice"])
         was["rate"] = e.get("fixed_rate")
         # The other interfaces keep their own rules; one on interrupts reopens for a new block.
         others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]

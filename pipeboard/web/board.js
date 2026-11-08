@@ -351,14 +351,20 @@ const PB = (() => {
     markPath();
   }
 
-  function cardEl(c, wired, flags) {
+  // A card's type icon (its svg's inside), "" for none: on the card and on its docked panel.
+  function cardIcon(c) {
     const role = c.kind === "diag" ? S.ws.devices?.[c.key]?.type : c.role || (c.kind === "effect" ? "effect" : c.kind === "app" ? "app" : "");
-    const icon = ICON[role] || ICON[c.kind] || "";
+    return ICON[role] || ICON[c.kind] || "";
+  }
+  const iconSvg = (icon) => `<svg class="icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+
+  function cardEl(c, wired, flags) {
+    const icon = cardIcon(c);
     const title = h("span", { class: "title", text: titleOf(c) });
     // The type icon leads the title, in the card's colour (owner: it said what the old dot did, and
     // the dot cost the room); a card with no icon keeps the dot.
     const head = h("header", {}, icon ? null : h("span", { class: "pin" }), title);
-    if (icon) head.insertAdjacentHTML("afterbegin", `<svg class="icon" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`);
+    if (icon) head.insertAdjacentHTML("afterbegin", iconSvg(icon));
     head.dataset.tip = cardTip(c);
     const col = (side, socks) => h("div", { class: `col ${side}` },
       ...socks.map((sk) => sockEl(c, sk, side, wired.has(`${c.key}|${sk.id}`))));
@@ -550,6 +556,10 @@ const PB = (() => {
   // ponytail: a panel moved and then the window shrunk can sit partly outside it until moved.
   function movable(panel, key) {
     const head = panel?.querySelector(".eq-head"), title = head?.querySelector(".eq-title");
+    // Its card's icon where the dot was, as on the card itself (owner); every docked panel opens
+    // through here (EQ, live view, diagnostics, an interface's).
+    const c = byKey()[key], icon = c && cardIcon(c), pin = head?.querySelector(".pin");
+    if (icon && pin) pin.outerHTML = iconSvg(icon);
     if (title) title.dataset.tip = "Show it on the board";
     head?.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || e.target.closest("button, input")) return;
@@ -1647,7 +1657,7 @@ const PB = (() => {
     board.classList.remove("panning");
     // A click on empty board (pressed, let go, the view not moved) closes an open effect panel
     // (owner). Panning keeps it open; a card or a wire never gets here.
-    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); DIAG.close(); closePath(); }  // a click on the board (owner)
+    if (d.kind === "pan" && Math.hypot(S.view.x - d.vx, S.view.y - d.vy) < 3) { EQ.close(); DYN.close(); DIAG.close(); closePath(); closeEngine(); }  // a click on the board (owner)
     if (d.kind === "card") {
       S.els[d.key]?.classList.remove("dragging");
       $("landing").hidden = true;
@@ -1765,8 +1775,12 @@ const PB = (() => {
   const menus = [];
   let subTimer = null;
 
+  // One popover at a time (owner): a menu (the top bar's dropdowns or a right-click's), the Audio
+  // engine panel and the problems list each close the others as they open; the last one stays.
   function openMenu(x, y, items) {
     closeMenu();
+    if (!S.iface) closeEngine();  // (an interface's panel is docked, not a popover)
+    toggleProblems(false);
     hideTip();
     S.menuAt = toWorld(x, y);  // where something added from this menu will appear
     showLevel(items, { x, y }, null).focus({ preventScroll: true });
@@ -2325,6 +2339,7 @@ const PB = (() => {
   function toggleProblems(open) {
     const panel = $("problems"), btn = $("problems-btn");
     panel.hidden = !(open ?? panel.hidden);
+    if (!panel.hidden) { closeMenu(); if (!S.iface) closeEngine(); }  // (one popover at a time)
     btn.setAttribute("aria-expanded", String(!panel.hidden));
   }
 
@@ -2340,6 +2355,7 @@ const PB = (() => {
     if (!e?.interface?.length) { toast("No audio interface clocks the graph: there is nothing to set.", "info"); return; }
     if (e.trial) { toast("A setting is being tried: keep or revert it first.", "info"); return; }
     if (S.iface && e.device !== S.iface) return;
+    if (!$("engine")) { closeMenu(); toggleProblems(false); }  // (one popover at a time; not on a redraw)
     S.pick = { block: e.block, blocks: e.margin_blocks || 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, rate: cardRate(e), device: e.device, advanced: S.pick?.advanced || false };
     drawEngine();
   }
@@ -2354,7 +2370,7 @@ const PB = (() => {
   // Before, only on opening: started after a change of rate, the bars and the round trip kept
   // the figures of the moment it opened (a friend).
   const engineShown = (e) => [e.device, e.block, e.margin, e.rate, e.dev_rate, e.margin_blocks, !!e.tsched, e.fixed_rate,
-    e.rates, e.blocks, e.prio, e.nice, (e.interfaces || []).map((x) => [x.key, x.rate])];
+    e.rates, e.blocks, e.prio, e.nice, e.prio_now, e.nice_now, (e.interfaces || []).map((x) => [x.key, x.rate])];
   // An interface's own settings (margin, scheduling, rate: one WirePlumber rule each) are in its
   // own panel, docked at the bottom like an effect's (owner): its card's gear, or the Audio
   // engine's list of them. The server reads that card while it is open (op engine-device).
@@ -2369,13 +2385,14 @@ const PB = (() => {
     openEngine();  // (at once when the server reads it already; else when its state comes)
     render();
   }
-  const ifaceLine = (x) => (x.rate ? [kHz(x.rate), x.fixed_rate ? "fixed" : null, `${x.margin_blocks}-block margin`, x.tsched ? "timer" : "interrupts"]
+  const ifaceLine = (x) => (x.rate ? [kHz(x.rate), x.fixed_rate ? "fixed" : null, `${x.margin_ms} ms margin`, x.tsched ? "timer" : "interrupts"]
     : ["closed now"]).filter(Boolean).join(" · ");
   // The Audio engine's list of interfaces: each one's name and settings; a click opens its panel.
   function ifaceList(e) {
     return h("div", { class: "ifaces", role: "list", "aria-label": "Interfaces" }, ...e.interfaces.map((x) => {
       const b = h("button", { type: "button", role: "listitem", "data-k": `iface-${x.key}`, title: `${x.title}: its margin, scheduling and rate` },
-        h("span", { class: "name", text: x.title || x.key }), h("span", { class: "what", text: ifaceLine(x) }), h("span", { class: "chev", text: "›" }));
+        // (the name its own line: beside its settings it was cut, "Steinberg…")
+        h("span", { class: "name", text: x.title || x.key }), h("span", { class: "chev", text: "›" }), h("span", { class: "what", text: ifaceLine(x) }));
       b.addEventListener("click", () => openIface(x.key));
       return b;
     }));
@@ -2409,11 +2426,10 @@ const PB = (() => {
       h("b", { text: "Real time" }));
     b.addEventListener("click", () => send({ op: "app-rt", on: !a.on }));
     const raised = a.apps.filter((x) => x.state === "raised").map((x) => x.name);
-    const val = !a.on ? "off" : raised.length ? `${raised.length} raised` : "none needed";
-    return [row("Apps' audio", b, val),
+    return [row("Apps' audio", b, ""),  // (no value: the button and the hint say it, owner)
             h("p", { class: "hint", text: a.on
-              ? `${raised.length ? `Raised: ${raised.join(", ")}. ` : ""}Each app's audio thread only, a few µs a cycle: games keep their CPU.`
-              : "An app whose audio is not real time can stall every sound (Spotify's Snap did)." })];
+              ? `Lets each app's sound go first, so a busy app can't stall all sound. Costs nothing you'd notice.${raised.length ? ` Helping now: ${raised.join(", ")}.` : ""}`
+              : "Off: an app whose sound doesn't go first can stall all sound (Spotify's did)." })];
   }
   function deepSleep(e, row) {
     const states = e.cstates?.states || [];
@@ -2432,8 +2448,8 @@ const PB = (() => {
       return b;
     }));
     const kept = (e.cstates.rules || []).map((r) => r.split("/").pop()).join(", ");
-    return [row("CPU idle states", chips, off.length ? `${off.join(", ")} off` : "all on"),
-            h("p", { class: "hint", text: `Slow-waking states can cause dropouts; off costs some power. Needs your password.${kept ? ` Boot rule: ${kept}.` : ""}` })];
+    return [row("CPU idle states", chips, ""),  // (the chips say which are off)
+            h("p", { class: "hint", text: `How deeply the processor may sleep. The deeper ones save power but wake too slowly for sound: turn them off if you hear crackles. Needs your password.${kept ? ` Boot rule: ${kept}.` : ""}` })];
   }
   // Low-latency kernel options, one toggle each: what linux-lowlatency adds to Ubuntu's kernel.
   // Lit = on at the next boot (PipeBoard's GRUB snippet); set in another GRUB file = not ours to
@@ -2459,9 +2475,8 @@ const PB = (() => {
       return b;
     }));
     const restart = k.opts.some((x) => next(x) !== x.now);
-    const now = k.opts.filter((x) => x.now).length;
-    return [row("Kernel", chips, restart ? "on restart" : now ? `${now} of 2 on` : "off"),
-            h("p", { class: "hint", text: "What the low-latency kernel adds. Small effect: audio already runs real time. Needs your password; applies after a restart." })];
+    return [row("Kernel", chips, restart ? "on restart" : ""),  // (only what the chips can't show)
+            h("p", { class: "hint", text: "Low-latency options for the system's core. Rarely needed, small effect. Needs your password and a restart." })];
   }
   // 1 · 2 · 3 blocks, the one running marked like the block's; each with its time under it (owner:
   // a lone "5.3 ms" beside the buttons read as the buffer headroom's, then as awkward)
@@ -2519,9 +2534,11 @@ const PB = (() => {
     const line = h("div", { class: "hr-line" }, ...sides.map((x) => x.low == null
       ? h("span", idle(x) ? { class: "wait", "data-tip": `${x.name}: not running. Nothing ${x.k === "out" ? "plays through" : "records from"} it now, so its buffer is closed.` } : { class: "wait" },
           idle(x) ? `${x.name} not running` : `${x.name} measuring…`)
-      : h("span", { "data-tip": `${x.name}: ${x.low.toFixed(2)} ms at its lowest, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}` },
-        h("i", { class: `hr-dot ${level(x.low)}` }), `${x.name} `, h("b", { text: x.low.toFixed(1) }), " ms")));
-    const X = (i, len) => ((i + n - len) / (n - 1)) * HEAD_W, Y = (v) => HEAD_H - (Math.min(v, top) / top) * HEAD_H;
+      : h("span", { "data-tip": x.low < 0
+          ? `${x.name}: ran out, ${(-x.low).toFixed(2)} ms short: a click, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}`
+          : `${x.name}: ${x.low.toFixed(2)} ms at its lowest, ${x.ago < 1 ? "just now" : `${Math.round(x.ago)} s ago`}` },
+        h("i", { class: `hr-dot ${level(x.low)}` }), `${x.name} `, ...(x.low < 0 ? [h("b", { text: "ran out" })] : [h("b", { text: x.low.toFixed(1) }), " ms"]))));
+    const X = (i, len) => ((i + n - len) / (n - 1)) * HEAD_W, Y = (v) => HEAD_H - (Math.max(0, Math.min(v, top)) / top) * HEAD_H;  // (under 0, ran dry: on the 0 line, not over the legend)
     const svg = s("svg", { width: HEAD_W, height: HEAD_H, viewBox: `0 0 ${HEAD_W} ${HEAD_H}`, class: "hr-plot", "aria-hidden": "true" });
     const fade = s("linearGradient", { id: "hr-fade", x1: 0, y1: 1, x2: 0, y2: 0 });
     fade.append(s("stop", { offset: 0, "stop-opacity": 0.4 }), s("stop", { offset: HEAD_RED_BLOCK / HEAD_WARN_BLOCK, "stop-opacity": 0.14 }),
@@ -2540,7 +2557,7 @@ const PB = (() => {
     if (worst) {
       const cx = X(worst.at, worst.xs.length), cy = Y(worst.low);
       svg.append(s("circle", { class: "hr-low", cx, cy, r: 3 }));
-      const tag = h("span", { class: "hr-tag", text: `${worst.low.toFixed(1)} ms · ${worst.ago < 1 ? "now" : `${Math.round(worst.ago)} s ago`}` });
+      const tag = h("span", { class: "hr-tag", text: `${worst.low < 0 ? "ran out" : `${worst.low.toFixed(1)} ms`} · ${worst.ago < 1 ? "now" : `${Math.round(worst.ago)} s ago`}` });
       tag.style.left = `${Math.max(0, Math.min(HEAD_W - 92, cx - 46))}px`;
       tag.style.top = `${cy > 22 ? cy - 20 : cy + 6}px`;
       graph.append(tag);
@@ -2550,7 +2567,7 @@ const PB = (() => {
       h("div", { class: "hr-box" }, h("div", { class: "hr-top" }, h("span", { text: "Buffer headroom" }), h("small", { text: "lowest, last minute" })), line, graph,
         h("div", { class: "hr-foot" }, h("span", { text: "1 min ago" }),
           ...sides.map((x) => h("span", { class: `key ${x.k}`, text: x.name })), h("span", { text: "now" }))),
-      h("p", { class: "hr-note" }, "How close the buffers came to running out. ", h("span", { class: "red", text: "At 0 ms it clicks." })));
+      h("p", { class: "hr-note" }, "How close the card came to running out of sound. ", h("span", { class: "red", text: "At 0 ms you hear a click." })));
   }
   function drawEngine() {
     // Drawn again on every change: no opening animation then, and the focus back where it was
@@ -2586,13 +2603,25 @@ const PB = (() => {
     };
     const row = (label, control, val) => h("div", { class: "eng-row" }, h("label", { text: label }), control, h("span", { class: "val", text: val }));
     const msOf = (n) => `${(n / rate * 1000).toFixed(1)} ms`;
-    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) ||
+    // What PipeWire's threads run (the server reads /proc), and whether the file asks otherwise:
+    // its file's priority applied only at a Try until 2026-11-08 (inside context.properties
+    // PipeWire ignored it), and the panel showed the file's 95 while 88 ran (owner).
+    const prioNow = e.prio_now ?? e.prio, niceNow = e.nice_now ?? e.nice, pending = prioNow !== e.prio || niceNow !== e.nice;
+    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || (!S.iface && (p.prio !== prioNow || p.nice !== niceNow)) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) ||
       rateAsked(p, e) !== (e.fixed_rate || null);
     S.engineShown = JSON.stringify(engineShown(e));
     const now = roundTrip(e, rate), next = roundTrip(shown, rate);
+    // Closed, it says what is set across all it holds (owner: "priority · nice" was two of five):
+    // idle states off, kernel options waiting on a restart, the priority that runs, apps' audio.
+    const sleepOff = (e.cstates?.states || []).filter((x) => x.off).map((x) => x.name);
+    const kernelWaits = (e.kernel?.opts || []).some((x) => (x.ours || x.elsewhere.length > 0) !== x.now);
+    const prioPart = h("span", { class: pending ? "warn-text" : "", text: `priority ${prioNow}${pending ? ` (asked ${e.prio})` : ""}` });
+    const summary = [sleepOff.length ? `${sleepOff.join(", ")} off` : null, kernelWaits ? "kernel on restart" : null,
+      prioPart, (e.app_rt || { on: true }).on ? "apps real time" : "apps normal"].filter(Boolean).flatMap((x, i) => (i ? [" · ", x] : [x]));
+    // (its name in the labels' column: the triangle at the right end, owner)
     const adv = h("button", { type: "button", class: "adv-head", "aria-expanded": String(p.advanced), "data-k": "advanced" },
-      h("span", { class: "chev", text: p.advanced ? "▾" : "▸" }), "Advanced",
-      p.advanced ? null : h("small", { text: `priority ${p.prio} · nice ${p.nice}` }));
+      h("span", { class: "name", text: "Advanced" }), p.advanced ? null : h("small", {}, ...summary),
+      h("span", { class: "chev", "aria-hidden": "true" }));
     adv.addEventListener("click", () => { p.advanced = !p.advanced; drawEngine(); });
     const cancel = h("button", { type: "button", class: "btn quiet", text: "Cancel" });
     const go = h("button", { type: "button", class: "btn go", text: "Try it", disabled: !changed });
@@ -2607,7 +2636,9 @@ const PB = (() => {
         resized && Math.abs(next - now) > 0.05 ? h("span", { class: "arrow", text: "→" }) : null,
         h("span", { class: "new", text: next.toFixed(1) }, h("small", { text: "ms" }))),
       h("div", { class: "bars" }, resized ? bar(e, " ghost") : null, bar(shown, "")),
-      h("div", { class: "legend" }, h("span", { text: "block, in and out" }), h("span", { class: "m", text: "safety margin" })));
+      h("div", { class: "legend" }, h("span", { text: "block, in and out" }), h("span", { class: "m", text: "safety margin" }),
+        // (the buffers only: the card's own delay is not known here, owner asked that it be true)
+        h("span", { class: "more", "data-tip": "The card's converters and its USB transfers add their own delay, not counted here.", text: "+ the card's own delay" })));
     // Cards on interrupts: their ALSA period is the block, a new block reopens them.
     const irq = (e.interfaces || []).filter((x) => x.rate && !x.tsched).map((x) => x.title);
     const note = !reopensNow(p, e) ? "Applies at once. A minute to Keep."
@@ -2619,18 +2650,20 @@ const PB = (() => {
       trip,
       row("Block size", seg(offered, "block", "Block size"), msOf(p.block)),
       h("p", { class: "hint", text: e.usb_step
-        ? `Whole ${msOf(e.usb_step).replace(".0 ", " ")} USB transfers of ${e.title || "this interface"}. Smaller: less delay, more CPU.`
-        : "Smaller: less delay, more CPU. The same for every interface." }),
+        ? `How much sound is handled at once, in steps that fit ${e.title || "this card"}'s USB packets. Smaller: less delay, but more work and more risk of crackles.`
+        : "How much sound is handled at once. Smaller: less delay, but more work and more risk of crackles." }),
       e.usb_step && !(e.blocks || []).includes(e.block)
-        ? h("p", { class: "hint warn", text: `${e.block} (running) splits them: the buffer saws, PipeWire can click.` }) : null,
+        ? h("p", { class: "hint warn", text: `${e.block}, running now, doesn't fit those packets and can crackle.` }) : null,
       (e.interfaces || []).length ? row("Interfaces", ifaceList(e), "") : null,
-      (e.interfaces || []).length ? h("p", { class: "hint", text: "Each one's safety margin, scheduling and rate: open it here or with the gear on its card." }) : null,
-      h("hr"), adv,
+      (e.interfaces || []).length ? h("p", { class: "hint", text: "Each sound card's own settings: click one, or the gear on its card." }) : null,
+      adv,  // (no line above it: the box is its own edge)
       ...(p.advanced ? deepSleep(e, row) : []),
       ...(p.advanced ? kernelOpts(e, row) : []),
-      p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), "real time") : null,
-      p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), "") : null,
-      p.advanced ? h("p", { class: "hint", text: "Already real time; raising rarely helps and never cuts delay." }) : null,
+      p.advanced ? row("Audio priority", h("div", {}, stepper("prio", 1, 95), h("span", { class: "of", text: "of 95" })), pending ? `runs ${prioNow}` : "") : null,
+      p.advanced ? row("Control nice", h("div", {}, stepper("nice", -19, 0), h("span", { class: "of", text: "to −19" })), pending ? `runs ${niceNow}` : "") : null,
+      p.advanced ? h("p", { class: `hint${pending ? " warn" : ""}`, text: pending
+        ? `Running at ${prioNow} and ${niceNow} now, not the ${e.prio} and ${e.nice} set. Try it applies them now and after every restart.`
+        : "How far the sound system goes ahead of other programs. It already goes first; raising this rarely helps." }) : null,
       ...(p.advanced ? appsRealtime(e, row) : []),
       foot];
     // An interface's own: its margin, rate and scheduling, its buffers.
@@ -2638,13 +2671,13 @@ const PB = (() => {
     const own = () => [h("div", { class: "iface-cols" }, h("div", {},
       trip,
       row("Safety margin", marginSeg(p, e), ""),  // (each button says its time)
-      h("p", { class: "hint", text: "More: fewer dropouts, more delay." }),
+      h("p", { class: "hint", text: "Spare sound kept ready in case the computer is late. More: fewer crackles, more delay." }),
       // (no value beside it: the picked button says it, the head the rate it runs at; a UR44C's six
       // rates and Auto left no room, the value cut off at the panel's edge)
       e.rates?.length ? row("Sample rate", rateSeg(p, e), "") : null,
-      e.rates?.length ? h("p", { class: "hint", text: "The rates this interface lists. Another one: it opens at that, and its part of the graph follows." }) : null,
+      e.rates?.length ? h("p", { class: "hint", text: "Samples per second, from those this card supports. Changing it restarts the card." }) : null,
       row("Scheduling", scheduling(p, e), ""),  // (the picked button says it)
-      h("p", { class: "hint", text: "Timer: block changes apply without restarting the interface." })),
+      h("p", { class: "hint", text: "Interrupts: the card says when it needs sound. Timer: the computer keeps time itself, and block size changes don't restart the card." })),
       Object.keys(e.pcms || {}).length ? headroomBlock() : null),
       foot];
     const old = $("engine");
@@ -3147,6 +3180,22 @@ const PB = (() => {
       dispatchEvent(new MouseEvent("mouseup", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
       if ($("engine")) S.errors.push("a press on the board left the Audio engine panel open");
     },
+    // One popover at a time (owner): each top-bar dropdown opened after another leaves only itself.
+    onePopover: () => {
+      const open = () => [document.querySelector(".menu") && "menu", $("engine") && !S.iface && "engine", !$("problems").hidden && "problems"].filter(Boolean);
+      for (const id of ["clock", "profile", "problems-btn", "wires-btn", "clock", "add", "tidy-more", "problems-btn", "clock"]) {
+        $(id).click();
+        if (open().length !== 1) S.errors.push(`after ${id}: ${open().join(" + ") || "nothing"} open`);
+      }
+    },
+    // A click on empty board closes an interface's panel, as it does an effect's (owner).
+    ifaceAway: () => {
+      openIface(S.engine.interfaces[0].key);
+      if (!$("engine")) S.errors.push("the interface's panel did not open");
+      $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      dispatchEvent(new MouseEvent("mouseup", { clientX: 760, clientY: 820, bubbles: true, button: 0 }));
+      if ($("engine")) S.errors.push("a click on the board left the interface's panel open");
+    },
     // A plain click on empty board (no drag) closes the path panel (owner).
     clickBoard: (x, y) => {
       $("board").dispatchEvent(new MouseEvent("mousedown", { clientX: x, clientY: y, bubbles: true, button: 0 }));
@@ -3160,6 +3209,7 @@ const PB = (() => {
       // "saw": the owner's at block 128, one block of margin: the output creeping up for ~38 s and
       // dropping back (the interface's clock 6.5 ppm slow against USB's), the input spiking.
       const saw = (i) => +(0.2 + 0.25 * (((i + 26) % 76) / 75) + 0.01 * Math.sin(i * 2.3)).toFixed(2);
+      if (kind === "dry") { S.headroom = { every: 0.5, out: wob(0.6, 1.2, { 30: 1.1, 61: 1.4, 62: 1.2, 90: 1.0, 101: 1.3 }), in: wob(1.6, 0.4, { 50: 1.0 }) }; showHeadroom(); return; }
       if (kind === "saw") { S.headroom = { every: 0.5, out: Array.from({ length: 120 }, (_, i) => saw(i)), in: Array.from({ length: 120 }, (_, i) => +(0.8 + (i % 9 === 4 ? 0.35 : 0.03 * Math.sin(i))).toFixed(2)) }; showHeadroom(); return; }
       // "idle": nothing plays through the output (its buffer closed all minute); "input": a card
       // with an input only (a USB mic).

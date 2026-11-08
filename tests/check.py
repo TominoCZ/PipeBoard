@@ -200,6 +200,8 @@ def check_engine():
     v = engine.check({"block": 256, "margin": 256, "prio": 90, "nice": -15})
     text = engine.texts(v, now["interface"])
     assert "default.clock.max-quantum = 256" in text["pipewire"] and "rt.prio = 90 nice.level = -15" in text["pipewire"]
+    # (a section of its own: inside context.properties PipeWire ignored it, pw-config merge showed {})
+    assert "}\nmodule.rt.args = {" in text["pipewire"], "module.rt.args at the top level"
     assert "api.alsa.period-size = 256 api.alsa.headroom = 256" in text["wireplumber"]
     assert text["wireplumber"].count("node.name") == 2
     assert "api.alsa.disable-tsched = true" in text["wireplumber"], "interrupts unless asked"
@@ -2383,7 +2385,7 @@ async def check_engine_device(tmp):
     await server.startup(board)
     assert board.engine["device"] == UR_DEV
     ur = next(x for x in board.engine["interfaces"] if x["key"] == UR_DEV)
-    assert {"tsched", "margin_blocks", "fixed_rate"} <= set(ur), "each interface's own settings, for the list"
+    assert {"tsched", "margin_ms", "fixed_rate"} <= set(ur), "each interface's own settings, for the list"
     board.head_hist["out"].append(1.0)
     assert await board.op_engine_device(None, {"device": "unplugged"})
     assert await board.op_engine_device(None, {"device": PEDAL}) is None

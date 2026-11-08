@@ -127,10 +127,13 @@ def read(dump: list[dict], choice: str | None = None) -> dict:
     rule = rule_of(iface)
     return {"rate": clock["rate"], "block": clock["quantum"],
             "device": iface["key"] if iface else None,
-            # (each one's own margin, scheduling and fixed rate: the panel's list of them)
+            # (each one's own margin, scheduling and fixed rate: the panel's list of them; the
+            # margin its nodes' real headroom in ms, not its rule's blocks: a card without a rule
+            # was listed with the default "1-block margin")
             "interfaces": [{"key": c["key"], "title": c["title"], "rate": c["rate"],
                             "clocks": c["clocks"] > 0, "tsched": _timer(dump, c["ids"]),
-                            "margin_blocks": (rule_of(c) or {}).get("blocks", 1),
+                            "margin_ms": round(_margin(dump, c["props"], c["ids"]) * 1000
+                                               / (c["rate"] or clock["rate"]), 1),
                             "fixed_rate": (rule_of(c) or {}).get("rate")} for c in cards],
             "interface": iface["nodes"] if iface else [],
             "pcms": headroom.folders(found),  # (its buffers' status, for Buffer headroom)
@@ -330,8 +333,10 @@ def texts(v: dict, interface: list[str], others: list[dict] = (), base: int = 0,
     pw = (f"{HEAD}context.properties = {{\n"
           f"    default.clock.quantum     = {v['block']}\n"
           f"    default.clock.min-quantum = {v['block']}\n"
-          f"    default.clock.max-quantum = {v['block']}\n"
-          f"    module.rt.args = {{ rt.prio = {v['prio']} nice.level = {v['nice']} }}\n}}\n")
+          f"    default.clock.max-quantum = {v['block']}\n}}\n"
+          # its own section, not a context property: inside context.properties PipeWire ignored it
+          # (module-rt's manual, CONFIG OVERRIDE), and 95 ran only until the next restart (owner)
+          f"module.rt.args = {{ rt.prio = {v['prio']} nice.level = {v['nice']} }}\n")
     mine = {"blocks": v["margin"] // v["block"], "tsched": v.get("tsched"), "rate": v.get("rate")}
     rules = [_rule(interface, v["block"], mine, (v.get("rate") or at, base))] if interface else []
     rules += [_rule(r["nodes"], v["block"], r, (r.get("rate") or r.get("at") or 0, base))
@@ -368,6 +373,32 @@ async def _run(*cmd: str) -> str | None:
     if proc.returncode or said:
         return f"{cmd[0]}: {(said or [out.strip() or 'failed'])[0]}"
     return None
+
+
+_daemon_pid = [0]  # (PipeWire's own process, found once and checked each time)
+
+
+def running() -> dict:
+    """The priority PipeWire's audio threads (data-loop.*) and the nice its daemon really run at,
+    from /proc: the file's values apply only at its start, or through chrt at a Try. {} when it
+    is not found."""
+    def stat(path: Path) -> list[str]:  # (the fields after the command's closing parenthesis)
+        return path.read_text().rsplit(")", 1)[1].split()
+    def daemon(pid: int) -> bool:  # the daemon, not a filter-chain or effect (pipewire -c …)
+        with contextlib.suppress(OSError):
+            return (Path(f"/proc/{pid}/comm").read_text().strip() == "pipewire"
+                    and len(Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")) <= 2)
+        return False
+    if not daemon(_daemon_pid[0]):
+        _daemon_pid[0] = next((int(d.name) for d in Path("/proc").iterdir()
+                               if d.name.isdigit() and daemon(int(d.name))), 0)
+    pid = _daemon_pid[0]
+    try:
+        prios = [int(stat(t / "stat")[37]) for t in Path(f"/proc/{pid}/task").iterdir()
+                 if (t / "comm").read_text().startswith("data-loop")]
+        return {"prio_now": max(prios, default=0) or None, "nice_now": int(stat(Path(f"/proc/{pid}/stat"))[16])}
+    except (OSError, IndexError, ValueError):
+        return {}
 
 
 async def _daemon() -> tuple[str, list[str]]:

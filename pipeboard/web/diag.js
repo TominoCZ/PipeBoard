@@ -335,7 +335,8 @@ const DIAG = (() => {
           : i < rms ? `rgb(${r0},${g0},${b0})` : i < pk ? `rgba(${r0},${g0},${b0},0.45)` : "#24272c";
         g.beginPath(); g.roundRect(x, y, sw, bh, rad); g.fill();
       }
-      g.fillStyle = c ? pal.r : pal.l; g.fillText(c ? "R" : "L", pad, y + bh / 2 + 0.5 * u);
+      // (both the card's muted grey: owner, magenta / green labels read as level colours beside the bars)
+      g.fillStyle = "rgba(232,230,227,0.58)"; g.fillText(c ? "R" : "L", pad, y + bh / 2 + 0.5 * u);
     }
     v.stats = { mom: lufs(m.blocks, 4), short: lufs(m.blocks, 30), silent: silent(ring) };
   }
