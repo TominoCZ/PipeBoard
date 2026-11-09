@@ -500,6 +500,9 @@ SHOTS = {
     "dragging": ("machine", BIG, None, "PB.debug.drag('desktop_mix', 23, -37)"),
     "live": ("machine", BIG, None, "PB.debug.fakeLive()"),
     "live-frame": ("machine", BIG, None, _frame()),
+    # A portal's stubs carry its wave (owner: portal wires did not move with live wires on).
+    "live-portals": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.fakeLive(8)"),
+    "live-music": ("machine", BIG, None, "PB.debug.fakeMusic()"),
     "live-instant": ("machine", BIG, None, "PB.debug.liveInstant() || PB.debug.fakeLive()"),  # (off by default: this turns it on)
     "bar-wires": ("machine", BIG, None, "PB.debug.wiresMenu()"),
     "diag": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag()"),
@@ -527,6 +530,8 @@ SHOTS = {
     "diag-spectrum-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dspec01')"),
     "diag-off": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || setTimeout(() => "
                  "['pb:dster01', 'pb:dwave01', 'pb:dmeter01', 'pb:dspec01'].forEach(PB.debug.diagOff) || PB.audit(), 500)"),
+    # The GPU lost and given back (a driver reset): wires and scopes drawn again from the page's state.
+    "gl-restore": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.glRestore()"),
     "diag-menu": ("machine", BIG, diagnosed, "PB.debug.menu(560, 300, ['Add node', 'Diagnostic'])"),
     "bar-tidy": ("machine", BIG, None, "PB.debug.tidyMenu()"),
     "bar-toggle": ("machine", BIG, None, "PB.debug.barToggle()"),
@@ -615,7 +620,9 @@ def _chrome() -> str:
 
 
 def _run(chrome: str, size: tuple, page: Path, *flags: str) -> str:
-    cmd = [chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
+    # (WebGL through SwiftShader as the whole GPU, the page's canvases with it: with --disable-gpu
+    # each copy into a canvas was read back, and a scope's panel took 9 s, not 3)
+    cmd = [chrome, "--headless=new", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run",
            f"--user-data-dir={OUT / 'profile'}-{page.stem}", f"--window-size={size[0]},{size[1]}",
            "--virtual-time-budget=1500", "--force-device-scale-factor=1", *flags, page.as_uri()]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
@@ -624,8 +631,16 @@ def _run(chrome: str, size: tuple, page: Path, *flags: str) -> str:
 def shoot(chrome: str, name: str) -> tuple[str, list[str]]:
     size = SHOTS[name][1]
     page = _page(name)
-    _run(chrome, size, page, f"--screenshot={OUT / (name + '.png')}")
-    dom = _run(chrome, size, page, "--dump-dom")
+    # (once more if Chrome hangs: under a heavy load a page drawing on SwiftShader now and then
+    # never finished its virtual time; twice, it is a fault, not the end of the run)
+    for attempt in (1, 2):
+        try:
+            _run(chrome, size, page, f"--screenshot={OUT / (name + '.png')}")
+            dom = _run(chrome, size, page, "--dump-dom")
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 2:
+                return name, ["Chrome timed out drawing it, twice"]
     found = re.search(r'<pre id="audit"[^>]*>(.*?)</pre>', dom, re.S)
     faults = json.loads(unescape(found.group(1))) if found else ["the page wrote no audit"]
     return name, faults

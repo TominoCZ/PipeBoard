@@ -12,7 +12,8 @@
   <div id="grid"></div>
   <div id="world">
     <div id="frames" aria-hidden="true"></div>
-    <svg id="wires" aria-hidden="true"><defs id="grads"></defs><g id="wire-layer"></g><g id="portal-layer"></g></svg>
+    <canvas id="wire-canvas" aria-hidden="true"></canvas>
+    <svg id="wires" aria-hidden="true"><g id="wire-layer"></g><g id="portal-layer"></g></svg>
     <div id="frame-tops"></div>
     <div id="moves" aria-hidden="true"></div>
     <div id="cards"></div>
@@ -74,6 +75,7 @@
 <div id="drag-side" class="drag-side" aria-hidden="true" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <pre id="audit" hidden></pre>
+<script src="gl.js"></script>
 <script src="field.js"></script>
 <script src="eq.js"></script>
 <script src="dynamics.js"></script>

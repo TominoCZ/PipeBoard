@@ -137,7 +137,9 @@ Tidy shot fails if they are not.
 **Portals** (owner: cleaner wiring, a board that is not only ever wider). Board-only: the sound
 still goes straight from A to B, nothing new in PipeWire. A portal wire is drawn as a short S
 from its output into a badge and from a badge into its input; the whole wire shows while a badge,
-either card or the wire is hovered, or it is selected; its live wave only then. The badge (owner's
+either card or the wire is hovered, or it is selected; its live wave on the wire only then, and
+on its two stubs otherwise (owner, 2026-11-09: portal wires did not move with live wires on), the
+entry stub as the wire's last stretch, so the sound reaches it when it would reach the input. The badge (owner's
 pick of five drawn): a tunnel, a dark hole with rings fading in and a lit rim in the source's
 colour, the portal's letter (A, B… by output plug), and an arrowhead on its edge: pointing away on the
 right where the wire leaves, pointing in on the left where it arrives (owner). Badges sit on their
@@ -268,9 +270,9 @@ outline; nice to look at; not overwhelming; smooth.
   a circle; free ones are filled dark grey, wired ones in the kind's colour. The card's outline is
   its own layer (`::before`) under the sockets, so it never shows through a socket.
 - **Wires:** cubic béziers with horizontal tangents, 2.5 px, a gradient from the source card's
-  colour to the destination's, a dark shadow under it. Hovering a card or wire fades every other
-  wire. Selected: white, with a ✕ Disconnect chip at its middle. Failed: red dotted. In a problem:
-  breathing.
+  colour to the destination's, a dark shadow under it (live ones too, owner). Hovering a card or
+  wire fades every other wire. Selected: white, with a ✕ Disconnect chip at its middle. Failed:
+  red dotted. In a problem: breathing. Drawn on the GPU (§4a).
 - **Bar** (top left): name, connection status, graph rate · buffer · latency, + Add, Fit, Tidy.
   **Problem button** (top right): "All good" / "2 problems" / "1 note", coloured by the worst.
 - **Tooltips** (user: the plain ones looked monotone): the name (bright, semibold), a subtitle with
@@ -401,6 +403,43 @@ The board is a flat near-black (#121212) with a sparse dot grid and a faint grai
 rendered on their board).
 Device cards, virtual and physical, have a thicker outline (2.5 px) and a glow in their colour so
 they stand out from apps and effects (owner's pick of six options rendered on their board).
+
+
+## 4a. Drawing on the GPU (built 2026-11-09)
+
+The owner: the heavy drawing on WebGL, as smooth as possible ("a stable 240 FPS, my monitor's
+refresh rate"). `gl.js` holds **one WebGL2 context** for every picture that moves: the wires and
+their live waves, and the scopes (§8d). Each picture is a **surface**, a plain 2D canvas in its own
+place in the page, handed a copy of what was drawn for it (`GL.draw`: drawImage, a copy on the
+GPU), so the layering with cards, menus and panels is what it was and the browser's limit on
+contexts never comes into it. Measured on the owner's RTX 3080 Ti: nine surfaces at 60 fps cost
+15 ms/s this way; a bitmap handed to each (bitmaprenderer) cost 430, the context resized for each.
+WebGL2 only (owner): no second drawing path. A lost context (driver reset) comes back empty and
+everything is made again from the page's state (the `gl-restore` shot checks it).
+
+- **The wires** (`board.js` paintWires): one canvas the size of the board inside `#world`, the
+  view undone by its own transform, so it is sharp at any zoom and a pan or zoom only redraws. It
+  is painted with the view change itself (owner: zooming was choppy while it came a frame later),
+  once a frame. Each piece (a wire, or a portal's stub) is a row of a float texture: its curve,
+  its length table, colours, width, dashes, and its source's row of the ring texture. Pass 1 puts
+  each piece's points (every px on a wave, every 4 px on a still wire) into a float texture, moved
+  by the sound at that distance along, as the CPU's `wave()` did (Flowing: loudness, phase and
+  pitch between the two nearest slots; Instant: the newest; a dense wave's crests as high as the
+  old curves through the midpoints drew them; owner: "they don't reach the same amplitude").
+  Pass 2 draws each stretch between two points as a quad shaded by its distance, **drawn by the
+  nearest stretch only** (each pixel once per wire: a dimmed wave has no darker beads); a ribbon
+  offset along its normal spiked where a dense wave folds tighter than the line is wide. The
+  pixel's place comes from the pixel itself, not interpolated (two quads that met at a joint each
+  gave the pixel to the other: the owner saw dead pixels). Shadow then line; dashes round-ended;
+  a clipped stretch red with a glow like the CSS's 3 px drop-shadow; a wave's shadow on every
+  other point. The SVG keeps what is clicked or read (hit paths, tags, badges) and its classes say
+  how each wire looks (an observer repaints on any change).
+- **Zooming** makes the cards one GPU layer, scaled, as panning does, drawn sharp 180 ms after the
+  last step (owner: frames dropped; each step redrew every card's text and glow).
+- **Measured** (`./run.sh perf`, headless Chrome on the owner's GPU, the studio board, every wire
+  live): CPU 666 → 224 ms/s, the page's own thread 366 → 29; zoomed in 1069 → 252. Uncapped (no
+  vsync, the fps it could reach): wires 141 → 923, zoomed in 108 → 692, zooming while live
+  64 → 345. The EQ and dynamics panels draw 2 300–2 500 fps uncapped as SVG; left as they are.
 
 ## 5. Problems (`pipeboard/problems.py`)
 
@@ -1011,9 +1050,9 @@ roll mode: a long wire shows a second or two of history.
 Each slot is one point of the wire, alternately its high and its low (by the slot's own number, so
 the pattern travels with the sound), smoothed into a wave of ~15 px: up-swings are the sound's real
 positive peaks, down-swings its real negative ones, and the swing follows the loudness (one dB gain
-per frame, linear inside, so nothing is squared off). Drawing every live wire costs ~0.25 ms per
-frame; the loop runs while a wave is in sight or sound arrived in the last 0.5 s, and stops in
-silence.
+per frame, linear inside, so nothing is squared off). Drawn on the GPU (§4a): the slots go to a
+ring texture as they arrive (only what changed), the shader does the rest. The loop runs while a
+wave is in sight or sound arrived in the last 0.5 s, and stops in silence.
 
 **Restarts that cannot go wrong** (user: waves stopped after changing the graph). Any
 change to the wired outputs restarts the capture. Found and fixed, each with a check:
@@ -1244,7 +1283,11 @@ wire dropped from an input.
   drawn for it (saved, as `bypass`).
 - **Drawing on its own** (`diag.js`; owner): each display is a canvas on its own compositor layer
   (`contain`, `will-change`), drawn in diag.js's own animation loop, so a frame repaints that
-  canvas only. Readouts change four times a second; the correlation marker moves by transform.
+  canvas only. Drawn on the GPU (§4a): what to draw is worked out in JS (each column's span, each
+  new sample's dot, the bars, the bins) and the shaders draw it; the stereo dots go into a
+  half-float picture kept between frames and dimmed by the time passed (no grey ghost, as a
+  canvas's whole steps of opacity left); the meter's L and R and the spectrum's frequencies are
+  text in the page. Readouts change four times a second; the correlation marker moves by transform.
   Smooth (owner): what is drawn follows a playhead 40 ms behind the newest sound, moving with
   real time, so each refresh shows a little more instead of a jump per 20 ms lump.
 - **Waveform**: L and R, 50 ms, steady (each frame starts at a rising zero crossing of the mid),
@@ -1320,7 +1363,13 @@ scenario (board, small window, Pedal loop, problems open, wire being dragged, wi
 menu, card menu with name history, renaming, zoomed out, empty), writes `.dev/shots/<name>.png`
 and a contact sheet `.dev/shots/sheet.png`, and prints the page's self-audit: cards overlapping,
 cards off screen, text clipped, menus or hints leaving the window, bar running into the problem
-button, NaN in a wire, wires not drawn, console errors. Exit code = faulty shots.
+button, NaN in a wire, wires not drawn (no pixel of the wire canvas lit), console errors. Exit
+code = faulty shots. Chrome draws with SwiftShader as its whole GPU (`--use-angle=swiftshader`),
+so the WebGL pictures render; with `--disable-gpu` each copy into a canvas was read back and a
+scope's panel took 9 s, not 3. A shot Chrome hangs on is tried once more, then a fault.
+`./run.sh perf` measures what drawing costs: headless Chrome on the real GPU, each scene animating
+with made-up sound, CPU of every Chrome process, the page's own thread, frame intervals;
+`--uncapped` draws without vsync, for the fps it could reach.
 
 Scenarios come from `tests/fixtures/scenarios.py`: the user's graph as captured
 (`scripts/capture_fixture.py` refreshes it), plus a Pedal effect loop and a graph with planted

@@ -36,8 +36,11 @@ button { font: inherit; color: inherit; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 /* While a pan is held the cards and wires are one GPU layer, slid, not repainted; let go, they
    return to normal painting, so zoomed text stays sharp (a layer keeps the scale it was drawn at). */
-#board.panning #world { will-change: transform; }
+#board.panning #world, #board.zooming #world { will-change: transform; }  /* (zooming: board.js zoomAt) */
 #wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+/* The wires themselves: drawn on the GPU (board.js paintWires) on a canvas the size of the board,
+   the view undone by its own transform; the SVG above it holds what is clicked or read. */
+#wire-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
 /* Wires and cards on GPU layers of their own: a live wave repaints only its wire, not the cards'
    glows around it (owner: worst zoomed in on many wires; traced 628 → 397 ms/s of raster). A plain
    3D transform, not will-change: those layers are drawn again at a new zoom, so stay sharp. */
@@ -45,10 +48,7 @@ button { font: inherit; color: inherit; }
 
 /* Wires */
 .wire { fill: none; stroke-width: 2.5; stroke-linecap: round; }
-.wire-shadow { fill: none; stroke: rgba(0, 0, 0, 0.45); stroke-width: 6; stroke-linecap: round; }
 .wire-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; pointer-events: stroke; }
-.wire.partial { stroke-dasharray: 6 5; }
-.wire.selected { stroke: #fff !important; stroke-width: 3; }
 .wire.pending { stroke: rgba(255, 255, 255, 0.7); stroke-dasharray: 4 5; }
 /* A channel tag (L, R) on a wire: a card-coloured disc ringed in the wire's own colour (owner: the
    dark disc was lost on the dark board). */
@@ -90,9 +90,9 @@ button { font: inherit; color: inherit; }
   border: 1.5px dashed color-mix(in srgb, var(--c) 60%, transparent); background: color-mix(in srgb, var(--c) 6%, transparent); }
 .ghost span { position: absolute; left: 11px; right: 11px; top: 6px; font-size: 11px; color: var(--faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#board .card, #wires { transition: opacity 0.3s; }
+#board .card, #wires, #wire-canvas { transition: opacity 0.3s; }
 #board.show-moves #moves { opacity: 1; }
-#board.show-moves .card:not(.unsaved), #board.show-moves #wires { opacity: 0.35; }
+#board.show-moves .card:not(.unsaved), #board.show-moves #wires, #board.show-moves #wire-canvas { opacity: 0.35; }
 /* Groups (owner): a frame behind a group's cards and wires; its title on its own layer above the
    wires (never under a cable), under the cards, on a backing in the frame's colour. Monitoring's
    frame dashed. A card held over another group lights it; one pulled out leaves a hole. */
@@ -129,8 +129,6 @@ button { font: inherit; color: inherit; }
 .selbar button { background: #2f6e66; border: 1px solid #4fc1b0; border-radius: 7px; padding: 4px 12px; cursor: pointer; }
 .selbar button:hover, .selbar button:focus-visible { background: #38847a; outline: none; }
 .selbar kbd { font: 11px var(--font); color: var(--faint); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 5px; padding: 0 5px; }
-/* A wire into Monitoring only listens: dotted. */
-.wire-g.tap .wire { stroke-dasharray: 2 6; }
 /* Where a dragged card will drop: its outline on the grid. */
 .landing { position: absolute; left: 0; top: 0; border-radius: 10px; pointer-events: none;
   border: 1.5px dashed var(--c); background: color-mix(in srgb, var(--c) 7%, transparent); }
@@ -274,10 +272,8 @@ button { font: inherit; color: inherit; }
 /* Portals (board.js portalEnd): the wire itself hidden until hovered or selected, a short stub off
    each socket into a small badge: a dark disc ringed and softly lit in the source's colour, a
    faint dashed ring inside (a way through), the pair's letter. Quiet, but not a card or a tag. */
-.wire-g.portal:not(.hot) :is(.wire, .wire-shadow, .wire-tag) { opacity: 0; }
+.wire-g.portal:not(.hot) .wire-tag { opacity: 0; }
 .wire-g.portal:not(.hot) .wire-hit { pointer-events: none; }
-.wire-g.portal :is(.wire, .wire-shadow) { transition: opacity 0.15s; }
-.portal-stub { fill: none; stroke-width: 2.5; stroke-linecap: round; }
 .portal-end { cursor: pointer; transition: opacity 0.15s; }
 #board.focus .portal-end:not(.hot) { opacity: 0.3; }
 .portal-disc { fill: #0d0d0d; stroke: var(--pc); stroke-width: 1.8;
@@ -289,9 +285,6 @@ button { font: inherit; color: inherit; }
 .portal-end:hover .portal-disc, .portal-end.hot .portal-disc { stroke-width: 2.4;
   filter: drop-shadow(0 0 9px color-mix(in srgb, var(--pc) 75%, transparent)); }
 #board.focus .wire-g:not(.hot) { opacity: 0.22; }
-.wire.failed { stroke: #e05050 !important; stroke-dasharray: 2 5; }
-.wire.flagged { animation: breathe 1.6s ease-in-out infinite; }
-@keyframes breathe { 50% { opacity: 0.45; } }
 
 /* The clock readout opens the Audio engine: a real button (owner: nothing hinted it was there). */
 #bar button.clock { font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -420,7 +413,6 @@ button { font: inherit; color: inherit; }
 .card .warn { position: absolute; top: -9px; right: -9px; width: 20px; height: 20px; border-radius: 50%;
   background: #e0a050; color: #1d1d1d; font: 800 12px/20px var(--font); text-align: center;
   box-shadow: 0 0 0 3px var(--board); }
-.wire.ghost { stroke: #8a8a8a !important; stroke-dasharray: 3 6; opacity: 0.7; }
 
 /* The profile button in the bar */
 #bar .profile { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; }
@@ -470,11 +462,6 @@ button { font: inherit; color: inherit; }
 /* Preview renders (scripts/shots.py): no motion, so a shot shows the settled state. */
 .preview *, .preview *::before, .preview *::after { animation: none !important; transition: none !important; }
 
-/* Live wires */
-/* Clipping on a live wire: that stretch of the wave red and softly lit, fading in and out (the
-   pieces either side fainter). */
-.live-clip { fill: none; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round;
-  filter: drop-shadow(0 0 3px rgba(255, 70, 60, 0.85)); }
 /* Tidy as a split button: the action, and an arrow to its option (Portals) behind a divider. */
 #bar .split { display: flex; align-items: stretch; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 7px;
   overflow: hidden; }
@@ -998,6 +985,12 @@ button { font: inherit; color: inherit; }
 .diag-panel.spectrum .diag-big { grid-template-columns: 1fr; }
 .diag-display:not(.off):hover { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22); }
 .diag-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; will-change: transform; }
+/* The words in a picture (diag.js: the GPU draws none): the meter's L and R, the spectrum's
+   frequencies. */
+.diag-lr { position: absolute; transform: translateY(-50%); font: 500 10px var(--font); line-height: 1; color: rgba(232, 230, 227, 0.58); pointer-events: none; }
+.diag-panel .diag-lr { font-size: 12px; }
+.diag-hz { position: absolute; inset: 0; pointer-events: none; }
+.diag-hz span { position: absolute; bottom: 2px; transform: translateX(-50%); font-size: 9px; line-height: 1; color: rgba(232, 230, 227, 0.32); }
 .diag-guides { position: absolute; left: 6px; right: 6px; top: 4px; bottom: 2px; width: calc(100% - 12px); height: calc(100% - 6px); }
 .diag-display.off { cursor: default; }
 .diag-display.off .diag-guides { opacity: 0.3; }

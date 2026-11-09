@@ -93,12 +93,7 @@ const DIAG = (() => {
   }
 
   // ---- drawing --------------------------------------------------------------------------------
-  function fitCanvas(c) {  // its backing store matches its size on screen (sharp at any zoom)
-    const box = c.getBoundingClientRect(), dpr = devicePixelRatio || 1;
-    const w = Math.max(1, Math.round(box.width * dpr)), ht = Math.max(1, Math.round(box.height * dpr));
-    if (c.width !== w || c.height !== ht) { c.width = w; c.height = ht; }
-    return [w, ht];
-  }
+
 
   // Steady, as a scope's trigger: the window starts at the newest rising zero crossing that still
   // leaves a whole span after it. Of the mid filtered below ~150 Hz (the bass's own waves, the
@@ -135,13 +130,43 @@ const DIAG = (() => {
     }
     return out;
   }
+  // The pictures are drawn on the GPU (gl.js): what to draw is worked out here, as before, and
+  // handed over as a few numbers per column, per sample or per bar; the shaders draw the lines,
+  // dots and fills (owner: the visualizers' load).
+  // Waveform: each column's top and bottom of each trace (device px from the top), the line
+  // through them as a canvas drew it: every column its span, joined halfway to the neighbours'.
+  const WAVE_FS = `
+uniform sampler2D uCols;
+uniform vec2 uSize; uniform int uTraces; uniform vec3 uL, uR, uM; uniform float uHalf;
+out vec4 o;
+float cover(int ch, float y) {
+  int x = int(gl_FragCoord.x), w = int(uSize.x);
+  vec4 c = texelFetch(uCols, ivec2(x, 0), 0), p = texelFetch(uCols, ivec2(max(x - 1, 0), 0), 0), n = texelFetch(uCols, ivec2(min(x + 1, w - 1), 0), 0);
+  vec2 me = ch == 0 ? c.xy : c.zw, pv = ch == 0 ? p.xy : p.zw, nx = ch == 0 ? n.xy : n.zw;
+  float last = me.y - me.x > 1.0 ? me.y : me.x, pl = pv.y - pv.x > 1.0 ? pv.y : pv.x;
+  float a = (pl + me.x) / 2.0, b = (last + nx.x) / 2.0;
+  float top = min(me.x, min(a, b)), bot = max(me.y, max(a, b));
+  return clamp(uHalf + 0.5 - max(max(top - y, y - bot), 0.0), 0.0, 1.0);
+}
+void main() {
+  float y = uSize.y - gl_FragCoord.y, line = 0.0;
+  for (int k = 0; k < 3; k++) { float f = k == 1 ? 0.5 : k == 0 ? 0.25 : 0.75; line = max(line, clamp(1.0 - abs(y - floor(uSize.y * f) - 0.5), 0.0, 1.0) * (k == 1 ? 0.13 : 0.06)); }
+  vec4 g = vec4(line);
+  if (uTraces == 1) { float m = cover(0, y); o = vec4(uM * m, m) + g * (1.0 - m); }
+  else if (uTraces == 2) { float l = cover(0, y), r = cover(1, y); o = min(vec4(1.0), g + vec4(uL * l, l) + vec4(uR * r, r)); }  // (added: where they agree, white)
+  else o = g;
+}`;
   function waveform(v, ring, dt) {
-    const [w, ht] = fitCanvas(v.canvas), g = v.canvas.getContext("2d");
-    g.clearRect(0, 0, w, ht);
-    g.strokeStyle = "rgba(255,255,255,0.06)"; g.lineWidth = 1;
-    for (const y of [0.25, 0.75]) { g.beginPath(); g.moveTo(0, ht * y); g.lineTo(w, ht * y); g.stroke(); }
-    g.strokeStyle = "rgba(255,255,255,0.13)"; g.beginPath(); g.moveTo(0, ht / 2); g.lineTo(w, ht / 2); g.stroke();
-    if (silent(ring)) { v.stats = { peak: 0, silent: true }; return; }
+    const [w, ht] = GL.fit(v.canvas), dpr = devicePixelRatio || 1;
+    const paint = (cols, traces) => GL.draw(v.canvas, (gl) => {
+      const pr = GL.program(GL.FULL_VS, WAVE_FS), u = pr.u;
+      gl.useProgram(pr.p);
+      GL.data("wave", w, 1, cols || new Float32Array(w * 4), 0);
+      gl.uniform1i(u.uCols, 0); gl.uniform2f(u.uSize, w, ht); gl.uniform1i(u.uTraces, traces); gl.uniform1f(u.uHalf, 0.75 * dpr);
+      gl.uniform3fv(u.uL, GL.rgb(pal.l)); gl.uniform3fv(u.uR, GL.rgb(pal.r)); gl.uniform3fv(u.uM, MID.map((c) => c / 255));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    if (silent(ring)) { v.stats = { peak: 0, silent: true }; paint(null, 0); return; }
     const look = frames(ring, SPAN * 2, Math.floor(ring.play));
     const start = trigger(look);
     if (mono[v.key]) look.m = look.l.map((a, i) => (a + look.r[i]) / 2);  // (Mono: one trace, both sides)
@@ -165,108 +190,148 @@ const DIAG = (() => {
     const gain = (fixed[v.key] ? 0.95 : 0.9 / v.wz) * size;  // (Zoom off: the edge is full scale, 0 dB)
     // L and R the same weight, added together (owner: green was hard to see under magenta): where
     // they agree the trace turns white (mono, as in the stereo picture), where they differ each
-    // shows its own colour.
-    const traces = mono[v.key] ? [["m", `rgb(${MID.join(",")})`]] : [["l", pal.l], ["r", pal.r]];
-    g.globalCompositeOperation = mono[v.key] ? "source-over" : "lighter";
-    for (const [ch, color] of traces) {
+    // shows its own colour. Each column: its lowest and highest sample (Smooth: their average).
+    const cols = new Float32Array(w * 4);
+    (mono[v.key] ? ["m"] : ["l", "r"]).forEach((ch, c) => {
       const s = look[ch];
-      g.strokeStyle = color; g.lineWidth = 1.5 * (devicePixelRatio || 1);
-      g.beginPath();
-      for (let x = 0; x < w; x++) {  // each column's lowest and highest sample
+      for (let x = 0; x < w; x++) {
         const a = start + Math.floor((x / w) * SPAN), b = Math.max(a + 1, start + Math.floor(((x + 1) / w) * SPAN));
         let lo = Infinity, hi = -Infinity, sum = 0;
         for (let i = a; i < b; i++) { const s0 = s[i]; sum += s0; if (s0 < lo) lo = s0; if (s0 > hi) hi = s0; }
-        if (smooth[v.key]) lo = hi = sum / (b - a);  // (one line through the column's average)
-        const y1 = ht / 2 - hi * gain * (ht / 2), y2 = ht / 2 - lo * gain * (ht / 2);
-        if (x === 0) g.moveTo(x, y1); else g.lineTo(x, y1);
-        if (y2 - y1 > 1) g.lineTo(x, y2);
+        if (smooth[v.key]) lo = hi = sum / (b - a);
+        cols[x * 4 + 2 * c] = ht / 2 - hi * gain * (ht / 2); cols[x * 4 + 2 * c + 1] = ht / 2 - lo * gain * (ht / 2);
       }
-      g.stroke();
-    }
-    g.globalCompositeOperation = "source-over";
+    });
+    paint(cols, mono[v.key] ? 1 : 2);
     v.stats = { peak, zoom: gain / 0.9 };
   }
 
   // Polar sample, as a stereo imager: each sample a dot, its angle how far it leans to a side
   // (mono straight up, L and R on the 45° lines, out of phase flat), its distance its level.
-  // Dots fade over a few frames (the canvas is cleared by a little each frame).
+  // Each new sample a dot (or joined to the one before, a stroke), drawn into a picture kept on
+  // the GPU from frame to frame and dimmed by the time passed: the dots fade.
+  const DOTS_VS = `
+uniform vec2 uSize; uniform float uWidth;
+layout(location = 0) in vec4 aEnds;
+layout(location = 1) in vec3 aColor;
+out vec3 vColor; out vec2 vAt; flat out vec4 vEnds;
+void main() {
+  int c = gl_VertexID;
+  vec2 a = aEnds.xy, b = aEnds.zw, d = b - a; float L = length(d);
+  vec2 dir = L > 1e-4 ? d / L : vec2(1.0, 0.0);
+  float h = uWidth / 2.0 + 1.0, side = c == 2 || c == 3 || c == 5 ? 1.0 : -1.0;  // (a pixel more: the edges' share)
+  vec2 p = (c == 1 || c == 4 || c == 5 ? b + dir * h : a - dir * h) + vec2(-dir.y, dir.x) * side * h;
+  gl_Position = vec4(p.x / uSize.x * 2.0 - 1.0, 1.0 - p.y / uSize.y * 2.0, 0.0, 1.0);
+  vColor = aColor; vAt = p; vEnds = aEnds;
+}`;
+  // A dot covers each pixel by how much of it it overlaps, a stroke by its distance, as a canvas
+  // drew them (a 1 px dot between pixels lights four a little: the cloud as dense as it was).
+  const DOTS_FS = `
+uniform float uWidth;
+in vec3 vColor; in vec2 vAt; flat in vec4 vEnds;
+out vec4 o;
+void main() {
+  float h = uWidth / 2.0, cov;
+  vec2 a = vEnds.xy, ab = vEnds.zw - a, p = vAt;  // (vAt: this pixel's centre, as the canvas's coordinates count)
+  if (dot(ab, ab) < 1e-8) { vec2 lo = max(a - h, p - 0.5), hi = min(a + h, p + 0.5); cov = max(hi.x - lo.x, 0.0) * max(hi.y - lo.y, 0.0); }
+  else cov = clamp(h + 0.5 - length(p - a - ab * clamp(dot(p - a, ab) / dot(ab, ab), 0.0, 1.0)), 0.0, 1.0);
+  o = vec4(vColor, 1.0) * 0.55 * cov;
+}`;
+  const CLEAR_FS = `out vec4 o; void main() { o = vec4(0.0); }`;
+  const COPY_FS = `uniform sampler2D uTex; out vec4 o; void main() { o = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0); }`;
   function stereo(v, ring, dt) {
-    const [w, ht] = fitCanvas(v.canvas), g = v.canvas.getContext("2d");
-    // (fading by the time passed, not per frame: the same at 60 and 144 Hz; a dot lasts ~0.4 s,
-    // owner: a little longer than the first 0.15. In steps of at least a quarter: a canvas keeps
-    // whole steps of opacity, and a faint pixel dimmed by a few % a frame rounds back to what it
-    // was, so old dots stayed as a grey ghost (owner saw one); a quarter at a time reaches zero.)
-    v.fade = (v.fade || 0) + dt;
-    const fade = 1 - Math.exp(-v.fade / FADE_S);
-    if (fade >= 0.25) {
-      v.fade = 0;
-      g.globalCompositeOperation = "destination-out"; g.fillStyle = `rgba(0,0,0,${fade.toFixed(4)})`; g.fillRect(0, 0, w, ht);
-    }
-    g.globalCompositeOperation = "source-over";
-    if (silent(ring)) {  // (a second of silence: wiped clean, not even a last 1/255 left)
-      if (!ring || performance.now() - ring.fed > 1300) g.clearRect(0, 0, w, ht);
+    const [w, ht] = GL.fit(v.canvas), dpr = devicePixelRatio || 1;
+    const marks = [];  // per dot or stroke: from x, y, to x, y, colour
+    let clear = false;
+    if (silent(ring)) {  // (a second of silence: wiped clean)
+      clear = !ring || performance.now() - ring.fed > 1300;
       v.stats = { silent: true }; v.drawn = ring ? Math.floor(ring.play) : 0;
-      return;
-    }
-    // (the guides' geometry: viewBox 200 × 104, centre (100, 101), radius 96, fitted bottom-centre
-    // into the display less 6 px a side, 4 above and 2 below)
-    const dpr = devicePixelRatio || 1, sc = Math.min((w - 12 * dpr) / 200, (ht - 6 * dpr) / 104);
-    // (a new display, sound live: the last 0.1 s at once, which is now, not a replay; silence
-    // returned above, so old sound is never drawn)
-    const end = Math.floor(ring.play), fresh = Math.min(4096, Math.max(0, end - (v.drawn ?? end - 4800)));
-    v.drawn = end;
-    const n = 4096, { l, r } = frames(ring, n, end), cx = w / 2, cy = ht - 2 * dpr - 3 * sc, rad = 96 * sc;
-    let lr = 0, ll = 0, rr = 0, mm = 0, ss = 0, top = 0;
-    for (let i = n - fresh; i < n; i++) top = Math.max(top, Math.abs(l[i]), Math.abs(r[i]));
-    // (up at once to a louder sample, down over ~1.5 s; never past −48 dB, so hiss stays small)
-    v.zoom = Math.max(top, (v.zoom || top || 0.004) * Math.exp(-dt / 1.5), 0.004);
-    const dot = Math.max(1, Math.round(dpr)), joined = !!lines[v.key];
-    // Lines (owner: a toggle between dots and a line): each sample joined to the one before, on
-    // from where the last frame stopped; broken where the picture folds (a sample under the mono
-    // axis is drawn mirrored above it: joined, it would jump across) or at silence.
-    if (joined) { g.lineWidth = dot; g.lineCap = "round"; }
-    let prev = joined && v.last && v.last.end === end - fresh ? v.last : null;
-    for (let i = 0; i < n; i++) {
-      const a = l[i], b = r[i];
-      lr += a * b; ll += a * a; rr += b * b;
-      let m = (a + b) * Math.SQRT1_2, s = (a - b) * Math.SQRT1_2;
-      mm += m * m; ss += s * s;
-      if (i < n - fresh) continue;  // drawn already: only what played since the last frame
-      const flip = m < 0;
-      if (flip) { m = -m; s = -s; }
-      // distance: its level against the loudest of the last second (zoomed to fit, owner: a song
-      // at −12 dB was a small blob; in dB the loud near-mono part sat at the rim, hollow under it)
-      const lvl = Math.hypot(m, s) * Math.SQRT1_2, ang = Math.atan2(s, m);
-      const amp = Math.min(1, (lvl / v.zoom) * 0.95);
-      // 0 full left, 1 mono, 2 full right; white only near mono itself (owner: vivid), the
-      // side's colour from a little off the centre line
-      const t = Math.min(1, Math.max(0, 0.5 - ang / Math.PI)) * 2, k = Math.sqrt(Math.abs(t - 1));
-      const colour = `rgb(${(t < 1 ? mix(MID, pal.lr, k) : mix(MID, pal.rr, k)).join(",")})`;
-      const x = cx - Math.sin(ang) * amp * rad, y = cy - Math.cos(ang) * amp * rad;
-      g.globalAlpha = 0.55;
-      if (!joined) {
-        g.fillStyle = colour;
-        g.fillRect(x, y, dot, dot);
-        continue;
+    } else {
+      // (the guides' geometry: viewBox 200 × 104, centre (100, 101), radius 96, fitted bottom-centre
+      // into the display less 6 px a side, 4 above and 2 below)
+      const sc = Math.min((w - 12 * dpr) / 200, (ht - 6 * dpr) / 104);
+      // (a new display, sound live: the last 0.1 s at once, which is now, not a replay; silence
+      // returned above, so old sound is never drawn)
+      const end = Math.floor(ring.play), fresh = Math.min(4096, Math.max(0, end - (v.drawn ?? end - 4800)));
+      v.drawn = end;
+      const n = 4096, { l, r } = frames(ring, n, end), cx = w / 2, cy = ht - 2 * dpr - 3 * sc, rad = 96 * sc;
+      let lr = 0, ll = 0, rr = 0, mm = 0, ss = 0, top = 0;
+      for (let i = n - fresh; i < n; i++) top = Math.max(top, Math.abs(l[i]), Math.abs(r[i]));
+      // (up at once to a louder sample, down over ~1.5 s; never past −48 dB, so hiss stays small)
+      v.zoom = Math.max(top, (v.zoom || top || 0.004) * Math.exp(-dt / 1.5), 0.004);
+      const dot = Math.max(1, Math.round(dpr)), joined = !!lines[v.key];
+      // Lines (owner: a toggle between dots and a line): each sample joined to the one before, on
+      // from where the last frame stopped; broken where the picture folds (a sample under the mono
+      // axis is drawn mirrored above it: joined, it would jump across) or at silence.
+      let prev = joined && v.last && v.last.end === end - fresh ? v.last : null;
+      for (let i = 0; i < n; i++) {
+        const a = l[i], b = r[i];
+        lr += a * b; ll += a * a; rr += b * b;
+        let m = (a + b) * Math.SQRT1_2, s = (a - b) * Math.SQRT1_2;
+        mm += m * m; ss += s * s;
+        if (i < n - fresh) continue;  // drawn already: only what played since the last frame
+        const flip = m < 0;
+        if (flip) { m = -m; s = -s; }
+        // distance: its level against the loudest of the last second (zoomed to fit, owner: a song
+        // at −12 dB was a small blob; in dB the loud near-mono part sat at the rim, hollow under it)
+        const lvl = Math.hypot(m, s) * Math.SQRT1_2, ang = Math.atan2(s, m);
+        const amp = Math.min(1, (lvl / v.zoom) * 0.95);
+        // 0 full left, 1 mono, 2 full right; white only near mono itself (owner: vivid), the
+        // side's colour from a little off the centre line
+        const t = Math.min(1, Math.max(0, 0.5 - ang / Math.PI)) * 2, k = Math.sqrt(Math.abs(t - 1));
+        const colour = t < 1 ? mix(MID, pal.lr, k) : mix(MID, pal.rr, k);
+        const x = cx - Math.sin(ang) * amp * rad, y = cy - Math.cos(ang) * amp * rad;
+        if (!joined) marks.push(x + dot / 2, y + dot / 2, x + dot / 2, y + dot / 2, ...colour);  // (a dot: from and to the same place)
+        else if (prev && prev.flip === flip) marks.push(prev.x, prev.y, x, y, ...colour);
+        prev = { x, y, flip };
       }
-      if (prev && prev.flip === flip) {
-        g.strokeStyle = colour;
-        g.beginPath(); g.moveTo(prev.x, prev.y); g.lineTo(x, y); g.stroke();
-      }
-      prev = { x, y, flip };
+      v.last = prev && { ...prev, end };
+      const corr = ll && rr ? lr / Math.sqrt(ll * rr) : 0;
+      // Width: how far the picture fans out, against its guide lines (owner: "what am I supposed to
+      // imagine under 240 %"). From the side's level over the mid's (RMS, level-weighted as is
+      // correlation, so the two agree; owner: 168 % beside a narrow picture had been the dots'
+      // spread, faint noise counted as much as loud sound), as an angle: 2·atan(side/mid), 0 % a
+      // vertical line (mono), 100 % out to the L and R lines (L and R unrelated), 200 % flat
+      // (fully out of phase), never more. A sine with L and R φ apart reads φ / 90°.
+      const width = ss + mm < 1e-9 ? 0 : (2 * Math.atan2(Math.sqrt(ss), Math.sqrt(mm))) / (Math.PI / 2), kk = 1 - Math.exp(-dt / 0.25);  // (numbers settle over ~¼ s)
+      v.stats = { corr: v.stats?.corr == null ? corr : v.stats.corr + (corr - v.stats.corr) * kk,
+                  width: v.stats?.width == null ? width : v.stats.width + (width - v.stats.width) * kk };
     }
-    v.last = prev && { ...prev, end };
-    g.globalAlpha = 1;
-    const corr = ll && rr ? lr / Math.sqrt(ll * rr) : 0;
-    // Width: how far the picture fans out, against its guide lines (owner: "what am I supposed to
-    // imagine under 240 %"). From the side's level over the mid's (RMS, level-weighted as is
-    // correlation, so the two agree; owner: 168 % beside a narrow picture had been the dots'
-    // spread, faint noise counted as much as loud sound), as an angle: 2·atan(side/mid), 0 % a
-    // vertical line (mono), 100 % out to the L and R lines (L and R unrelated), 200 % flat
-    // (fully out of phase), never more. A sine with L and R φ apart reads φ / 90°.
-    const width = ss + mm < 1e-9 ? 0 : (2 * Math.atan2(Math.sqrt(ss), Math.sqrt(mm))) / (Math.PI / 2), k = 1 - Math.exp(-dt / 0.25);  // (numbers settle over ~¼ s)
-    v.stats = { corr: v.stats?.corr == null ? corr : v.stats.corr + (corr - v.stats.corr) * k,
-                width: v.stats?.width == null ? width : v.stats.width + (width - v.stats.width) * k };
+    GL.draw(v.canvas, (gl) => {
+      // The kept picture: dimmed by the time passed (a dot lasts ~0.4 s, owner: a little longer
+      // than the first 0.15; in half floats a faint dot fades right out, where a canvas's whole
+      // steps of opacity left a grey ghost), the new marks over it; then it is the surface.
+      const pic = GL.kept(`stereo ${v.key}|${v.big}`, w, ht), res = GL.make("diag dots", () => ({ vao: gl.createVertexArray(), buf: gl.createBuffer() }));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pic.fb);
+      gl.viewport(0, 0, w, ht); gl.disable(gl.SCISSOR_TEST);
+      if (clear) { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
+      else {
+        gl.useProgram(GL.program(GL.FULL_VS, CLEAR_FS).p);
+        gl.blendFunc(gl.ZERO, gl.CONSTANT_ALPHA); gl.blendColor(0, 0, 0, Math.exp(-dt / FADE_S));
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      if (marks.length) {
+        const pr = GL.program(DOTS_VS, DOTS_FS), data = new Float32Array(marks);
+        for (let i = 4; i < data.length; i += 7) { data[i] /= 255; data[i + 1] /= 255; data[i + 2] /= 255; }
+        gl.useProgram(pr.p);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.uniform2f(pr.u.uSize, w, ht); gl.uniform1f(pr.u.uWidth, Math.max(1, Math.round(dpr)));
+        gl.bindVertexArray(res.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, res.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+        gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 28, 0); gl.vertexAttribDivisor(0, 1);
+        gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 28, 16); gl.vertexAttribDivisor(1, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, data.length / 7);
+        gl.bindVertexArray(null);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, ht); gl.enable(gl.SCISSOR_TEST);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      const cp = GL.program(GL.FULL_VS, COPY_FS);
+      gl.useProgram(cp.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pic.tex); gl.uniform1i(cp.u.uTex, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
   }
 
   // ---- Meter (owner): levels and loudness -------------------------------------------------------
@@ -299,8 +364,29 @@ const DIAG = (() => {
     return b.length ? -0.691 + 10 * Math.log10(Math.max(1e-12, b.reduce((a, x) => a + x, 0) / b.length)) : -Infinity;
   };
   const toDb = (x) => (x > 1e-6 ? 20 * Math.log10(x) : -120);
+  // Rounded bars (the meter's segments): per bar its box (device px) and colour.
+  const RECTS_VS = `
+uniform vec2 uSize;
+layout(location = 0) in vec4 aBox;
+layout(location = 1) in vec4 aColor;
+out vec2 vAt; flat out vec4 vBox; flat out vec4 vColor;
+void main() {
+  int c = gl_VertexID;
+  vec2 p = aBox.xy + vec2(c == 1 || c == 4 || c == 5 ? 1.0 : 0.0, c == 2 || c == 3 || c == 5 ? 1.0 : 0.0) * aBox.zw;
+  vAt = p; vBox = aBox; vColor = aColor;
+  gl_Position = vec4(p.x / uSize.x * 2.0 - 1.0, 1.0 - p.y / uSize.y * 2.0, 0.0, 1.0);
+}`;
+  const RECTS_FS = `
+uniform float uRad;
+in vec2 vAt; flat in vec4 vBox; flat in vec4 vColor;
+out vec4 o;
+void main() {
+  vec2 q = abs(vAt - vBox.xy - vBox.zw / 2.0) - vBox.zw / 2.0 + uRad;
+  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - uRad;
+  o = vec4(vColor.rgb, 1.0) * vColor.a * clamp(0.5 - d, 0.0, 1.0);
+}`;
   function meter(v, ring, dt) {
-    const [w, ht] = fitCanvas(v.canvas), g = v.canvas.getContext("2d"), dpr = devicePixelRatio || 1;
+    const [w, ht] = GL.fit(v.canvas), dpr = devicePixelRatio || 1;
     const m = v.m ||= { k: [[[0, 0, 0, 0], [0, 0, 0, 0]], [[0, 0, 0, 0], [0, 0, 0, 0]]], blocks: [], acc: 0, accN: 0,
                         pk: [-120, -120], hold: [-120, -120], holdAt: [0, 0], ms: [0, 0] };
     const now = performance.now();
@@ -329,7 +415,6 @@ const DIAG = (() => {
     // hold one segment lit white (red at full scale). Segments ~6 px on the card, ~10 large.
     // (inner margins all round and a column for L / R with room after it: owner, "no margins,
     // clumsy"; slightly rounded segments)
-    g.clearRect(0, 0, w, ht);
     // (sizes in the card's own pixels: they follow the board's zoom as the card does; at a small
     // zoom fixed screen sizes crowded it)
     const u = dpr * (v.canvas.getBoundingClientRect().width / (v.canvas.offsetWidth || 1) || 1);
@@ -342,19 +427,32 @@ const DIAG = (() => {
     const bh = Math.round(Math.min((ht - 2 * pad - rowGap) / 2, (v.big ? 26 : 13) * u)), rad = Math.min(sw, bh) * 0.25;
     const segOf = (d) => Math.round(((Math.min(0, Math.max(-60, d)) + 60) / 60) * n);
     const colour = (i) => { const d = -60 + ((i + 0.5) / n) * 60; return d > -3 ? [239, 95, 95] : d > -12 ? [224, 192, 80] : [63, 191, 127]; };
-    g.font = `500 ${(v.big ? 12 : 10) * u}px Inter, sans-serif`; g.textBaseline = "middle"; g.textAlign = "left";
-    const top = Math.round((ht - 2 * bh - rowGap) / 2);
+    const top = Math.round((ht - 2 * bh - rowGap) / 2), bars = new Float32Array(2 * n * 8);
     for (const c of [0, 1]) {
       const y = top + c * (bh + Math.round(rowGap)), rms = segOf(toDb(Math.sqrt(m.ms[c]))), pk = segOf(m.pk[c]), hold = m.hold[c] > -60 ? segOf(m.hold[c]) - 1 : -1;
       for (let i = 0; i < n; i++) {
-        const [r0, g0, b0] = colour(i), x = x0 + i * (sw + gap);
-        g.fillStyle = i === hold ? (m.hold[c] >= -0.1 ? "rgb(239,95,95)" : "rgb(242,244,247)")
-          : i < rms ? `rgb(${r0},${g0},${b0})` : i < pk ? `rgba(${r0},${g0},${b0},0.45)` : "#24272c";
-        g.beginPath(); g.roundRect(x, y, sw, bh, rad); g.fill();
+        const lit = colour(i).map((x) => x / 255);
+        const fill = i === hold ? (m.hold[c] >= -0.1 ? [239 / 255, 95 / 255, 95 / 255, 1] : [242 / 255, 244 / 255, 247 / 255, 1])
+          : i < rms ? [...lit, 1] : i < pk ? [...lit, 0.45] : [0x24 / 255, 0x27 / 255, 0x2c / 255, 1];
+        bars.set([x0 + i * (sw + gap), y, sw, bh, ...fill], (c * n + i) * 8);
       }
-      // (both the card's muted grey: owner, magenta / green labels read as level colours beside the bars)
-      g.fillStyle = "rgba(232,230,227,0.58)"; g.fillText(c ? "R" : "L", pad, y + bh / 2 + 0.5 * u);
+      // L and R beside them: text, so in the page (the card's muted grey: owner, magenta / green
+      // labels read as level colours beside the bars)
+      const lab = v.labels?.[c], at = `${(pad / u).toFixed(1)}px ${((y + bh / 2) / u).toFixed(1)}px`;
+      if (lab && lab.dataset.at !== at) { lab.dataset.at = at; lab.style.left = `${(pad / u).toFixed(1)}px`; lab.style.top = `${((y + bh / 2) / u).toFixed(1)}px`; }
     }
+    GL.draw(v.canvas, (gl) => {
+      const pr = GL.program(RECTS_VS, RECTS_FS), res = GL.make("diag rects", () => ({ vao: gl.createVertexArray(), buf: gl.createBuffer() }));
+      gl.useProgram(pr.p);
+      gl.uniform2f(pr.u.uSize, w, ht); gl.uniform1f(pr.u.uRad, rad);
+      gl.bindVertexArray(res.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, res.buf);
+      gl.bufferData(gl.ARRAY_BUFFER, bars, gl.STREAM_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0); gl.vertexAttribDivisor(0, 1);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16); gl.vertexAttribDivisor(1, 1);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 2 * n);
+      gl.bindVertexArray(null);
+    });
     v.stats = { mom: lufs(m.blocks, 4), short: lufs(m.blocks, 30), silent: silent(ring) };
   }
 
@@ -395,26 +493,52 @@ const DIAG = (() => {
     for (let i = 0; i < A.BINS; i++) c.bins[i] = Math.max(fresh ? fresh[i] : -120, c.bins[i] - A.FALL * dt);
     return c.bins;
   }
+  // Spectrum: the bins as a filled area and a line over it, coloured by level as a meter is
+  // (green low, yellow from −20 dB, red near the top; owner's pick), over a faint grid.
+  const SPEC_FS = `
+uniform sampler2D uBins;
+uniform vec2 uSize; uniform int uN; uniform float uLf0, uSpan, uHalf; uniform float uGrid[10];
+out vec4 o;
+float yOf(float d) { return uSize.y - (clamp(d, -90.0, 0.0) + 90.0) / 90.0 * uSize.y; }
+vec2 pt(int i) { i = clamp(i, 0, uN - 1); return vec2(float(i) / float(uN - 1) * uSize.x, yOf(texelFetch(uBins, ivec2(i, 0), 0).x)); }
+vec3 level(float f) {  // 0 the bottom … 1 the top
+  vec3 g = vec3(0.247, 0.749, 0.498), y = vec3(0.878, 0.753, 0.314), r = vec3(0.937, 0.373, 0.373);
+  return f < 0.55 ? g : f < 0.78 ? mix(g, y, (f - 0.55) / 0.23) : mix(y, r, (f - 0.78) / 0.22);
+}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uSize.y - gl_FragCoord.y);
+  float grid = 0.0;
+  for (int k = 0; k < 10; k++) grid = max(grid, clamp(1.0 - abs(p.x - (uGrid[k] - uLf0) / uSpan * uSize.x), 0.0, 1.0));
+  for (int k = 1; k <= 4; k++) grid = max(grid, clamp(1.0 - abs(p.y - yOf(-20.0 * float(k))), 0.0, 1.0));
+  float fi = p.x / uSize.x * float(uN - 1); int i0 = int(floor(fi));
+  float cy = mix(pt(i0).y, pt(i0 + 1).y, fract(fi)), fill = clamp(p.y - cy + 0.5, 0.0, 1.0) * 0.28;
+  vec3 col = level(1.0 - p.y / uSize.y);
+  vec4 under = vec4(col, 1.0) * fill + vec4(0.05 * grid) * (1.0 - fill);
+  // the line: its nearest stretch among those around this column
+  int k = min(12, int(ceil(3.0 / (uSize.x / float(uN - 1)))) + 1);
+  float d = 1e9;
+  for (int j = max(0, i0 - k); j <= min(uN - 2, i0 + k); j++) {
+    vec2 a = pt(j), ab = pt(j + 1) - a;
+    d = min(d, length(p - a - ab * clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0)));
+  }
+  float line = clamp(uHalf + 0.5 - d, 0.0, 1.0);
+  o = vec4(col, 1.0) * line + under * (1.0 - line);
+}`;
   function spectrum(v, ring, dt, t) {
-    const [w, ht] = fitCanvas(v.canvas), g = v.canvas.getContext("2d"), dpr = devicePixelRatio || 1, A = EQ.analyser;
-    const bins = spectrumBins(v.key, ring, t, dt), lf0 = Math.log10(A.F0), span = Math.log10(A.F1) - lf0;
-    const xOf = (f) => ((Math.log10(f) - lf0) / span) * w, yOf = (d) => ht - ((Math.min(0, Math.max(-90, d)) + 90) / 90) * ht;
-    g.clearRect(0, 0, w, ht);
-    g.strokeStyle = "rgba(255,255,255,0.05)"; g.lineWidth = 1;
-    for (const f of A.GRID_F) { g.beginPath(); g.moveTo(xOf(f), 0); g.lineTo(xOf(f), ht); g.stroke(); }
-    for (const d of [-20, -40, -60, -80]) { g.beginPath(); g.moveTo(0, yOf(d)); g.lineTo(w, yOf(d)); g.stroke(); }
-    const n = bins.length, pts = Array.from(bins, (b, i) => [(i / (n - 1)) * w, yOf(b)]);
-    g.beginPath(); g.moveTo(0, ht);
-    for (const [x, y] of pts) g.lineTo(x, y);
-    g.lineTo(w, ht); g.closePath();
-    // (by level, as a meter: green low, yellow from −20 dB, red near the top; owner's pick)
-    const fill = g.createLinearGradient(0, ht, 0, 0);
-    fill.addColorStop(0, "#3fbf7f"); fill.addColorStop(0.55, "#3fbf7f"); fill.addColorStop(0.78, "#e0c050"); fill.addColorStop(1, "#ef5f5f");
-    g.globalAlpha = 0.28; g.fillStyle = fill; g.fill();
-    g.globalAlpha = 1; g.strokeStyle = fill; g.lineWidth = 1.4 * dpr; g.beginPath();
-    pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
-    g.fillStyle = "rgba(232,230,227,0.32)"; g.font = `${9 * dpr}px Inter, sans-serif`; g.textBaseline = "bottom"; g.textAlign = "center";
-    if (v.big || w > 260 * dpr) for (const f of A.GRID_F.slice(1, -1)) g.fillText(f >= 1000 ? `${f / 1000}k` : String(f), xOf(f), ht - 2 * dpr);
+    const [w, ht] = GL.fit(v.canvas), dpr = devicePixelRatio || 1, A = EQ.analyser;
+    const bins = spectrumBins(v.key, ring, t, dt), lf0 = Math.log10(A.F0), span = Math.log10(A.F1) - lf0, n = bins.length;
+    GL.draw(v.canvas, (gl) => {
+      const pr = GL.program(GL.FULL_VS, SPEC_FS), u = pr.u, data = new Float32Array(n * 4);
+      for (let i = 0; i < n; i++) data[i * 4] = bins[i];
+      gl.useProgram(pr.p);
+      GL.data("spectrum", n, 1, data, 0);
+      gl.uniform1i(u.uBins, 0); gl.uniform2f(u.uSize, w, ht); gl.uniform1i(u.uN, n);
+      gl.uniform1f(u.uLf0, lf0); gl.uniform1f(u.uSpan, span); gl.uniform1f(u.uHalf, 0.7 * dpr);
+      gl.uniform1fv(u.uGrid, A.GRID_F.map((f) => Math.log10(f)));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    // (the frequencies under it, text in the page: on the panel, and a card wide enough)
+    if (v.hz) v.hz.hidden = !(v.big || w > 260 * dpr);
     // The loudest frequency, its real level (the bins carry a +4.5 dB/octave tilt for the picture).
     let best = 0, top = -Infinity;
     for (let i = 0; i < n; i++) { const f = 10 ** (lf0 + (i / (n - 1)) * span), real = bins[i] - 4.5 * Math.log2(f / 1000); if (real > top) { top = real; best = f; } }
@@ -530,6 +654,14 @@ const DIAG = (() => {
           v.mom, h("small", { text: "LUFS momentary" }), h("em", { text: "last 0.4 s" })),
         h("div", { class: "stereo-tile", "data-tip": "Short-term loudness (LUFS, the last 3 s). Streaming platforms play music at about −14 LUFS and turn anything louder down" },
           v.short, h("small", { text: "LUFS short-term" }), v.word));
+    }
+    // The words in the picture, in the page (the GPU draws no text): the meter's L and R, the
+    // spectrum's frequencies.
+    if (type === "meter") display.append(...(v.labels = ["L", "R"].map((t) => h("span", { class: "diag-lr", text: t }))));
+    if (type === "spectrum") {
+      const A = EQ.analyser, lf0 = Math.log10(A.F0), span = Math.log10(A.F1) - lf0;
+      display.append(v.hz = h("div", { class: "diag-hz", hidden: true }, ...A.GRID_F.slice(1, -1).map((f) => h("span", {
+        style: `left:${(((Math.log10(f) - lf0) / span) * 100).toFixed(2)}%`, text: f >= 1000 ? `${f / 1000}k` : String(f) }))));
     }
     if (on) { views.set(id, v); kick(); info(v); } else {  // off: an empty box, not its last picture (owner)
       views.delete(id); delete rings[key];

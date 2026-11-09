@@ -1253,23 +1253,16 @@ const PB = (() => {
   function drawWires() {
     layer.textContent = "";
     $("portal-layer").textContent = "";
-    $("grads").textContent = "";
     S.wireEls = {};
     const by = byKey(), letters = portalLetters(visibleWires()), plugWires = {}, plugEnds = {};
     for (const w of visibleWires()) if (letters[w.id]) (plugWires[plugOf(w)] ||= []).push(w);
     const flagged = new Set(S.problems.filter((p) => p.severity !== "info").flatMap((p) => p.wires));
-    visibleWires().forEach((w, i) => {
-      const grad = s("linearGradient", { id: `g${i}`, gradientUnits: "userSpaceOnUse" });
-      grad.append(s("stop", { offset: "0", "stop-color": colors[by[w.from[0]].kind] }),
-                  s("stop", { offset: "1", "stop-color": colors[by[w.to[0]].kind] }));
-      $("grads").append(grad);
-      const g = s("g", { class: `wire-g${groupOf(w.to[0]) === MONITORING ? " tap" : ""}`, "data-wire": w.id });  // (into Monitoring: it only listens, dotted)
-      const cls = ["wire", w.partial && "partial", w.failed && "failed", w.ghost && "ghost", flagged.has(w.id) && "flagged",
-                   S.selected === w.id && "selected"].filter(Boolean).join(" ");
-      const parts = { g, grad, shadow: s("path", { class: "wire-shadow" }),
-                      line: s("path", { class: cls, stroke: `url(#g${i})` }),
-                      hit: s("path", { class: "wire-hit" }) };
-      g.append(parts.shadow, parts.line);
+    visibleWires().forEach((w) => {
+      // (drawn on the GPU, paintWires: the group's classes say how; it holds what is clicked or read)
+      const cls = ["wire-g", groupOf(w.to[0]) === MONITORING && "tap", w.partial && "partial", w.failed && "failed", w.ghost && "ghost",
+                   flagged.has(w.id) && "flagged", S.selected === w.id && "selected"].filter(Boolean).join(" ");  // (tap: into Monitoring, it only listens: dotted)
+      const g = s("g", { class: cls, "data-wire": w.id });
+      const parts = { g, hit: s("path", { class: "wire-hit" }), rgb: [GL.rgb(colors[by[w.from[0]].kind]), GL.rgb(colors[by[w.to[0]].kind])] };
       if (w.ch) {
         parts.tag = s("g", { class: "wire-tag" });
         parts.tag.append(s("circle", { r: 7, class: "wire-tag-bg", stroke: colors[by[w.to[0]].kind] }),  // (it sits at the input end)
@@ -1280,11 +1273,9 @@ const PB = (() => {
       if (letters[w.id]) {  // a portal: its stubs and two badges in the source's colour
         const color = colors[by[w.from[0]].kind];
         g.classList.add("portal");
-        parts.stubs = s("path", { class: "portal-stub", stroke: `url(#g${i})` });
         const plug = plugOf(w), first = !plugEnds[plug];
         plugEnds[plug] ||= portalEnd(plugWires[plug], letters[w.id], color, by, true);  // (one exit per plug)
         parts.ends = [plugEnds[plug], portalEnd([w], letters[w.id], color, by, false)];
-        g.append(parts.stubs);
         $("portal-layer").append(...(first ? parts.ends : parts.ends.slice(1)));  // above every wire: none can cover a badge (owner)
       }
       parts.hit.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id, e); });
@@ -1317,7 +1308,8 @@ const PB = (() => {
 
   const PORTAL_OUT = 52;  // a portal's badge: this far out from its socket (owner: wires covered them closer)
   function placeWires(only) {
-    for (const { g, grad, shadow, line, hit, tag, w } of Object.values(S.wireEls)) {
+    for (const we of Object.values(S.wireEls)) {
+      const { g, hit, tag, w } = we;
       if (only && !only.has(w.from[0]) && !only.has(w.to[0])) continue;
       const a = anchor(...w.from), b = anchor(...w.to);
       const ends = S.wireEls[w.id].ends || [];
@@ -1326,12 +1318,9 @@ const PB = (() => {
       ends.forEach((e) => { e.style.display = ""; });
       const lr = w.ch === "L" ? -1 : w.ch === "R" ? 1 : 0;  // L and R meet a stereo socket apart
       if (lr) (w.chEnd === "from" ? a : b).y += 3 * lr;
-      const c = curve(a, b), d = pathD(c);
-      for (const p of [shadow, line, hit]) p.setAttribute("d", d);
-      S.wireEls[w.id].arc = null;
-      S.wireEls[w.id].c = c;
-      S.wireEls[w.id].plain = d;
-      Object.entries({ x1: a.x, y1: a.y, x2: b.x, y2: b.y }).forEach(([k, v]) => grad.setAttribute(k, v));
+      const c = curve(a, b);
+      hit.setAttribute("d", pathD(c));
+      Object.assign(we, { c, arc: arc(c), ga: a, gb: b });  // (its colour runs from a to b, as an SVG gradient's did)
       if (tag) {
         const p = at(c, w.chEnd === "from" ? 0.12 : 0.88);
         tag.setAttribute("transform", `translate(${p.x},${p.y + 6 * lr})`);
@@ -1339,6 +1328,7 @@ const PB = (() => {
     }
     placePortals();
     placeChip();
+    paintSoon();
   }
 
   // Every portal's badges together (owner: they overlapped, and one moved when another was
@@ -1379,7 +1369,7 @@ const PB = (() => {
     for (const we of Object.values(S.wireEls)) {
       if (!we.spots) continue;
       const [out, into] = we.spots;
-      we.stubs.setAttribute("d", `${pathD(stub(out.sock, { x: out.x - 10, y: out.y }))} ${pathD(stub({ x: into.x + 10, y: into.y }, into.sock))}`);
+      we.stubW = [stub(out.sock, { x: out.x - 10, y: out.y }), stub({ x: into.x + 10, y: into.y }, into.sock)].map((c) => ({ c, arc: arc(c) }));  // (each with its live wave)
       we.ends[0].setAttribute("transform", `translate(${out.x},${out.y})`);
       we.ends[1].setAttribute("transform", `translate(${into.x},${into.y})`);
     }
@@ -1401,7 +1391,7 @@ const PB = (() => {
         if (d < best) { best = d; S.selT = i / 200; }
       }
     }
-    for (const { line, w } of Object.values(S.wireEls)) line.classList.toggle("selected", w.id === id);
+    for (const { g, w } of Object.values(S.wireEls)) g.classList.toggle("selected", w.id === id);
     placeChip();
     hover(null);
     return !!S.wireEls[id];
@@ -1457,7 +1447,7 @@ const PB = (() => {
   const ROLL_SPEED = 480, SLOT_MS = 13, SLOT_PX = ROLL_SPEED * SLOT_MS / 1000;
   // The swing eases in and out over the same EASE px at both plugs (user: the two ends looked
   // different with 18 px at the source and 70 px at the destination).
-  const SLOTS = 1024, LIVE_SWING = 6, EASE = 36, WAVE_PX = 1.5;  // (swing 6 px: owner, 14 wobbled too much, 7 a touch much; a point every 1.5 px keeps a 5 px wave round)
+  const SLOTS = 1024, LIVE_SWING = 6, EASE = 36, WAVE_PX = 1;  // (swing 6 px: owner, 14 wobbled too much, 7 a touch much; a point every px, the curve through samples every 1.5 px as SVG drew it: POINTS_FS)
   // Drawn this far behind the newest value: more than a frame interval (20 ms) plus its jitter, so
   // the playhead never runs into the end of what has arrived.
   const LIVE_DELAY = 50;
@@ -1473,9 +1463,13 @@ const PB = (() => {
   function newSources(list, fresh) {
     S.liveSources = list;
     if (fresh === false) return;
-    for (const k of Object.keys(rings)) delete rings[k];
+    clearRings();
     clock.newest = -1;
     drawLive();
+  }
+  function clearRings() {
+    for (const k of Object.keys(rings)) delete rings[k];
+    wireGL.ringRows = 0;
   }
 
   // The wiggle follows the dominant pitch (owner: a kick drum a wide wave, a hi-hat dense ones).
@@ -1489,9 +1483,15 @@ const PB = (() => {
     const t = r.tone[i] ? Math.max(0, Math.min(1, (r.tone[i] - 50) / 125)) : 0.45;  // kick ~52, voice ~127, hi-hat ~172
     return (2 * Math.PI * SLOT_PX) / (WAVE_WIDE * (WAVE_DENSE / WAVE_WIDE) ** t);
   };
+  // Each source's slots also sit in a row of the GPU's ring texture (paintWires): per slot its
+  // loudness, its phase (within a turn), its phase step and its slot number (24 bits: a slot from
+  // a lap ago is not this one); r.tex mirrors the row, r.lo / r.hi the slots not yet uploaded.
   function feed(key, first, values, tone = 0) {
     const r = rings[key] || (rings[key] = { hi: new Int8Array(SLOTS), lo: new Int8Array(SLOTS), at: new Int32Array(SLOTS).fill(-1),
-                                            tone: new Uint8Array(SLOTS), ph: new Float64Array(SLOTS) });
+                                            tone: new Uint8Array(SLOTS), ph: new Float64Array(SLOTS), loud: -Infinity,
+                                            row: wireGL.ringRows++, tex: new Float32Array((SLOTS + 1) * 4).fill(-1), dirty: [0, SLOTS - 1] });
+    if (!values.length) return;
+    const n0 = Math.floor(first / SLOT_MS), n1 = Math.floor((first + values.length - 1) / SLOT_MS);
     for (let j = 0; j < values.length; j++) {
       const n = Math.floor((first + j) / SLOT_MS), i = n & (SLOTS - 1), v = values[j];
       if (r.at[i] !== n) {
@@ -1502,6 +1502,12 @@ const PB = (() => {
       if (v > r.hi[i]) r.hi[i] = v;
       if (v < r.lo[i]) r.lo[i] = v;
       if (tone) r.tone[i] = r.tone[i] ? (r.tone[i] + tone) >> 1 : tone;
+    }
+    for (let n = Math.max(n0, n1 - SLOTS + 1); n <= n1; n++) {
+      const i = n & (SLOTS - 1), peak = Math.max(r.hi[i], -r.lo[i]), TAU = 2 * Math.PI;
+      r.tex.set([peak, ((r.ph[i] % TAU) + TAU) % TAU, step(r, i), n & 0xffffff], i * 4);
+      if (peak >= 2) r.loud = Math.max(r.loud, n);
+      r.dirty = r.dirty ? [Math.min(r.dirty[0], i), Math.max(r.dirty[1], i)] : [i, i];
     }
   }
 
@@ -1527,11 +1533,12 @@ const PB = (() => {
         clock.head = target(now);  // start exactly in place: no catching up, no lurch
         clock.last = now;
         liveRunning = true;
-        requestAnimationFrame(tick);
+        paintSoon();
       }
     } catch (e) { /* a bad frame is dropped; the wires carry on */ }
   }
 
+  // The playhead, once a frame while live: real time, nudged to stay LIVE_DELAY behind.
   function tick(now) {
     const dt = Math.min(100, now - clock.last), fresh = now - clock.when < 300;
     clock.last = now;
@@ -1540,156 +1547,327 @@ const PB = (() => {
     if (Math.abs(off) > 250) clock.head += off;  // lost the beat (a stall): jump back in place
     else if (Math.abs(off) > 15) clock.head += (off - Math.sign(off) * 15) * 0.02;  // …nudged only past ±15 ms
     if (fresh) clock.head = Math.min(clock.head, clock.newest);  // never ahead of what arrived
-    const any = drawLive();
+  }
+
+  // A curve's length table (49 lengths, at t = 0, 1/48 … 1): the shader walks it to place its
+  // points by distance along the curve. Once per position.
+  function arc(c) {
+    const ds = [0];
+    let prev = at(c, 0);
+    for (let i = 1; i <= 48; i++) { const p = at(c, i / 48); ds.push(ds[i - 1] + Math.hypot(p.x - prev.x, p.y - prev.y)); prev = p; }
+    return { ds, len: ds[48] };
+  }
+
+  // ---- the wires on the GPU (gl.js) ------------------------------------------------------------
+  // Every wire, its shadow, a portal's stubs and the live waves: one program, one canvas the size
+  // of the board inside #world with the view undone (sharp at any zoom; the view a uniform, so a
+  // pan only redraws). Each piece (a wire, or a stub) is a row of a float texture: its curve and
+  // length table, colours, width, dashes and its sound's row; the vertex shader places a point
+  // every WAVE_PX along it (a still wire: fewer), moves it by the sound there (as wave() did on
+  // the CPU: loudness, phase and pitch eased between the two nearest slots, or Instant's newest),
+  // and gives the ribbon its width across the moved line, from its neighbours, so a steep wave
+  // keeps its thickness. The fragment shader draws the edges smooth, the dashes round, a clipped
+  // stretch red with its soft glow. Live wires keep their shadow (owner: still ones had one; on
+  // the GPU it costs nothing). The SVG holds what is clicked or read (hit paths, tags, badges)
+  // and its classes (hot, off-path, focus, selected…) say how each wire looks; any change to them
+  // repaints (an observer), as does the view.
+  const wireCanvas = $("wire-canvas");
+  const ROW = 20, SEG_STILL = 512, SEG_LIVE = 2048, STILL_PX = 4;  // (texels a piece; stretches a piece at most: a wave's every WAVE_PX up to 3 000 px, a still wire's every STILL_PX)
+  const DASHES = { tap: [2, 6], ghost: [3, 6], failed: [2, 5], partial: [6, 5] };  // (the CSS's dasharrays, in its order of precedence)
+  const wireGL = { rows: new Float32Array(0), alpha: new Map(), ringRows: 0, ringCap: 0, gen: -1, raf: 0, last: 0, view: "" };
+  // Pass 1 (POINTS_FS, a fragment per point): each piece's points every so far along it, moved
+  // by the sound there, into a float texture: x, y, distance along, how red. Pass 2 (WIRE_VS/FS):
+  // each stretch between two points a quad, its fragments drawn only by the nearest stretch
+  // (the line's true distance; each pixel once per wire, so a dimmed wave has no darker beads),
+  // a shadow pass then the line. A dense wave folds sharper than the line is wide: a ribbon
+  // offset along its normal spiked there; distances do not.
+  const PIECE_GLSL = `
+uniform sampler2D uWires;
+int row;
+vec4 W(int i) { return texelFetch(uWires, ivec2(i, row), 0); }`;
+  const POINTS_FS = `${PIECE_GLSL}
+uniform sampler2D uRings;
+uniform float uFrac; uniform int uBase, uInstant;
+out vec4 o;
+const float PI = 3.14159265, SLOT_PX = ${SLOT_PX.toFixed(4)}, SWING = ${LIVE_SWING.toFixed(1)}, EASE = ${EASE.toFixed(1)}, STEP = 1.5;
+float ds(int i) { return W(7 + i / 4)[i % 4]; }
+vec4 bez(float t) {  // the point at t, and the way it goes
+  vec4 p = W(0), q = W(1); vec2 a = p.xy, c1 = p.zw, c2 = q.xy, b = q.zw; float u = 1.0 - t;
+  return vec4(u * u * u * a + 3.0 * u * u * t * c1 + 3.0 * u * t * t * c2 + t * t * t * b,
+              3.0 * u * u * (c1 - a) + 6.0 * u * t * (c2 - c1) + 3.0 * t * t * (b - c2));
+}
+float tAt(float d) {  // t at a distance along (the length table)
+  int lo = 0, hi = 48;
+  while (lo < hi) { int m = (lo + hi + 1) / 2; if (ds(m) < d) lo = m; else hi = m - 1; }
+  int k = min(47, lo); float a = ds(k), b = ds(k + 1);
+  return (float(k) + clamp((d - a) / max(b - a, 1e-4), 0.0, 1.0)) / 48.0;
+}
+vec4 slot(int ring, int n) { return texelFetch(uRings, ivec2(n & 1023, ring), 0); }
+bool heard(vec4 s, int n) { return int(s.w) == (n & 0xffffff); }
+float up(float x, float w) { float s = sin(clamp(x / w, 0.0, 1.0) * PI / 2.0); return s * s; }
+// The sound's swing at d (board px, to the left of the way it goes) and how red it is there.
+vec2 sound(float d, float len, float off, int ring, bool glow) {
+  if (ring < 0) return vec2(0.0);
+  float v = 0.0, g = 0.0, w = min(EASE, len / 2.0);
+  if (uInstant == 1) {  // the newest sound, the whole wire
+    vec4 s = texelFetch(uRings, ivec2(1024, ring), 0);
+    v = s.x * sin(s.z - (d + off) * s.y); g = s.w;
+  } else {  // what played when this point's sound left the source
+    float sl = uFrac - (d + off) / SLOT_PX - 0.5, fm = floor(sl), t = sl - fm;
+    int n = uBase + int(fm);
+    vec4 A = slot(ring, n), B = slot(ring, n + 1); bool a = heard(A, n), b = heard(B, n + 1);
+    if (a || b) v = ((a ? A.x : 0.0) * (1.0 - t) + (b ? B.x : 0.0) * t) * sin(a ? A.y + A.z * t : B.y - (1.0 - t) * PI);
+    // (clipping: red as strong as the point is near a full-scale slot, a bell ~24 px either side)
+    if (glow) for (int j = -8; j <= 9; j++) {
+      vec4 c = slot(ring, n + j);
+      if (heard(c, n + j) && c.x >= 127.0) { float px = (t - float(j)) * SLOT_PX; g = max(g, exp(-px * px / 576.0)); }
+    }
+  }
+  return vec2(clamp(v / 126.0, -1.0, 1.0) * up(d, w) * up(len - d, w) * SWING, g);
+}
+void main() {
+  row = int(gl_FragCoord.y);
+  int i = int(gl_FragCoord.x);
+  vec4 r4 = W(4);
+  float len = r4.x, n = r4.y;
+  if (float(i) > n) { o = vec4(0.0); return; }
+  float d = float(i) * len / n, off = W(5).w;
+  int ring = int(r4.z);
+  // The wave as SVG drew it (owner: "the clean waves we used to have"): the sound taken every STEP
+  // px and a smooth curve through the midpoints, a quadratic B-spline of those samples: it rounds
+  // off the kinks where loudness and pitch change from one slot to the next, which real music
+  // does every slot. The same sum here, for this point.
+  float c = d / STEP, u = fract(c), k = floor(c) - 1.0;
+  float s0 = sound((k + 0.5) * STEP, len, off, ring, false).x, s1 = sound((k + 1.5) * STEP, len, off, ring, false).x,
+        s2 = sound((k + 2.5) * STEP, len, off, ring, false).x;
+  float sw = 0.5 * (1.0 - u) * (1.0 - u) * s0 + (0.5 + u - u * u) * s1 + 0.5 * u * u * s2;
+  vec4 p = bez(tAt(d));
+  o = vec4(p.xy + normalize(vec2(-p.w, p.z) + 1e-9) * sw, d, sound(d, len, off, ring, true).y);
+}`;
+  const WIRE_VS = `${PIECE_GLSL}
+uniform sampler2D uPoints;
+uniform vec3 uView; uniform vec2 uSize; uniform float uPx; uniform int uSeg;
+layout(location = 0) in float aRow;
+flat out int vRow, vSeg, vShadow;
+void main() {
+  row = int(aRow);
+  int id = gl_VertexID, shadow = id < uSeg * 6 ? 1 : 0;
+  if (shadow == 0) id -= uSeg * 6;
+  int i = id / 6, c = id % 6, n = int(W(4).y), st = shadow == 1 && W(4).z >= 0.0 ? 2 : 1;  // (a wave's shadow: every other point, as good under 6 px)
+  float hw = shadow == 1 ? (W(4).w > 0.5 ? 3.0 : 0.0) : W(3).w;
+  vRow = row; vSeg = i; vShadow = shadow;
+  if (i * st >= n || hw == 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }  // (past its end: nothing)
+  vec4 a = texelFetch(uPoints, ivec2(i * st, row), 0), b = texelFetch(uPoints, ivec2(min(i * st + st, n), row), 0);
+  float R = hw + 1.0 / uPx + (shadow == 0 && max(a.w, b.w) > 0.004 ? 4.0 : 0.0);  // (and room for a clipped stretch's glow)
+  vec2 dir = b.xy - a.xy; float L = length(dir);
+  dir = L > 1e-5 ? dir / L : vec2(1.0, 0.0);
+  bool atB = c == 1 || c == 4 || c == 5; float side = c == 2 || c == 3 || c == 5 ? 1.0 : -1.0;
+  vec2 s = ((atB ? b.xy + dir * R : a.xy - dir * R) + vec2(-dir.y, dir.x) * side * R) * uView.z + uView.xy;
+  gl_Position = vec4(s.x / uSize.x * 2.0 - 1.0, 1.0 - s.y / uSize.y * 2.0, 0.0, 1.0);
+}`;
+  const WIRE_FS = `${PIECE_GLSL}
+uniform sampler2D uPoints;
+uniform vec3 uView; uniform vec2 uSize; uniform float uPx, uTime;
+flat in int vRow, vSeg, vShadow;
+out vec4 o;
+vec4 P(int i) { return texelFetch(uPoints, ivec2(i, vRow), 0); }
+float seg(vec2 p, vec2 a, vec2 b, out float t) { vec2 ab = b - a; t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-9), 0.0, 1.0); return length(p - a - ab * t); }
+void main() {
+  row = vRow;
+  // The pixel on the board: from the pixel itself, the same in every quad (interpolated, each
+  // quad's differed by a rounding, and two that met at a joint each gave the pixel to the other).
+  float dpr = uPx / uView.z;
+  vec2 vWorld = (vec2(gl_FragCoord.x, uSize.y * dpr - gl_FragCoord.y) / dpr - uView.xy) / uView.z;
+  // Drawn by the nearest stretch only (ties: the first): the same sums in every quad, so exactly
+  // one. Those near enough to reach this pixel too: as many either side as the line's reach
+  // covers (a dense wave folds back, its flanks a wavelength apart), 8 at most.
+  int n = int(W(4).y), st = vShadow == 1 && W(4).z >= 0.0 ? 2 : 1, m = (n + st - 1) / st;
+  vec4 a = P(vSeg * st), b = P(min(vSeg * st + st, n));
+  float reach = (vShadow == 1 ? 3.0 : W(3).w) + 1.0 / uPx + (vShadow == 0 && max(a.w, b.w) > 0.004 ? 4.0 : 0.0);
+  int k = clamp(int(ceil(2.0 * reach / (W(4).x / float(n) * float(st)))), 1, 8), lo = max(0, vSeg - k), hi = min(m - 1, vSeg + k);
+  // (one call for every stretch, its own too: two call sites may round differently, and a pixel
+  // both quads gave away was a hole)
+  float dd[17], tt[17];
+  vec4 q = P(lo * st), nx;
+  for (int j = lo; j <= hi; j++, q = nx) { nx = P(min(j * st + st, n)); dd[j - lo] = seg(vWorld, q.xy, nx.xy, tt[j - lo]); }
+  float own = dd[vSeg - lo], t = tt[vSeg - lo];
+  for (int j = lo; j <= hi; j++) if (dd[j - lo] < own || (dd[j - lo] == own && j < vSeg)) discard;
+  vec4 c0 = W(2), c1 = W(3), r5 = W(5), r6 = W(6);
+  float hw = vShadow == 1 ? 3.0 : c1.w, dist = own;
+  if (vShadow == 0 && r5.y > 0.0) {  // round-ended dashes: the distance to the nearest dash
+    float u = mod(mix(a.z, b.z, t), r5.x + r5.y), da = u < r5.x ? 0.0 : min(u - r5.x, r5.x + r5.y - u);
+    dist = length(vec2(da, dist));
+  }
+  float cov = clamp((hw - dist) * uPx + 0.5, 0.0, 1.0);
+  float alpha = c0.w * (r5.z > 0.5 ? 1.0 - 0.55 * (0.5 - 0.5 * cos(uTime * 3.14159265 / 0.8)) : 1.0);  // (flagged: it breathes, as the CSS's did)
+  if (vShadow == 1) { o = vec4(0.0, 0.0, 0.0, 0.45 * cov * alpha); return; }
+  vec2 ab = r6.zw - r6.xy;
+  vec3 col = mix(c0.rgb, c1.rgb, clamp(dot(vWorld - r6.xy, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0));
+  float glow = mix(a.w, b.w, t), halo = glow * 0.85 * exp(-pow(max(0.0, dist - hw) / 2.0, 2.0)) * (1.0 - cov);  // (the CSS's drop-shadow, 3 px)
+  o = (vec4(mix(col, vec3(1.0, 0.353, 0.306), glow), 1.0) * cov + vec4(1.0, 0.275, 0.235, 1.0) * halo) * alpha;
+}`;
+
+  function paintSoon() { if (!wireGL.raf) wireGL.raf = requestAnimationFrame(wireFrame); }
+  function wireFrame(now) {
+    wireGL.raf = 0;
+    if (liveRunning) tick(now);
+    // (painted already this frame, with the view: once a frame is enough)
+    const moving = wireGL.synced ? wireGL.moving : paintWires(now);
+    wireGL.synced = false;
     // On while a wave is in sight or sound arrived lately (a new burst reaches the playhead ~50 ms
     // after it arrives); off in silence, so a quiet board costs nothing.
-    if (any || now - clock.sound < 500) requestAnimationFrame(tick);
-    else liveRunning = false;
+    if (liveRunning && !moving && now - clock.sound >= 500) liveRunning = false;
+    if (moving || liveRunning) paintSoon();
   }
+  const drawLive = () => paintWires(performance.now());
+  new MutationObserver(paintSoon).observe(layer, { subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+  new MutationObserver(paintSoon).observe(board, { attributes: true, attributeFilter: ["class"] });
+  addEventListener("resize", paintSoon);
+  addEventListener("gl-restored", paintSoon);  // (a driver reset: everything made again, painted again)
 
-  // A wire's length table, for placing points by distance along it: once per wire position.
-  function arc(we) {
-    const ts = [0], ds = [0];
-    let prev = at(we.c, 0);
-    for (let i = 1; i <= 48; i++) {
-      const p = at(we.c, i / 48);
-      ts.push(i / 48); ds.push(ds[i - 1] + Math.hypot(p.x - prev.x, p.y - prev.y)); prev = p;
-    }
-    return { ts, ds, len: ds[48], in: Math.min(EASE, ds[48] / 2), out: Math.min(EASE, ds[48] / 2) };
-  }
-
-  // Point, unit normal and swing allowance at a distance along the wire.
-  function along(we, d) {
-    const A = we.arc;
-    let lo = 0, hi = 48;  // the last table entry at or before d (a binary search: called per pixel)
-    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (A.ds[m] < d) lo = m; else hi = m - 1; }
-    const k = Math.min(47, lo);
-    const t = A.ts[k] + (A.ts[k + 1] - A.ts[k]) * ((d - A.ds[k]) / ((A.ds[k + 1] - A.ds[k]) || 1));
-    const [a, c1, c2, b] = we.c, u = 1 - t, p = at(we.c, t);
-    const dx = 3 * u * u * (c1.x - a.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (b.x - c2.x);
-    const dy = 3 * u * u * (c1.y - a.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (b.y - c2.y);
-    const l = Math.hypot(dx, dy) || 1, up = (x, w) => Math.sin(Math.min(1, Math.max(0, x) / w) * Math.PI / 2) ** 2;
-    return [p.x, p.y, -dy / l, dx / l, up(d, A.in) * up(A.len - d, A.out)];
-  }
-
-  function wave(we, r) {
-    we.arc = we.arc || arc(we);
-    const len = we.arc.len, slot = clock.head / SLOT_MS;
-    const pts = [], clipped = [];
-    let loud = 0;
-    const put = (d, v, clip) => {
-      if (d < 0 || d > len) return;
-      const [x, y, nx, ny, ease] = along(we, d), a = Math.max(-1, Math.min(1, v / 126)) * ease * LIVE_SWING;
-      if (clip) clipped.push(pts.length);
-      pts.push([x + nx * a, y + ny * a]);
-    };
-    // A slot's loudness (its strongest value), phase and clipping; nothing for a slot not heard.
-    const at = (n) => {
-      const i = n & (SLOTS - 1);
-      if (r.at[i] !== n) return null;
-      const peak = Math.max(r.hi[i], -r.lo[i]);
-      return { env: peak, ph: r.ph[i], next: r.ph[i] + step(r, i), clip: peak >= 127 };
-    };
-    // Instant (owner): the newest sound along the whole wire, its loudness the height everywhere,
-    // its pitch the wavelength, the wiggle still moving down the wire at the roll speed: the wire
-    // answers at once instead of the sound taking a second to travel its length.
-    if (S.liveInstant) {
-      const n = Math.floor(slot - 0.5), a = at(n), b = at(n - 1), c = a || b;
-      const env = Math.max(a ? a.env : 0, b ? b.env : 0);  // (two slots: no flicker between them)
-      if (!c || env < 2) return null;
-      const k = step(r, n & (SLOTS - 1)) / SLOT_PX, ph = (clock.head / SLOT_MS) * SLOT_PX * k;
-      put(0, 0);
-      for (let d = WAVE_PX / 2; d <= len; d += WAVE_PX) put(d, env * Math.sin(ph - d * k), c.clip);
-      put(len, 0);
-      loud = env;
-    } else {
-    // Points every WAVE_PX along the wire, each between two slot centres: loudness and phase
-    // eased from one to the next, so the line is smooth whatever the pitch.
-    put(0, 0);
-    for (let d = WAVE_PX / 2; d <= len; d += WAVE_PX) {
-      const s = slot - d / SLOT_PX - 0.5, n = Math.floor(s), t = s - n, a = at(n), b = at(n + 1);
-      if (!a && !b) { put(d, 0); continue; }
-      const env = (a ? a.env : 0) * (1 - t) + (b ? b.env : 0) * t;
-      const ph = a ? a.ph + (b ? b.ph - a.ph : a.next - a.ph) * t : b.ph - (1 - t) * Math.PI;
-      loud = Math.max(loud, env);
-      put(d, env * Math.sin(ph), (t < 0.5 ? a : b)?.clip);
-    }
-    put(len, 0);
-    }
-    if (loud < 2 || pts.length < 3) return null;
-    const f = (p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
-    // Clipping (owner: a smooth red glow, not flecks or steps): the wave drawn again in red
-    // through a gradient along the wire, each point's red as strong as it is near a full-scale
-    // point (a bell ~24 px either side): the red rises and falls gently, without seams.
-    let clip = null;
-    if (clipped.length) {
-      const a = pts[0], b = pts[pts.length - 1], dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy || 1;
-      const near = new Array(pts.length).fill(Infinity);  // points to the nearest clipped one: two passes
-      for (const c of clipped) near[c] = 0;
-      for (let k = 1; k < near.length; k++) near[k] = Math.min(near[k], near[k - 1] + 1);
-      for (let k = near.length - 2; k >= 0; k--) near[k] = Math.min(near[k], near[k + 1] + 1);
-      // A stop every 6 px (the bell is ~24 px: as smooth as one per point), and none inside a run
-      // of no red but its two ends: one per point, a long wire had ~400 stops set every frame
-      // (traced: the glow doubled the page's and the GPU's work).
-      const sigma = 24 / WAVE_PX, every = Math.round(6 / WAVE_PX), red = (k) => Math.exp(-((near[k] / sigma) ** 2));
-      const ks = [];
-      for (let k = 0; k < pts.length; k += every) ks.push(k);
-      if (ks.at(-1) !== pts.length - 1) ks.push(pts.length - 1);
-      const stops = ks.filter((k, i) => red(k) > 0.004 || red(ks[i - 1] ?? k) > 0.004 || red(ks[i + 1] ?? k) > 0.004)
-        .map((k) => [Math.min(1, Math.max(0, ((pts[k][0] - a[0]) * dx + (pts[k][1] - a[1]) * dy) / len2)), red(k)])
-        .sort((p, q) => p[0] - q[0]);
-      clip = { a, b, stops };
-    }
-    let d = `M${f(pts[0])}`;  // smooth: quadratic curves through the midpoints
-    for (let i = 1; i < pts.length - 1; i++) d += ` Q${f(pts[i])} ${f([(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2])}`;
-    return { d: `${d} L${f(pts[pts.length - 1])}`, clip };
-  }
-
-  function drawLive() {
-    let any = false;
+  // Paints every wire now; true while something still moves (a wave on its way, a fade, a
+  // flagged wire breathing).
+  function paintWires(now) {
+    let moving = false;
     try {
-      for (const we of Object.values(S.wireEls)) {
-        const shown = !we.ends || we.g.classList.contains("hot");  // a portal's wave only while its wire shows
-        const r = S.liveOn && !we.w.ghost && we.c && shown ? rings[we.w.from.join("|")] : null;
-        const shape = r ? wave(we, r) : null;
-        if (!shape) {
-          if (we.live) { we.live = false; we.line.setAttribute("d", we.plain); we.shadow.setAttribute("d", we.plain); we.clip?.forEach((el) => el.remove()); we.clip = null; }
-          continue;
-        }
-        // A live wave draws no shadow: on the dark board it hardly shows, and drawing it again
-        // every frame doubled the repaint (owner: live wires stuttered; traced 397 → 200 ms/s).
-        if (!we.live) we.shadow.setAttribute("d", "");
-        any = we.live = true;
-        we.line.setAttribute("d", shape.d);
-        if (shape.clip && !we.clip) {
-          const id = `${we.grad.id}c`, grad = s("linearGradient", { id, gradientUnits: "userSpaceOnUse" });
-          $("grads").append(grad);
-          we.clip = [s("path", { class: "live-clip", stroke: `url(#${id})` }), grad];
-          we.g.insertBefore(we.clip[0], we.hit);
-        }
-        if (we.clip) {
-          const [path, grad] = we.clip, c = shape.clip;
-          if (c) {
-            path.setAttribute("d", shape.d);
-            for (const [k, v] of Object.entries({ x1: c.a[0], y1: c.a[1], x2: c.b[0], y2: c.b[1] })) grad.setAttribute(k, v);
-            // The same stops kept and moved, an attribute set only when it changed: a stop changed
-            // restyles the whole page (Chrome; traced), so a still glow (Instant) costs nothing.
-            while (grad.childElementCount < c.stops.length) grad.append(s("stop", { "stop-color": "#ff5a4e" }));
-            while (grad.childElementCount > c.stops.length) grad.lastChild.remove();
-            const set = (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
-            c.stops.forEach(([t, o], k) => { set(grad.children[k], "offset", t.toFixed(4)); set(grad.children[k], "stop-opacity", o.toFixed(3)); });
-          } else { we.clip.forEach((el) => el.remove()); we.clip = null; }
-        }
+      const g = GL.context();
+      if (!g) return false;
+      const W = board.clientWidth, H = board.clientHeight, { z } = S.view, x = Math.round(S.view.x), y = Math.round(S.view.y);
+      const view = `${W} ${H} ${x} ${y} ${z}`;
+      if (wireGL.view !== view) {  // (the canvas covers the board; inside #world, so the view undone)
+        wireGL.view = view;
+        Object.assign(wireCanvas.style, { width: `${W}px`, height: `${H}px`, transform: `translate(${-x / z}px, ${-y / z}px) scale(${1 / z})` });
       }
-    } catch (e) { S.errors.push(`live: ${e}`); }
-    return any;
+      GL.fit(wireCanvas, W, H);
+      const preview = S.mode === "preview", dt = Math.min(0.1, (now - (wireGL.last || now)) / 1000), slot = clock.head / SLOT_MS;
+      wireGL.last = now;
+      const focus = board.classList.contains("focus"), pieces = [], used = new Set();
+      // Sounding: its source heard lately enough that the sound is still on its way along it.
+      const sounding = (r, reach) => r && (S.liveInstant ? slot - r.loud < 3 : (slot - r.loud - 1) * SLOT_PX < reach + EASE);
+      for (const we of Object.values(S.wireEls)) {
+        const cl = we.g.classList;
+        if (!we.c || we.g.style.display === "none") continue;
+        const hot = cl.contains("hot"), dash = DASHES[Object.keys(DASHES).find((k) => cl.contains(k))] || [0, 0];
+        // (opacity as the CSS had it, eased over ~0.15 s as its transition did)
+        const want = cl.contains("off-path") ? 0.1 : focus && !hot ? 0.22 : 1;
+        let alpha = wireGL.alpha.get(we) ?? want;
+        alpha = preview ? want : alpha + (want - alpha) * (1 - Math.exp(-dt / 0.05));
+        if (Math.abs(want - alpha) < 0.004) alpha = want; else moving = true;
+        wireGL.alpha.set(we, alpha);
+        const sel = cl.contains("selected"), failed = cl.contains("failed"), ghost = cl.contains("ghost");
+        const col = sel ? [[1, 1, 1], [1, 1, 1]] : ghost ? [[0.54, 0.54, 0.54], [0.54, 0.54, 0.54]] : failed ? [[0.88, 0.31, 0.31], [0.88, 0.31, 0.31]] : we.rgb;
+        const ring = S.liveOn && !we.w.ghost ? rings[we.w.from.join("|")] : null;
+        const flagged = cl.contains("flagged") && !preview;
+        if (flagged) moving = true;
+        const base = { col, ga: we.ga, gb: we.gb, flagged };
+        // A portal's wire shows only while it is hot (its wave with it); its stubs while it is not
+        // (owner: they carry the wave then), the entry stub as the wire's last stretch.
+        if (!we.ends || hot) {
+          const live = sounding(ring, we.arc.len);
+          pieces.push({ ...base, c: we.c, arc: we.arc, alpha: alpha * (ghost ? 0.7 : 1), hw: sel ? 1.5 : 1.25, dash, shadow: true, ring: live ? ring : null, off: 0 });
+        }
+        if (we.ends && we.stubW) we.stubW.forEach((st, i) => {
+          const off = i ? we.arc.len - st.arc.len : 0, live = !hot && sounding(ring, off + st.arc.len);
+          pieces.push({ ...base, c: st.c, arc: st.arc, alpha, hw: 1.25, dash: [0, 0], shadow: false, ring: live ? ring : null, off });
+        });
+      }
+      for (const p of pieces) if (p.ring) { used.add(p.ring); moving = true; }
+      if (wireGL.alpha.size > 4 * pieces.length + 64) wireGL.alpha.clear();  // (rebuilt wires: the old ones' forgotten)
+
+      const gl = g, fresh = wireGL.gen !== GL.gen;
+      if (fresh) { wireGL.gen = GL.gen; wireGL.rowCap = 0; wireGL.ringCap = 0; }
+      // The pieces' rows: still ones first, then those with a wave (drawn with more points).
+      pieces.sort((a, b) => !!a.ring - !!b.ring);
+      const rows = wireGL.rows.length >= pieces.length * ROW * 4 ? wireGL.rows : (wireGL.rows = new Float32Array(Math.max(64, pieces.length * 2) * ROW * 4));
+      const order = new Float32Array(pieces.length);
+      pieces.forEach((p, i) => {
+        const [a, c1, c2, b] = p.c, o = i * ROW * 4, live = !!p.ring;
+        rows.set([a.x, a.y, c1.x, c1.y, c2.x, c2.y, b.x, b.y, ...p.col[0], p.alpha, ...p.col[1], p.hw,
+                  p.arc.len, Math.max(1, Math.min(live ? SEG_LIVE : SEG_STILL, Math.ceil(p.arc.len / (live ? WAVE_PX : STILL_PX)))), live ? p.ring.row : -1, p.shadow ? 1 : 0,
+                  p.dash[0], p.dash[1], p.flagged ? 1 : 0, p.off, p.ga.x, p.ga.y, p.gb.x, p.gb.y], o);
+        rows.set(p.arc.ds, o + 28);
+        order[i] = i;
+      });
+      const res = GL.make("wires", () => ({ prog: GL.program(WIRE_VS, WIRE_FS), fill: GL.program(GL.FULL_VS, POINTS_FS),
+                                             vao: gl.createVertexArray(), inst: gl.createBuffer(), fb: gl.createFramebuffer() }));
+      if ((wireGL.rowCap || 0) < pieces.length) {
+        wireGL.rowCap = rows.length / (ROW * 4);
+        for (const t of [res.wires, res.points]) if (t) gl.deleteTexture(t);
+        res.wires = GL.texture(ROW, wireGL.rowCap);
+        res.points = GL.texture(SEG_LIVE + 1, wireGL.rowCap);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, res.wires);
+      if (pieces.length) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ROW, pieces.length, gl.RGBA, gl.FLOAT, rows, 0);
+      // The sources' rings: what changed since the last frame; all of it into a new texture.
+      const need = Math.max(1, wireGL.ringRows);
+      if (wireGL.ringCap < need) {
+        wireGL.ringCap = Math.max(8, need * 2);
+        if (res.rings) gl.deleteTexture(res.rings);
+        res.rings = GL.texture(SLOTS + 1, wireGL.ringCap);
+        for (const r of Object.values(rings)) r.dirty = [0, SLOTS - 1];
+      }
+      gl.bindTexture(gl.TEXTURE_2D, res.rings);
+      for (const r of Object.values(rings)) {
+        if (r.dirty) gl.texSubImage2D(gl.TEXTURE_2D, 0, r.dirty[0], r.row, r.dirty[1] - r.dirty[0] + 1, 1, gl.RGBA, gl.FLOAT, r.tex, r.dirty[0] * 4);
+        r.dirty = null;
+        if (!S.liveInstant || !used.has(r)) continue;
+        // Instant: the newest sound's loudness (two slots: no flicker between them), its pitch,
+        // its phase at the source and whether it clips, for the whole wire.
+        const n = Math.floor(slot - 0.5), A = r.at[n & (SLOTS - 1)] === n ? n : null, B = r.at[(n - 1) & (SLOTS - 1)] === n - 1 ? n - 1 : null;
+        const env = Math.max(...[A, B].map((m) => (m === null ? 0 : r.tex[(m & (SLOTS - 1)) * 4])));
+        const c = A ?? B, k = c === null ? 0 : step(r, c & (SLOTS - 1)) / SLOT_PX, TAU = 2 * Math.PI;
+        r.tex.set([env < 2 ? 0 : env, k, ((slot * SLOT_PX * k) % TAU + TAU) % TAU, c !== null && r.tex[(c & (SLOTS - 1)) * 4] >= 127 ? 1 : 0], SLOTS * 4);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, SLOTS, r.row, 1, 1, gl.RGBA, gl.FLOAT, r.tex, SLOTS * 4);
+      }
+      const still = pieces.findIndex((p) => p.ring), nStill = still < 0 ? pieces.length : still;
+      // Pass 1: every piece's points, moved by its sound.
+      const base = Math.floor(slot);
+      if (pieces.length) {
+        const u = res.fill.u;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, res.fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, res.points, 0);
+        gl.viewport(0, 0, SEG_LIVE + 1, pieces.length);
+        gl.disable(gl.SCISSOR_TEST); gl.disable(gl.BLEND);
+        gl.useProgram(res.fill.p);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, res.wires);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, res.rings);
+        gl.uniform1i(u.uWires, 0); gl.uniform1i(u.uRings, 1);
+        gl.uniform1i(u.uBase, base); gl.uniform1f(u.uFrac, slot - base); gl.uniform1i(u.uInstant, S.liveInstant ? 1 : 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+      // Pass 2: their shadows and lines.
+      GL.draw(wireCanvas, () => {
+        const { prog, vao, inst } = res, u = prog.u;
+        gl.useProgram(prog.p);
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+        gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribDivisor(0, 1);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, res.wires);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, res.points);
+        gl.uniform1i(u.uWires, 0); gl.uniform1i(u.uPoints, 1);
+        gl.uniform3f(u.uView, x, y, z); gl.uniform2f(u.uSize, W, H); gl.uniform1f(u.uPx, z * (devicePixelRatio || 1));
+        gl.uniform1f(u.uTime, now / 1000);
+        for (const [from, count, seg] of [[0, nStill, SEG_STILL], [nStill, pieces.length - nStill, SEG_LIVE]]) {
+          if (!count) continue;
+          gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, from * 4);
+          gl.uniform1i(u.uSeg, seg);
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, 12 * seg, count);
+        }
+        gl.bindVertexArray(null);
+      });
+    } catch (e) { S.errors.push(`wires: ${e.message || e}`); }
+    wireGL.moving = moving;
+    return moving;
   }
 
   function toggleLive() {
     S.liveOn = !S.liveOn;
     showWires();
     send({ op: "live-setting", on: S.liveOn });
-    if (!S.liveOn) { for (const k of Object.keys(rings)) delete rings[k]; drawLive(); }
+    if (!S.liveOn) { clearRings(); drawLive(); }
   }
   // The wires: Still, Flowing or Instant, one choice (owner: Instant alone did not say it needs
   // Animate). Still is Animate off; the Instant setting is kept for the next time it animates.
@@ -1750,6 +1928,11 @@ const PB = (() => {
     if (grid.dataset.gs !== String(gs)) { grid.style.backgroundSize = `${gs}px ${gs}px`; grid.dataset.gs = gs; }  // (a zoom repaints it; a pan does not)
     grid.style.transform = `translate3d(${mod(x)}px, ${mod(y)}px, 0)`;
     placeChip();
+    // (the wires now, with the view: a frame later, the world had moved and their canvas not, and
+    // a zoom or a pan jumped; owner: "zooming feels a little choppy")
+    paintWires(performance.now());
+    wireGL.synced = true;
+    paintSoon();
     if (save && S.mode !== "preview") {
       clearTimeout(viewTimer);
       viewTimer = setTimeout(() => send({ op: "view", view: S.view }), 600);
@@ -1761,6 +1944,12 @@ const PB = (() => {
     z = Math.min(1.75, Math.max(0.35, z));
     const p = toWorld(sx, sy);
     S.view = { x: sx - p.x * z, y: sy - p.y * z, z };
+    // While zooming the cards are one GPU layer, scaled, not drawn again at every step (owner: it
+    // dropped frames; each step redrew every card's text and glows); a moment after the last step
+    // they are drawn sharp at the new zoom. The wires stay sharp throughout (drawn on the GPU).
+    board.classList.add("zooming");
+    clearTimeout(S.zoomTimer);
+    S.zoomTimer = setTimeout(() => board.classList.remove("zooming"), 180);
     applyView();
   }
 
@@ -3698,6 +3887,12 @@ const PB = (() => {
     const bar = rect($("bar")), pb = rect($("problems-btn"));
     if (bar && pb && bar.right > pb.left - 8) faults.push("the bar runs into the problems button");
     for (const p of layer.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("a wire has NaN in its path");
+    // The wires are drawn on the GPU: a board with wires showing has some pixel of them lit (a
+    // page whose first paint never came drew none, and looked fine to every other check).
+    if (Object.values(S.wireEls).some((we) => we.c && we.g.style.display !== "none" && !we.ends)) {
+      const d = wireCanvas.getContext("2d").getImageData(0, 0, wireCanvas.width, wireCanvas.height).data;
+      if (!d.some((v, i) => i % 4 === 3 && v > 0)) faults.push("the wires drew nothing");
+    }
     const drawn = Object.values(S.wireEls).filter((x) => x.g.style.display !== "none").length;
     if (drawn !== visibleWires().length) faults.push(`drew ${drawn} of ${visibleWires().length} wires`);
     $("audit").textContent = JSON.stringify(faults);
@@ -4407,6 +4602,23 @@ const PB = (() => {
       $("tip").textContent = head.dataset.tip; $("tip").hidden = false;
       head.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...at }));
     },
+    errors: () => [...S.errors],  // (scripts/perf.py)
+    // The GPU lost and back (a driver reset): the wires and scopes drawn again as they were.
+    glRestore: () => {
+      const lit = (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; };
+      const all = () => [wireCanvas, ...document.querySelectorAll(".diag-display:not(.off) canvas")].map(lit);
+      setTimeout(() => {  // (the scopes drawn first)
+        const before = all(), x = GL.context().getExtension("WEBGL_lose_context");
+        x.loseContext();
+        setTimeout(() => x.restoreContext(), 100);
+        setTimeout(() => {
+          const after = all();
+          before.forEach((n, i) => { if (!after[i] || Math.abs(after[i] - n) > n * 0.5) S.errors.push(`after the GPU came back, picture ${i} lit ${after[i]} pixels, before ${n}`); });
+          if (GL.gen < 1) S.errors.push("the GPU context never came back");
+          PB.audit();
+        }, 600);
+      }, 300);
+    },
     drawCost: () => { const t = performance.now(); for (let i = 0; i < 50; i++) drawLive(); return (performance.now() - t) / 50; },
     // Live wires with made-up sound: speech, a chord, music that clips, the rest silent.
     // n: how many sources get made-up sound; clipWire: the wire whose source is the one that clips
@@ -4456,13 +4668,33 @@ const PB = (() => {
         if (got !== want) S.errors.push(`live frame: source ${k} brightness ${got}, the capture sent ${want}`);
       });
     },
+    // Live wires with sound like the owner's music (owner: real sound looked rough where the made-up
+    // tones were clean): broadband, its loudness and brightness changing every 20 ms frame, as the
+    // capture sends it; seeded, the same every time.
+    fakeMusic: (n = 99) => {
+      let seed = 3;
+      const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      [...new Set(visibleWires().map((w) => w.from.join("|")))].slice(0, n).forEach((k, s) => {
+        for (let f = 0; f < 400; f++) {
+          const vals = Int8Array.from({ length: 20 }, (_, j) => {
+            const t = (f * 20 + j) / 1000, env = 0.35 + 0.3 * Math.abs(Math.sin(t * 3 + s)) + 0.25 * rnd();
+            const x = env * (rnd() * 2 - 1);
+            const m = Math.abs(x), v = m < 0.002 ? 0 : Math.round((20 * Math.log10(m) + 54) / 54 * 126);
+            return x < 0 ? -v : v;
+          });
+          feed(k, f * 20, vals, Math.round(60 + 110 * rnd()));
+        }
+      });
+      clock.newest = clock.head = 7999;
+      drawLive();
+    },
     // The live wires at a given moment of the fake sound (frames of the README's animation).
     liveAt: (ms) => { clock.head = ms; drawLive(); },
     // The fake live wires moving (for the frame-time check): their 8 s played round, a frame each.
-    liveLoop: () => {
-      PB.debug.fakeLive();
+    liveLoop: (n) => {  // (n: how many sources sound; scripts/perf.py: all)
+      PB.debug.fakeLive(n);
       const t0 = performance.now();
-      const step = (now) => { clock.head = 2000 + ((now - t0) % 5000); drawLive(); requestAnimationFrame(step); };
+      const step = (now) => { clock.head = 2000 + ((now - t0) % 5000); paintSoon(); requestAnimationFrame(step); };
       requestAnimationFrame(step);
     },
     missingMenu: (key) => {
