@@ -474,8 +474,7 @@ const PB = (() => {
     render();
   }
   // ---- diagnostic cards (PLAN §8d): Waveform, Stereo; drawn by diag.js, on their own -------
-  // Their edge: a dashed line in the app icon's teal-to-orange (owner's pick D), an SVG over the
-  // card sized by CSS (the gradient is #diag-edge in index.html, spanning each card).
+  // Their edge: a dashed line in silver (owner), an SVG over the card sized by CSS.
   function diagFrame() {
     const svg = s("svg", { class: "diag-frame", "aria-hidden": "true" });
     svg.append(s("rect", { class: "diag-edge" }));

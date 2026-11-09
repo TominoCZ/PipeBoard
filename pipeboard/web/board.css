@@ -897,14 +897,14 @@ button { font: inherit; color: inherit; }
 .eng .chip-state:disabled { cursor: progress; }
 .eng .chip-state.pending { border-style: dashed; border-color: var(--hardware); }
 
-/* Diagnostic cards (PLAN §8d; owner's pick D): a dashed edge in the app icon's teal to orange, the
-   outline itself faint; the display a canvas on its own layer (contain + will-change), drawn by
+/* Diagnostic cards (PLAN §8d; owner's pick D): a dashed edge in silver (owner: not the two colours
+   it had), the outline itself faint; the display a canvas on its own layer (contain + will-change), drawn by
    diag.js alone, so a frame repaints that canvas only, never the board (owner). */
 .card.k-diag::before { border-color: rgba(255, 255, 255, 0.07); border-width: 1px; }
 .diag-frame { position: absolute; left: -1px; top: -1px; width: calc(100% + 2px); height: calc(100% + 2px);
   overflow: visible; pointer-events: none; z-index: 1; }  /* (the outline's layer: under the socket dots, 2) */
 .diag-edge { x: 1px; y: 1px; width: calc(100% - 2px); height: calc(100% - 2px); rx: 11px; fill: none;
-  stroke: url(#diag-edge-grad); stroke-width: 2px; stroke-dasharray: 7 5; }
+  stroke: #b4b9c1; stroke-width: 2px; stroke-dasharray: 7 5; }
 .tip.k-diag, .tip-end.k-diag { --c: var(--diag); }
 .diag-row { margin: -14px 12px 12px; }  /* (up under IN as the EQ's curve: owner, a smaller gap) */
 .diag-row .card-foot { margin: 8px 0 0; }
