@@ -13,6 +13,7 @@ import functools  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import time  # noqa: E402
 
 import scenarios  # noqa: E402
 
@@ -1668,6 +1669,35 @@ async def check_denoise(board, page, next_state):
     assert all(c["key"] != key for c in state["model"]["cards"]), "its nodes are gone"
 
 
+async def check_drops_at_once(tmp: Path):
+    """A dropout is counted the moment the interface's count moves (owner: the Counter and the
+    Dropouts problem waited for the next whole second), not once a second; nothing is counted
+    between the seconds while the count stands still."""
+    from pipeboard import pipewire, server
+
+    class LiveLike(pipewire.Fixture):
+        mode = "live"
+
+    board = server.Board(LiveLike(scenarios.load("machine")), tmp)
+    total, counted = [0], []
+    board.audible = lambda: {"iface": total[0]}
+    board.count_second = lambda errors, settling: counted.append((time.monotonic(), errors["iface"])) or False
+    real = server.engine.node_errors
+    server.engine.node_errors = lambda: asyncio.sleep(0, {})
+    task = asyncio.create_task(board.watch_errors())
+    try:
+        await asyncio.sleep(0.35)
+        assert len(counted) <= 1, f"nothing new, counted once at most (the first look): {counted}"
+        before, t = len(counted), time.monotonic()
+        total[0] = 1
+        await asyncio.sleep(0.25)
+        new = counted[before:]
+        assert new and new[0][1] == 1 and new[0][0] - t < 0.2, new
+    finally:
+        task.cancel()
+        server.engine.node_errors = real
+
+
 def check_portals():
     """Portals (board-only): set by hand and by Tidy (with its badges' spots, or None beside the
     socket); a Tidy's own replaced by the next Tidy, the user's kept; junk refused; kept in the
@@ -2760,6 +2790,8 @@ def main():
     check_delete_races()
     check_aligned()
     check_portals()
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_drops_at_once(Path(tmp)))
     check_deesser()
     check_true_bypass()
     check_one_pw_cli()

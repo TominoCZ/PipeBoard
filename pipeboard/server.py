@@ -47,6 +47,7 @@ FILTERS = ("eq", *dynamics.KINDS)
 RUNS_WITH = ("plugin", *FILTERS)
 HEAD_EVERY_S, HEAD_KEEP = 0.5, 120  # Buffer headroom: one low per half second, a minute kept
 SETTLE_DROPS_S = 30  # dropouts just after an engine change or a device made: its own, not counted
+ERRORS_EVERY_S = 0.1  # dropouts looked for this often (owner: counted as they happen)
 SETTLE_CAPTURE_S = 5  # and just after the live wires' capture started or took new wires in
 TRIAL_S = 60  # a new audio engine setting is kept only if Keep is pressed within this
 BACK_SHOWN_S = 2.5  # how long the bar says the interface is back, before the trial's own
@@ -1571,29 +1572,37 @@ class Board:
                      f"{low:.2f} ms" if low is not None else "not measured")
 
     async def watch_errors(self) -> None:
-        """Every second each card's dropout count, a minute of it kept: the Dropouts problem (owner:
-        it must show as they happen; pw-top takes ~3 ms). A node made again counts from 0: its
-        history starts over. Never raises."""
+        """Each card's dropout count, a minute of it kept: the Dropouts problem and the Counters
+        (owner: they must show as they happen). The counts themselves are live (the headroom
+        sampler's restarts, the journal's resyncs): looked at every 0.1 s and counted the moment
+        they move; once a second, the rest (pw-top ~3 ms, the CPU sample, the GPU evidence, the
+        minute sliding on). A node made again counts from 0: its history starts over. Never raises."""
         seen: dict[str, list] = {}
-        tick = 0
+        tick, last = 0, None
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(ERRORS_EVERY_S)
             tick += 1
-            if tick % 60 == 0:
+            second = tick % round(1 / ERRORS_EVERY_S) == 0
+            if tick % round(60 / ERRORS_EVERY_S) == 0:
                 note_open_files()
             if self.source.mode != "live" or self.closing:
                 continue
+            if not second and self.audible() == last:
+                continue  # nothing new between the seconds
             try:
-                self.note_close_calls(await engine.node_errors())
+                if second:
+                    self.note_close_calls(await engine.node_errors())
+                    self.moment.read()  # (the same second pw-top just counted)
                 errors, now = self.audible(), time.monotonic()
-                self.moment.read()  # (the same second pw-top just counted)
+                last = errors
                 if now < self.settling:  # an engine change's own burst: counted afresh after
                     seen.clear()
                 recent = {} if now < self.settling else {
                     c["key"]: n for c in heard(self.model)
                     if (n := last_minute(seen, c, errors, now))}
                 counted = self.count_second(errors, now < self.settling)
-                self.sample_gpu(errors, now < self.settling)
+                if second:
+                    self.sample_gpu(errors, now < self.settling)
                 if recent != self.dropped or counted:
                     self.dropped = recent
                     await self.broadcast(self.state())
@@ -1602,10 +1611,12 @@ class Board:
                 log.exception("dropouts: could not count")
 
     async def watch_drops(self) -> None:
-        """Every 2 s, each card's dropouts since the panel opened (summed over its nodes), sent to
-        the pages that show it (owner: a live drop counter on devices). Nothing runs while no
-        panel is open. A node made again starts its count afresh: the start follows it down."""
+        """Each card's dropouts since the panel opened (summed over its nodes), sent to the pages
+        that show it the moment they change (owner: as they happen; it was every 2 s), and at once
+        to a page that just opened it. Nothing runs while no panel is open. A node made again
+        starts its count afresh: the start follows it down."""
         start: dict[str, int] = {}
+        sent, served = None, set()
         try:
             while self.drop_pages:
                 errors = self.audible() if self.source.mode == "live" else {}
@@ -1618,10 +1629,13 @@ class Board:
                         start[c["key"]] = min(start.get(c["key"], sum(mine)), sum(mine))
                         counts[c["key"]] = sum(mine) - start[c["key"]]
                 text = json.dumps({"type": "drops", "counts": counts})
-                for page in list(self.drop_pages):
+                served &= self.drop_pages
+                for page in [p for p in self.drop_pages if text != sent or p not in served]:
+                    served.add(page)
                     with contextlib.suppress(ConnectionError, RuntimeError):
                         await page.send_str(text)
-                await asyncio.sleep(2.0)
+                sent = text
+                await asyncio.sleep(ERRORS_EVERY_S)
         finally:
             self.drops_task = None
 
