@@ -64,8 +64,8 @@ class Board:
         # This board's id, tagged on everything it makes: made once and kept in its settings (a
         # hash of the folder's path changed when the folder moved, and orphaned its devices).
         devices.BOARD = self.settings.get("board") or secrets.token_hex(5)
-        # Links made around EQs/plugins at the last quit; at launch: (those effects, the link ids),
-        # unlinked once every one of them is back and wired.
+        # Links made around EQs/plugins at the last quit; at launch: (the effects a wire goes
+        # around, its link ids, its two ends), unlinked once those are back and wired.
         self.around, self.around_wait = self.ws.pop("around", []), []
         self.model: dict = {"cards": [], "wires": [], "clock": None}
         self.pages: set[web.WebSocketResponse] = set()
@@ -383,6 +383,11 @@ class Board:
     # ---- PipeBoard's own virtual devices (M6) -------------------------------------------------
     async def wire_arrivals(self) -> bool:
         """A device being made has appeared: make its saved links before anything forgets them."""
+        # The links made around the effects at the last quit: tried at every look, not only when a
+        # device arrives (owner: all sound doubled, +6 dB, until a restart: they stayed, the sound
+        # going both around the effects and through them).
+        if self.around_wait:
+            await self.close_around()
         ready = {k for k in self.waiting & set(self.model.get("present", []))
                  if self.new_node(k) and self.sockets_up(k)}
         if not ready:
@@ -410,15 +415,21 @@ class Board:
         return True
 
     async def close_around(self) -> None:
-        """At launch: the links made around the EQs and plugins go only once every one of them is
-        back and wired (the EQ comes up in a moment, a plugin host takes about a second: going
-        early left the chain open in between)."""
-        here = set(self.model.get("present", []))
-        for keys, links in list(self.around_wait):
-            if keys <= here and not keys & self.waiting:
-                self.around_wait.remove((keys, links))
+        """At launch: a link made around EQs and plugins goes only once the ones it goes around are
+        back and the sound goes through them again: a wire from its start into one of them and one
+        from them to its end (the EQ comes up in a moment, a plugin host takes about a second:
+        going early left the chain open in between; never: the sound doubled, owner)."""
+        here, live = set(self.model.get("present", [])), self.model["wires"]
+        for item in list(self.around_wait):
+            keys, links, a, b = item
+            through = any(w["from"][0] == a and w["to"][0] in keys for w in live) \
+                and any(w["to"][0] == b and w["from"][0] in keys for w in live)
+            if keys <= here and not keys & self.waiting and through:
+                self.around_wait.remove(item)
                 for link in links:
                     await self.source.unlink(link)
+                log.info("back: the sound no longer goes around %s (%d links)",
+                         sorted(keys), len(links))
 
     def new_node(self, key: str) -> bool:
         """A device made again (a rename) is back only as its new node. A snapshot can still show
@@ -1149,7 +1160,7 @@ class Board:
                   and (e := await self.make(key))]  # the profile's own devices, made again
         await self.apply_settings(present)
         plan = profiles.plan(self.ws, self.model)
-        waiting = {lid for _, links in self.around_wait for lid in links}  # still carry the sound
+        waiting = {lid for _, links, _, _ in self.around_wait for lid in links}  # (carry the sound)
         plan["remove"] = [r for r in plan["remove"] if r["link"] not in waiting]
         applied = await self.apply(plan)  # the wiring, even if a device failed to be made
         return errors[0] if errors else applied
@@ -2072,7 +2083,7 @@ class Board:
                 outs, ins = self._socket(w["from"], "outputs"), self._socket(w["to"], "inputs")
                 for i, j in w["pairs"]:
                     await self.source.link(outs[i], ins[j])
-            self.ws["around"] = [{**w, "through": sorted(through)} for w in wires]
+            self.ws["around"] = wires  # (each with the effects it goes around: graph.around)
             self.persist()
             log.info("quitting: routed around %s with %d wires", sorted(through), len(wires))
         except Exception:  # noqa: BLE001 - quitting must go on
@@ -2088,7 +2099,10 @@ class Board:
             links = [lid for lid, pair in zip(live["links"], live["pairs"], strict=True)
                      if list(pair) in w["pairs"]] if live else []
             if links:
-                self.around_wait.append((set(w["through"]), links))
+                self.around_wait.append((set(w["through"]), links, w["from"][0], w["to"][0]))
+        if self.around_wait:
+            log.info("launch: %d wires around effects, each removed once they are back",
+                     len(self.around_wait))
 
     async def disconnect(self, wire_id) -> str | None:
         wire = next((w for w in self.model["wires"] if w["id"] == wire_id), None)

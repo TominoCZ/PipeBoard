@@ -1984,7 +1984,8 @@ async def check_route_around():
     with tempfile.TemporaryDirectory() as tmp:
         fixture, board = await effects_chain(tmp)
         assert graph.around(board.model, {"pb:deqq", "pb:dplug"}) == [
-            {"from": ["music_player", "out"], "to": ["desktop_mix", "in"], "pairs": [[0, 0], [1, 1]]}]
+            {"from": ["music_player", "out"], "to": ["desktop_mix", "in"], "pairs": [[0, 0], [1, 1]],
+             "through": ["pb:deqq", "pb:dplug"]}]
         await board.route_around()  # quitting
         wires = {w["id"] for w in graph.build(fixture.dump)["wires"]}
         assert "music_player:out>desktop_mix:in" in wires, "the sound goes around them"
@@ -2000,6 +2001,26 @@ async def check_route_around():
         assert "music_player:out>desktop_mix:in" not in wires, "the way around is gone again"
         assert "around" not in again.ws
     await check_relaunch_with_profile()
+
+
+def check_around_each():
+    """Each wire around the effects waits only for the ones it goes around (owner: all sound doubled
+    until a restart: every way around waited for every effect, so one that did not come back, or
+    was gone for a moment, kept the sound going both around and through everywhere)."""
+    from pipeboard import eq, pipewire
+    fx = pipewire.Fixture(scenarios.load("machine"))
+    for i in ("a", "b"):
+        asyncio.run(fx.create({**eq.new(f"EQ {i}"), "id": f"eq{i}", "node": f"pb_eq_{i}"}))
+    cards = {c["key"]: c for c in graph.build(fx.dump)["cards"]}
+    for w in graph.build(fx.dump)["wires"]:
+        if w["id"] in ("music_player:out>desktop_mix:in", "music_mix:out>stream_mix:in"):
+            for link in w["links"]:
+                asyncio.run(fx.unlink(link))
+    for a, b in [("music_player", "pb:eqa"), ("pb:eqa", "desktop_mix"), ("music_mix", "pb:eqb"), ("pb:eqb", "stream_mix")]:
+        for p, q in graph.pair(cards[a]["outputs"][0]["ports"], cards[b]["inputs"][0]["ports"]):
+            asyncio.run(fx.link(p, q))
+    ways = {(w["from"][0], w["to"][0]): w["through"] for w in graph.around(graph.build(fx.dump), {"pb:eqa", "pb:eqb"})}
+    assert ways == {("music_player", "desktop_mix"): ["pb:eqa"], ("music_mix", "stream_mix"): ["pb:eqb"]}, ways
 
 
 async def check_relaunch_with_profile():
@@ -2806,6 +2827,7 @@ def main():
     check_gain_math()
     check_virtual_source()
     check_profiles()
+    check_around_each()
     check_latency(model)
     check_dropouts()
     check_moment()

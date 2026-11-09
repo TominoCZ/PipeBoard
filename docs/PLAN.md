@@ -434,6 +434,17 @@ EQ/plugin they went around is back and wired (a plugin host takes about a second
 Live: tone → EQ → Hum Remover → recorder, quit, relaunch: no quiet 50 ms window, chain back,
 no unsaved changes.
 
+**All sound doubled until a restart** (owner, 2026-11-09, after starting a film in Stremio: every
+app showed "Doubled +6", +6 dB, fixed by restarting PipeBoard). The links around the effects stayed
+in place: removal was tried only when a device being made arrived, and every way around waited for
+every effect, so one missing at that moment kept the sound going both around and through
+everywhere, with nothing trying again. Now each way around carries the effects it goes around
+(`graph.around` → `through`) and waits for those alone; it goes only once the sound flows through
+them again (a wire from its start into one of them and one from them to its end), and it is
+tried at every look at the graph. Launch and removal are logged ("launch: N wires around
+effects", "back: the sound no longer goes around …"). Not proven to be what happened that night
+(the log said nothing then); it is the one path found that leaves exactly that state.
+
 An EQ's nodes appear a moment before their ports (a plugin host's too): a device now counts as
 arrived for its wires only once the sockets they use exist (or after 5 s), and its wires stay on
 the board while it is on its way — wiring it at first sight left its wires unmade and forgotten,

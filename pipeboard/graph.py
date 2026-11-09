@@ -447,21 +447,30 @@ def around(model: dict, through: set[str]) -> list[dict]:
     """Wires that carry the sound around the cards in `through` (EQs, plugins) as if they were not
     there: every link into one, followed through it and through any others after it, to the first
     card that is not one. For when PipeBoard quits and they stop (user: quitting went
-    silent; like Easy Effects turned off). Grouped as wires: {from, to, pairs}."""
+    silent; like Easy Effects turned off). Grouped as wires: {from, to, pairs, through}, through:
+    the cards that wire goes around (it waits for those alone when they come back)."""
     where, socks = _places(model)
     edges = [(socks[tuple(w["from"])][i], socks[tuple(w["to"])][j]) for w in model["wires"]
              if tuple(w["from"]) in socks and tuple(w["to"]) in socks for i, j in w["pairs"]]
     passes = _passes(model, through)
 
-    def ends(port: int, seen: frozenset) -> list[int]:
+    def ends(port: int, seen: frozenset, cards: frozenset) -> list[tuple[int, frozenset]]:
         nxt = [i for out in passes.get(port, []) for o, i in edges if o == out]
-        return [e for i in nxt for e in ([i] if where[i][0] not in through
-                                          else ends(i, seen | {i}) if i not in seen else [])]
+        found = []
+        for i in nxt:
+            if where[i][0] not in through:
+                found.append((i, cards))
+            elif i not in seen:
+                found += ends(i, seen | {i}, cards | {where[i][0]})
+        return found
 
     wires: dict[tuple, set] = defaultdict(set)
+    via: dict[tuple, set] = defaultdict(set)
     for o, i in edges:
         if where[o][0] not in through and where[i][0] in through:
-            for end in ends(i, frozenset({i})):
-                wires[(where[o][:2], where[end][:2])].add((where[o][2], where[end][2]))
-    return [{"from": list(a), "to": list(b), "pairs": sorted(map(list, p))}
-            for (a, b), p in wires.items()]
+            for end, cards in ends(i, frozenset({i}), frozenset({where[i][0]})):
+                key = (where[o][:2], where[end][:2])
+                wires[key].add((where[o][2], where[end][2]))
+                via[key] |= cards
+    return [{"from": list(a), "to": list(b), "pairs": sorted(map(list, p)),
+             "through": sorted(via[(a, b)])} for (a, b), p in wires.items()]
