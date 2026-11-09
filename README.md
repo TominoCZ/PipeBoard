@@ -29,15 +29,16 @@ plugins to any signal path.
 ## Portals
 
 Long boards fold into rows with **Tidy**. A wire between rows becomes a pair of lettered portals,
-so it doesn't cross the whole board. The arrow on each badge shows which way the sound goes.
+so it doesn't cross the whole board. An output that feeds several inputs keeps one letter and one
+badge for all of them. The arrow on each badge shows which way the sound goes.
 
-![The board tidied into two rows, wires between them hidden behind portals A, B and C](docs/images/portals.png)
+![The board tidied into two rows, wires between them hidden behind portals A to D](docs/images/portals.png)
 
-Hover a portal, or either card, to see its whole wire. Right-click any wire to make it a portal
+Hover a portal, either card, or a group the card is in, to see its whole wire. Right-click any wire to make it a portal
 yourself. Folding is off until you turn on **Portals** in Tidy's menu (the arrow next to it). Portals only change the drawing; the
 sound still goes straight from A to B.
 
-![Portal B hovered: its wire from the Limiter to the interface shows with its sound, the rest dim](docs/images/portals-hover.gif)
+![Portal B hovered: its wire from Music Mix to Stream Mix shows with its sound, the rest dim](docs/images/portals-hover.gif)
 
 ## Effects
 
