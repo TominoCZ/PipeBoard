@@ -1356,7 +1356,8 @@ hidden, Portals on, tidied). Animations step the page's fake wire sound through 
 (`PLAIN` in the script: the interface, the pedal, games and apps renamed) and Show latency on. The diagnostic pictures play a few seconds of real
 music recorded passively from the owner's Waveform card (`.dev/readme-sound.raw`, not kept in
 git). The owner's `diag.mp4` gets a GIF preview: GitHub does not play a video file from the
-repository, so the README links the preview to it.
+repository, so the README links the preview to it. Four Chromes take the pictures at once, the
+two GIFs in different ones (one after another: 84 s, nearly all a still's 2.2 s wait; now ~35 s).
 
 UI work is seen, not guessed. `./run.sh shots` renders the page in headless Chrome for each
 scenario (board, small window, Pedal loop, problems open, wire being dragged, wire selected, add
@@ -1366,7 +1367,20 @@ cards off screen, text clipped, menus or hints leaving the window, bar running i
 button, NaN in a wire, wires not drawn (no pixel of the wire canvas lit), console errors. Exit
 code = faulty shots. Chrome draws with SwiftShader as its whole GPU (`--use-angle=swiftshader`),
 so the WebGL pictures render; with `--disable-gpu` each copy into a canvas was read back and a
-scope's panel took 9 s, not 3. A shot Chrome hangs on is tried once more, then a fault.
+scope's panel took 9 s, not 3. **Fast** (owner: "shouldn't those be pretty much instant?"): six
+Chromes stay open for the whole run (Playwright), two shots at a time in each, every shot a fresh
+context whose one load gives both its picture and its audit; 210 shots in ~62 s, not 242 (a
+Chrome per picture and another per audit, ~1.2 s each to start and load, were most of it). One
+Chrome's GPU process draws all its pages' WebGL, so several, not one with many pages (16 in one:
+slower, and the scopes starved). Real time: each shot settles 1.5 s, waits (4 s at most) until its
+pictures have drawn (`PB.drawn`: the wires and every scope that heard sound; under load a scope's
+first frame came up to 3 s late; one that never draws is a fault), and is audited again as it is
+pictured. A shot that needs longer says so (`window.PB_WAIT`, as `gl-restore` and the stereo
+centre check do, waiting for draws, not set times). Not Chrome's virtual time: through
+Playwright a page whose virtual time ran out never painted again. The page is laid out at the
+shot's full size (the old command-line Chrome laid out 87 px less than the picture it saved). A
+shot that fails or hangs is tried once more, then a fault. From here the run is CPU-bound
+(SwiftShader draws on the CPU).
 `./run.sh perf` measures what drawing costs: headless Chrome on the real GPU, each scene animating
 with made-up sound, CPU of every Chrome process, the page's own thread, frame intervals;
 `--uncapped` draws without vsync, for the fps it could reach.

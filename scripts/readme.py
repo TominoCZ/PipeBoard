@@ -11,6 +11,7 @@ import json
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image
@@ -146,7 +147,7 @@ def take(browser, name: str, page: Path, how: tuple) -> None:
     elif how[0] == "panel":
         pg.locator(how[2]).first.screenshot(path=str(out))
     else:  # each frame the wires' sound at an exact moment (PB.debug.liveAt), so the motion is even
-        tmp, frames, step = Path("/tmp/pb-readme-frames"), [], 1 / how[3]
+        tmp, frames, step = Path(f"/tmp/pb-readme-frames-{name.replace('/', '-')}"), [], 1 / how[3]
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir()
         for i in range(round(how[2] * how[3])):
@@ -174,12 +175,20 @@ def main() -> None:
     names = sys.argv[1:] or [*SHOTS, "video"]
     # (the pages first: building one runs the server's own loop, which Playwright's would block)
     pages = {n: page_for(n, *SHOTS[n][:3]) for n in names if n in SHOTS}
-    with sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=shots._chrome(), args=["--allow-file-access-from-files"])
-        for name in names:
-            if name in SHOTS:
+    # A few Chromes at once, the two GIFs (~14 s each) in different ones: taken one after another,
+    # the pictures were 84 s, nearly all waiting (a still's 2.2 s, as the scopes fill with music).
+    # Not more: a busy machine gives the scopes fewer frames, and they draw less.
+    todo = [n for n in names if n in SHOTS]
+    todo.sort(key=lambda n: SHOTS[n][3][0] != "gif")
+
+    def run(chunk: list) -> None:
+        with sync_playwright() as p:  # (one per thread: Playwright's sync API keeps to its own)
+            browser = p.chromium.launch(executable_path=shots._chrome(), args=["--allow-file-access-from-files"])
+            for name in chunk:
                 take(browser, name, pages[name], SHOTS[name][3])
-        browser.close()
+            browser.close()
+    with ThreadPoolExecutor(4) as pool:
+        list(pool.map(run, [todo[i::4] for i in range(4)]))
     if "video" in names:
         video_gif()
 

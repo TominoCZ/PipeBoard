@@ -66,5 +66,5 @@ Linux plugins only: Windows `.dll`/`.vst3` plugins would need Carla's Wine bridg
 
 | Dependency | Package | Used for |
 |---|---|---|
-| Headless Chrome/Chromium | as above | `./run.sh shots` |
+| Headless Chrome/Chromium, driven by Playwright (`uv run --with playwright`, fetched on first use) | as above | `./run.sh shots`, `scripts/readme.py` |
 | `ruff` (via `uvx`) | `uv` | Lint |

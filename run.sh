@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 command -v uv >/dev/null || { echo "run.sh: uv is not installed: https://docs.astral.sh/uv/" >&2; exit 1; }
 case "${1:-}" in
-  shots) shift; exec uv run python scripts/shots.py "$@" ;;
+  shots) shift; exec uv run --with playwright python scripts/shots.py "$@" ;;
   check) shift; exec uv run python tests/check.py "$@" ;;
   perf) shift; exec uv run python scripts/perf.py "$@" ;;
 esac

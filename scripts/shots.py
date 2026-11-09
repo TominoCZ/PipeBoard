@@ -6,20 +6,18 @@
     ./run.sh shots --list          what there is
     ./run.sh shots icon            the app and tray icons at every size -> .dev/shots/icon.png
 
-No server and no PipeWire: each page is index.html with the scenario's model injected as
-window.PB_BOOT, plus a line of JS ("after") that puts the UI in a state (a menu open, a wire
-being dragged...). The page audits itself (cards overlapping, text clipped, things off screen,
+Six Chromes stay open for the run (Playwright, fetched by `uv run --with playwright`), two
+shots at a time in each, a fresh context per shot. No server and no PipeWire: each page is
+index.html with the scenario's model injected as window.PB_BOOT, plus a line of JS ("after")
+that puts the UI in a state (a menu open, a wire being dragged...). The page audits itself (cards overlapping, text clipped, things off screen,
 console errors) and the faults are printed; the exit code is the number of faulty shots.
 Look at the PNGs after every visual change.
 """
 
+import contextlib
 import json
-import re
 import shutil
-import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
-from html import unescape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -619,34 +617,77 @@ def _chrome() -> str:
     sys.exit("shots: needs google-chrome or chromium")
 
 
-def _run(chrome: str, size: tuple, page: Path, *flags: str) -> str:
-    # (WebGL through SwiftShader as the whole GPU, the page's canvases with it: with --disable-gpu
-    # each copy into a canvas was read back, and a scope's panel took 9 s, not 3)
-    cmd = [chrome, "--headless=new", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars", "--no-first-run",
-           f"--user-data-dir={OUT / 'profile'}-{page.stem}", f"--window-size={size[0]},{size[1]}",
-           "--virtual-time-budget=1500", "--force-device-scale-factor=1", *flags, page.as_uri()]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+# (WebGL through SwiftShader as the whole GPU, the page's canvases with it: with --disable-gpu
+# each copy into a canvas was read back, and a scope's panel took 9 s, not 3)
+FLAGS = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars"]
+# Chromes kept open for the whole run, each shot a fresh context in one (its own storage, as a
+# profile of its own was), its picture and its audit from the same load: a Chrome per picture and
+# another per audit, ~1.2 s each to start and load, were most of a run's 4 minutes. Several
+# Chromes, not one: one Chrome's GPU process draws every page's WebGL, and 16 pages in one
+# starved the scopes. Measured on the owner's 16 cores (210 shots): 1 Chrome × 8 pages 96 s,
+# 4 × 2 76 s, 6 × 2 62 s, 8 × 2 57 s with a stereo shot faulting (the run is CPU-bound by then:
+# SwiftShader draws on the CPU, and a scope starved of frames draws too little).
+# Real time, not --virtual-time-budget: through Playwright a page whose virtual time ran out
+# never painted again. SETTLE_MS: as long as the budget was; 1 000 faulted the stereo shots.
+BROWSERS, PER_BROWSER, SETTLE_MS = 6, 2, 1500
 
 
-def shoot(chrome: str, name: str) -> tuple[str, list[str]]:
-    size = SHOTS[name][1]
-    page = _page(name)
-    # (once more if Chrome hangs: under a heavy load a page drawing on SwiftShader now and then
-    # never finished its virtual time; twice, it is a fault, not the end of the run)
-    for attempt in (1, 2):
-        try:
-            _run(chrome, size, page, f"--screenshot={OUT / (name + '.png')}")
-            dom = _run(chrome, size, page, "--dump-dom")
-            break
-        except subprocess.TimeoutExpired:
-            if attempt == 2:
-                return name, ["Chrome timed out drawing it, twice"]
-    found = re.search(r'<pre id="audit"[^>]*>(.*?)</pre>', dom, re.S)
-    faults = json.loads(unescape(found.group(1))) if found else ["the page wrote no audit"]
-    return name, faults
+async def _open(browser, size: tuple, page: Path):
+    ctx = await browser.new_context(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1)
+    pg = await ctx.new_page()
+    await pg.goto(page.as_uri(), timeout=20000)
+    return ctx, pg
 
 
-def sheet(chrome: str, names: list[str], title: str = "sheet") -> None:
+async def _shoot(browser, name: str, page: Path) -> list[str]:
+    ctx, pg = await _open(browser, SHOTS[name][1], page)
+    try:
+        await pg.wait_for_timeout(SETTLE_MS)
+        await pg.evaluate("window.PB_WAIT")  # (a shot that takes longer says so: PB.debug.glRestore)
+        # Its pictures drawn (a busy machine's first scope frame came up to 3 s late); one never
+        # drawn, the audit says so. Audited again as it is pictured (its first audit, 200 ms in,
+        # can come before that first frame).
+        from playwright.async_api import TimeoutError as PlaywrightTimeout  # (here: perf.py imports this file without it)
+        with contextlib.suppress(PlaywrightTimeout):
+            await pg.wait_for_function("PB.drawn()", polling=100, timeout=4000)
+        audit = await pg.evaluate("PB.audit(), document.getElementById('audit').textContent")
+        await pg.screenshot(path=str(OUT / f"{name}.png"), timeout=20000)
+        return json.loads(audit)
+    finally:
+        await ctx.close()
+
+
+async def _shoot_all(pages: dict) -> list[tuple[str, list[str]]]:
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browsers = await asyncio.gather(*(p.chromium.launch(executable_path=_chrome(), args=FLAGS) for _ in range(BROWSERS)))
+        gates = [asyncio.Semaphore(PER_BROWSER) for _ in browsers]
+
+        async def one(i: int, name: str) -> tuple[str, list[str]]:
+            # (once more if it hangs: under a heavy load SwiftShader now and then never finished a
+            # page; twice, it is a fault, not the end of the run)
+            async with gates[i % BROWSERS]:
+                for attempt in (1, 2):
+                    try:
+                        return name, await asyncio.wait_for(_shoot(browsers[i % BROWSERS], name, pages[name]), 45)
+                    except Exception as e:  # noqa: BLE001  (any failure is this shot's fault, not the run's)
+                        if attempt == 2:
+                            return name, [f"the shot failed twice: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"]
+        results = await asyncio.gather(*(one(i, n) for i, n in enumerate(pages)))
+        await asyncio.gather(*(b.close() for b in browsers))
+    return results
+
+
+async def _picture(size: tuple, page: Path, out: Path) -> None:
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(executable_path=_chrome(), args=FLAGS)
+        ctx, pg = await _open(browser, size, page)
+        await pg.screenshot(path=str(out))
+        await browser.close()
+
+
+def sheet(names: list[str], title: str = "sheet") -> None:
     """All shots on one page, screenshotted: one image to look at."""
     tiles = "".join(f'<figure><img src="{n}.png"><figcaption>{n}</figcaption></figure>'
                     for n in names)
@@ -655,10 +696,10 @@ def sheet(chrome: str, names: list[str], title: str = "sheet") -> None:
                     "display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:10px}"
                     "img{width:100%;display:block}figure{margin:0}</style>" + tiles)
     rows = -(-len(names) // 3)
-    _run(chrome, (1800, rows * 380 + 20), page, f"--screenshot={OUT / (title + '.png')}")
+    asyncio.run(_picture((1800, rows * 380 + 20), page, OUT / f"{title}.png"))
 
 
-def icon(chrome: str) -> None:
+def icon() -> None:
     """The app and tray icons at the sizes a desktop uses, on a dark and a light panel."""
     sizes = (16, 22, 24, 32, 48, 64, 128, 256)
     rows = "".join(
@@ -667,7 +708,7 @@ def icon(chrome: str) -> None:
         + "</div>" for name in ("icon", "tray") for bg in ("#1b1b1b", "#eff0f1"))
     page = OUT / "icon.html"
     page.write_text(f"<body style='margin:0'>{rows}</body>")
-    _run(chrome, (760, 1180), page, f"--screenshot={OUT / 'icon.png'}")
+    asyncio.run(_picture((760, 1180), page, OUT / "icon.png"))
     print(f"icon         {OUT / 'icon.png'}")
 
 
@@ -675,7 +716,7 @@ def main() -> int:
     args = sys.argv[1:]
     if args == ["icon"]:
         OUT.mkdir(parents=True, exist_ok=True)
-        icon(_chrome())
+        icon()
         return 0
     if "--list" in args:
         print("\n".join(SHOTS))
@@ -688,19 +729,16 @@ def main() -> int:
     if unknown:
         sys.exit(f"shots: unknown {unknown}; try --list")
     (OUT / "pages").mkdir(parents=True, exist_ok=True)
-    chrome = _chrome()
-    with ThreadPoolExecutor(4) as pool:
-        results = list(pool.map(lambda n: shoot(chrome, n), names))
+    # (the pages first: building one runs the server's own event loop, which can't run inside one)
+    results = asyncio.run(_shoot_all({n: _page(n) for n in names}))
     for name, faults in results:
         print(f"{'FAULT' if faults else 'ok   '} {name:<12} {OUT / (name + '.png')}")
         for f in faults:
             print(f"        - {f}")
     if len(names) > 1:
         title = groups[0] + "-sheet" if len(groups) == 1 and len(args) == 1 else "sheet"
-        sheet(chrome, names, title)
+        sheet(names, title)
         print(f"sheet        {OUT / (title + '.png')}")
-    for p in OUT.glob("profile-*"):
-        shutil.rmtree(p, ignore_errors=True)
     return sum(1 for _, f in results if f)
 
 

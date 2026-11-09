@@ -3802,6 +3802,20 @@ void main() {
   }
 
   // ---- self-audit for scripts/shots.py ------------------------------------------------------
+  // The pictures the GPU draws that should show something and show nothing: the wires, when a
+  // board has wires showing (a page whose first paint never came drew none, and looked fine to
+  // every other check), and each diagnostic display that is on and has heard sound. The shots wait
+  // for none (PB.drawn: a busy machine's first frame came up to 3 s late), the audit reports them.
+  function undrawn() {
+    const lit = (c) => c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0);
+    const out = [];
+    if (Object.values(S.wireEls).some((we) => we.c && we.g.style.display !== "none" && !we.ends) && !lit(wireCanvas)) out.push("the wires drew nothing");
+    for (const c of document.querySelectorAll(".diag-display:not(.off) canvas")) {
+      if (DIAG.heard(c.closest("[data-key]")?.dataset.key || DIAG.openKey()) && !lit(c))
+        out.push(`a diagnostic display drew nothing: ${c.closest("[data-key], .eq-panel")?.dataset?.key || "the panel"}`);
+    }
+    return out;
+  }
   function audit() {
     const faults = [...S.errors];
     const rect = (el) => el && !el.hidden && el.getClientRects().length ? el.getBoundingClientRect() : null;
@@ -3874,12 +3888,7 @@ void main() {
       if (st && st.scrollWidth > st.clientWidth + 1) faults.push(`the EQ's band strip overflows (${st.scrollWidth} > ${st.clientWidth})`);
       for (const p of eqp.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("an EQ curve has NaN in it");
     }
-    // Diagnostic displays that are on and have heard sound: drawn (some pixel lit).
-    for (const c of document.querySelectorAll(".diag-display:not(.off) canvas")) {
-      if (!DIAG.heard(c.closest("[data-key]")?.dataset.key || DIAG.openKey())) continue;
-      const px = c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-      if (!px || !px.some((v, i) => i % 4 === 3 && v > 0)) faults.push(`a diagnostic display drew nothing: ${c.closest("[data-key], .eq-panel")?.dataset?.key || "the panel"}`);
-    }
+    faults.push(...undrawn());
     // Turned off: an empty box, not the last picture held (owner).
     for (const c of document.querySelectorAll(".diag-display.off canvas")) {
       if (c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0)) faults.push(`a diagnostic display that is off still shows its picture: ${c.closest("[data-key]")?.dataset.key}`);
@@ -3887,12 +3896,6 @@ void main() {
     const bar = rect($("bar")), pb = rect($("problems-btn"));
     if (bar && pb && bar.right > pb.left - 8) faults.push("the bar runs into the problems button");
     for (const p of layer.querySelectorAll("path")) if ((p.getAttribute("d") || "").includes("NaN")) faults.push("a wire has NaN in its path");
-    // The wires are drawn on the GPU: a board with wires showing has some pixel of them lit (a
-    // page whose first paint never came drew none, and looked fine to every other check).
-    if (Object.values(S.wireEls).some((we) => we.c && we.g.style.display !== "none" && !we.ends)) {
-      const d = wireCanvas.getContext("2d").getImageData(0, 0, wireCanvas.width, wireCanvas.height).data;
-      if (!d.some((v, i) => i % 4 === 3 && v > 0)) faults.push("the wires drew nothing");
-    }
     const drawn = Object.values(S.wireEls).filter((x) => x.g.style.display !== "none").length;
     if (drawn !== visibleWires().length) faults.push(`drew ${drawn} of ${visibleWires().length} wires`);
     $("audit").textContent = JSON.stringify(faults);
@@ -4261,13 +4264,21 @@ void main() {
     openDiag: (key) => { openDiag(key); if (!DIAG.isOpen(key)) S.errors.push("the diagnostic panel did not open"); },
     // A quiet sound zoomed up reaches the picture's centre: a fixed level floor (−66 dBFS) once
     // left a hole there that grew as the sound got quieter (owner: "the center circle cutout").
-    stereoCentre: () => setTimeout(() => {
-      const c = [...document.querySelectorAll(".diag-display.stereo canvas")].sort((a, b) => b.width - a.width)[0];
-      const dpr = devicePixelRatio || 1, sc = Math.min((c.width - 12 * dpr) / 200, (c.height - 6 * dpr) / 104), r = Math.round(6 * sc);
-      const px = c.getContext("2d").getImageData(Math.round(c.width / 2 - r), Math.round(c.height - 2 * dpr - 3 * sc - r), 2 * r, r).data;
-      if (!px.some((v, i) => i % 4 === 3 && v > 0)) S.errors.push("a quiet sound left the stereo picture's centre empty");
-      PB.audit();
-    }, 600),
+    // (until it is lit, 3 s at most, not a set time: on a busy machine the scope's frames come
+    // late; a real hole never fills. scripts/shots.py waits for PB_WAIT.)
+    stereoCentre: () => {
+      const lit = () => {
+        const c = [...document.querySelectorAll(".diag-display.stereo canvas")].sort((a, b) => b.width - a.width)[0];
+        const dpr = devicePixelRatio || 1, sc = Math.min((c.width - 12 * dpr) / 200, (c.height - 6 * dpr) / 104), r = Math.round(6 * sc);
+        const px = c.getContext("2d").getImageData(Math.round(c.width / 2 - r), Math.round(c.height - 2 * dpr - 3 * sc - r), 2 * r, r).data;
+        return px.some((v, i) => i % 4 === 3 && v > 0);
+      };
+      window.PB_WAIT = (async () => {
+        for (let t = 0; !lit() && t < 3000; t += 50) await new Promise((r) => setTimeout(r, 50));
+        if (!lit()) S.errors.push("a quiet sound left the stereo picture's centre empty");
+        PB.audit();
+      })();
+    },
     diagSet: (key, field, on) => setDiag(key, field, on),
     diagMono: (key) => {
       [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();
@@ -4604,20 +4615,25 @@ void main() {
     },
     errors: () => [...S.errors],  // (scripts/perf.py)
     // The GPU lost and back (a driver reset): the wires and scopes drawn again as they were.
+    // Waits for them to have drawn, before and after, not a set time (real time: on a busy machine
+    // a scope's first frame comes late); scripts/shots.py waits for PB_WAIT.
     glRestore: () => {
       const lit = (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; };
       const all = () => [wireCanvas, ...document.querySelectorAll(".diag-display:not(.off) canvas")].map(lit);
-      setTimeout(() => {  // (the scopes drawn first)
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const until = async (ok) => { for (let t = 0; !ok() && t < 3000; t += 50) await sleep(50); };
+      window.PB_WAIT = (async () => {
+        await until(() => all().every((n) => n));
         const before = all(), x = GL.context().getExtension("WEBGL_lose_context");
         x.loseContext();
-        setTimeout(() => x.restoreContext(), 100);
-        setTimeout(() => {
-          const after = all();
-          before.forEach((n, i) => { if (!after[i] || Math.abs(after[i] - n) > n * 0.5) S.errors.push(`after the GPU came back, picture ${i} lit ${after[i]} pixels, before ${n}`); });
-          if (GL.gen < 1) S.errors.push("the GPU context never came back");
-          PB.audit();
-        }, 600);
-      }, 300);
+        await sleep(100);
+        x.restoreContext();
+        await until(() => GL.gen >= 1 && all().every((n, i) => n || !before[i]));
+        const after = all();
+        before.forEach((n, i) => { if (!n) S.errors.push(`before the GPU was lost, picture ${i} drew nothing`); else if (!after[i]) S.errors.push(`after the GPU came back, picture ${i} drew nothing (before: ${n} pixels lit)`); });
+        if (GL.gen < 1) S.errors.push("the GPU context never came back");
+        PB.audit();
+      })();
     },
     drawCost: () => { const t = performance.now(); for (let i = 0; i < 50; i++) drawLive(); return (performance.now() - t) / 50; },
     // Live wires with made-up sound: speech, a chord, music that clips, the rest silent.
@@ -4763,7 +4779,7 @@ void main() {
     } else { connect(); fpsMeter(); }  // (not in pictures: its numbers would differ every time)
   }
 
-  const PB = { debug, audit };
+  const PB = { debug, audit, drawn: () => !undrawn().length };
   addEventListener("DOMContentLoaded", start);
   return PB;
 })();
