@@ -2063,7 +2063,7 @@ const PB = (() => {
                                  ...(DYN.KINDS[dev.type].bypass === false ? [] : [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => dynFlag(c.key, "bypass") }])] : []),
       ...disconnectAll(c.key),
       { sep: true },
-      { label: "Remove…", icon: "trash", hint: ["gain", "eq", "plugin"].includes(dev.type) || DYN.KINDS[dev.type] ? "with its connections" : "deletes it from your system", danger: true, action: () => askDeleteDevice(c) },
+      { label: quietRemove(c) ? "Remove" : "Remove…", icon: "trash", hint: inBoardOnly(c) ? "with its connections" : "deletes it from your system", danger: true, action: () => askDeleteDevice(c) },
     ]);
   }
 
@@ -2081,10 +2081,17 @@ const PB = (() => {
     makeDevice({ type, name: made.text, channels: Number(made.choice) }, ctx);
   }
 
+  // PipeBoard's own effects, plugins and diagnostic cards: apps never see them (a virtual mic or
+  // speaker is a device on the system).
+  const inBoardOnly = (c) => ["effect", "plugin", "diag"].includes(c.kind);
+  const wiresOf = (key) => S.model.wires.filter((w) => w.from[0] === key || w.to[0] === key).length;
+  // Gone without asking (owner): a diagnostic card (it only listens), or an effect wired to nothing.
+  const quietRemove = (c) => c.kind === "diag" || (inBoardOnly(c) && !wiresOf(c.key));
+
   async function askDeleteDevice(c) {
-    if (["gain", "plugin", "eq"].includes(S.ws.devices?.[c.key]?.type) || DYN.KINDS[S.ws.devices?.[c.key]?.type]) return askDeleteEffect(c, S.ws.devices[c.key].type);
+    if (inBoardOnly(c)) return askDeleteEffect(c, S.ws.devices[c.key].type);
     const word = c.role === "mic" ? "microphone" : "speaker";
-    const wires = S.model.wires.filter((w) => w.from[0] === c.key || w.to[0] === c.key).length;
+    const wires = wiresOf(c.key);
     const ok = await dialog({
       title: `Remove the virtual ${word} ${c.title}?`,
       text: `It is removed from your system, not just from the board. Apps that ${c.role === "mic" ? "record from" : "play into"} it `
@@ -2107,8 +2114,8 @@ const PB = (() => {
   }
 
   async function askDeleteEffect(c, type) {
-    const wires = S.model.wires.filter((w) => w.from[0] === c.key || w.to[0] === c.key).length;
-    const ok = await dialog({
+    const wires = wiresOf(c.key);
+    const ok = quietRemove(c) || await dialog({
       title: `Remove ${c.title}?`,
       text: `Sound passing through it stops`
         + (wires ? `: its ${wires === 1 ? "connection goes" : `${wires} connections go`} too.` : ".")
