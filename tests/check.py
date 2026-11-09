@@ -356,9 +356,10 @@ async def check_engine_trial(tmp):
     # WirePlumber's restart drops the links on every audio node's ports: the board's wires
     # between devices are made again from the board as it was (the apps' are WirePlumber's).
     import copy
-    before = copy.deepcopy(board.ws)
     kinds = {c["key"]: c["kind"] for c in board.model["cards"]}
     lost = [w for w in board.model["wires"] if "app" not in (kinds[w["from"][0]], kinds[w["to"][0]])][:3]
+    board.ws["portals"] = {lost[0]["id"]: "hand"}  # (owner: portals came back as wires)
+    before = copy.deepcopy(board.ws)
     for w in lost:
         for link in w["links"]:
             await board.source.unlink(link)
@@ -367,6 +368,7 @@ async def check_engine_trial(tmp):
     assert await board.rewire(before) is None
     await board.refresh()
     assert {w["id"] for w in lost} <= {w["id"] for w in board.model["wires"]}, "made again"
+    assert lost[0]["id"] in board.ws.get("portals", {}), "a portal comes back a portal"
     # A reopened interface coming back: the steps, then its sound; the minute starts only then,
     # a moment says how long it took, and a new change stops the last wait.
     heard = asyncio.Event()

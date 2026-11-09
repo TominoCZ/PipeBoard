@@ -1985,6 +1985,9 @@ class Board:
         else:
             return "Some of the board's wires could not be made again: Revert brings them back."
         self.ws["made"] = sorted(set(self.ws.get("made", [])) | set(board.get("made", [])))
+        # Portals too: a refresh while their links were gone forgot them (owner: they came back
+        # as wires after a sound card change). One set meanwhile keeps its own spots.
+        self.ws["portals"] = {**board.get("portals", {}), **self.ws.get("portals", {})}
         self.changed()
         return None
 
