@@ -348,7 +348,7 @@ SHOTS = {
     "tidy-zoom": ("machine", BIG, chained, "PB.debug.tidyZoom()"),
     "tidy-no-portals": ("machine", BIG, chained, "PB.debug.noPortals() || PB.debug.tidy()"),
     "tidy-any-zoom": ("machine", BIG, chained, "PB.debug.tidyAnyZoom()"),
-    "portal-follow": ("machine", BIG, chained, "PB.debug.portalFollow('pb:dds01')"),
+    "portal-follow": ("machine", BIG, chained, "PB.debug.portalFollow('pb:dns01')"),
     "portals-off": ("machine", BIG, chained, "PB.debug.portalsOff()"),
     "tidy-wrap": ("machine", BIG, diagnosed, "PB.debug.tidyWrap(['pb:dwave01', 'pb:dster01', 'pb:dcount01', 'pb:dmeter01', 'pb:dspec01'])"),
     "portal-hover": ("machine", BIG, chained, "PB.debug.tidy() || PB.debug.portalHover(0)"),
@@ -536,8 +536,8 @@ SHOTS = {
     "missing": ("machine", BIG, missing, "PB.debug.openProblems()"),
     "missing-menu": ("machine", BIG, missing, f"PB.debug.missingMenu('{PEDAL}')"),
     # Groups (owner): Tidy lays out each group on its own and the groups like big cards; the scopes
-    # in the Monitoring row under everything, their wires dotted. Joining and leaving by dragging;
-    # made from a box (Shift + drag) or a card's menu.
+    # in the Monitoring row under everything, their wires dotted (portals with Portals on). Joining
+    # and leaving by dragging; made from a box (Shift + drag) or a card's menu.
     "groups": ("machine", BIG, studio, "PB.debug.tidy()"),
     "groups-loose": ("machine", BIG, studio_loose, "PB.debug.tidy()"),
     "groups-drag-in": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.dragToFrame('input1_mix', 'ggtr')"),
@@ -553,6 +553,7 @@ SHOTS = {
                     "document.querySelector('#selbar button').click()"),
     "groups-menu": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.cardMenu('instrument_mix', ['Add to group'])"),
     "groups-space-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox')"),
+    "groups-space-gap": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gspk', 'gap')"),
     "groups-space-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox', 'menu')"),
     "groups-monitoring-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('monitoring', 'menu') || "
                                "[...document.querySelectorAll('.menu .item')].find((x) => x.textContent.startsWith('Add node')).click()"),
@@ -561,6 +562,9 @@ SHOTS = {
     "groups-title-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.titleHover('ggtr')"),
     "groups-title-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.groupMenu('ggtr')"),
     "groups-name-move": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.nameAndMove(['instrument_mix', 'pb:ggain', 'pb:geq'], 'Guitar')"),
+    # One portal per output plug (owner): the limiter's one exit badge to both scopes, lit; its menu.
+    "groups-plug-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.portalHover('pb:slim')"),
+    "groups-plug-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.portalHover('pb:slim', true)"),
     "groups-monitoring": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.monitorOnly('input1_mix', 'pb:spec')"),
     "groups-move": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.moveGroup('ggtr', 0, -60)"),
     "changes": ("machine", BIG, changed, ""),

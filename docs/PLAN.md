@@ -139,16 +139,23 @@ still goes straight from A to B, nothing new in PipeWire. A portal wire is drawn
 from its output into a badge and from a badge into its input; the whole wire shows while a badge,
 either card or the wire is hovered, or it is selected; its live wave only then. The badge (owner's
 pick of five drawn): a tunnel, a dark hole with rings fading in and a lit rim in the source's
-colour, the pair's letter (A, B… by wire id), and an arrowhead on its edge: pointing away on the
+colour, the portal's letter (A, B… by output plug), and an arrowhead on its edge: pointing away on the
 right where the wire leaves, pointing in on the left where it arrives (owner). Badges sit on their
 own layer above every wire, 52 px off the socket (owner: wires covered them). All badges are
 placed in one pass (owner: they overlapped, and one moved when another was toggled): each wants
 its spot (Tidy's, or off its socket at the socket's own height), then, top down in a fixed order,
 any nearer than 30 px to one already placed is pushed below it; the portal-toggle shot checks that
-toggling one moves none and that none overlap. Made by hand (wire
+toggling one moves none and that none overlap. **One portal per output plug** (owner, 2026-11-09:
+a plug feeding many inputs made a letter per wire): every portal wire from one output socket shares
+its letter and one exit badge; each input gets its own entry badge with that letter. Hovering the
+shared exit shows all the plug's wires; it selects none (Delete must not take the wrong one) and
+its right-click offers Show as wires; its tooltip lists where it goes. Tidy gives a plug's wires one
+exit spot. Made by hand (wire
 menu › Make portal / Show as a wire) or by Tidy, which folds the columns into rows when one row is
 far wider than the window: candidates scored by how near their shape is to the window's plus
-0.04 per wire between rows; those wires become portals, their badges in one column past the row's
+0.04 per wire between rows; those wires become portals, and with Portals on so does (owner,
+2026-11-09) every wire into Monitoring, and a wire in a row that goes against its plug's facing
+(its input left of its output: "grounds for a messy graph"), each entry beside its socket. Between rows the badges sit in one column past the row's
 right edge and one before the next row's left (owner), but beside the socket for a card not at a
 row's edge (a column there drew a stub across the row). A Tidy's portals are redone each Tidy; the
 user's stay. Saved on the board (`portals`: wire id → "hand" or {how: "tidy", out, in}) and in
@@ -323,11 +330,20 @@ there. No slide animation: wires would lag behind the card.
 close a loop (DFS back edges). On the user's graph that gives apps → speaker mixes → Easy Effects
 → Studio Interface → mic mixes, with no wire running backwards. Within a column, cards sit near what feeds
 them. Tidy re-runs it; dragged positions are saved.
+**The balance** (owner, 2026-11-09: a wire against its plug's facing is "grounds for a messy graph";
+cards of one type should be "clumped together as much as possible"; "a matter of balancing"):
+after the columns by flow, each card in turn moves to the column that costs least: a backward wire
+(into a column at or left of its source's) costs 4, a forward one 0.25 per column it skips, and an
+app, speaker mix, mic mix or device costs its mean distance (×1) to the cards of its type it has no
+path to. Effects are left to the flow (clumped, they all piled into one column), and an unwired card
+pulls nothing. Weights `TIDY_WEIGHTS` in board.js, picked on the owner's board: a skipped column at
+1 traded long wires for backward ones, at 0 a chain drifted to the far left.
 
 **Groups** (owner, 2026-11-09; renders and decisions in that session's `groups_design.md`). Cards
 can be grouped under a name: the board keeps `groups` `{id: {name}}` and each card its `group`
 (an id, `"monitoring"`, or `null` for none; a card without one is in Monitoring if it is a
-diagnostic card, else in none). Saved with the profile; made, renamed, ungrouped and cards put in
+diagnostic card, else in none). **Tidy never makes a group** (owner, 2026-11-09: that is the
+user's job; the built-in Monitoring stays, owner: "I did like that part"). Saved with the profile; made, renamed, ungrouped and cards put in
 or taken out are unsaved changes (and dot the card), and Revert brings them back.
 - **A frame** around each group's cards, behind the wires, the same margin on every side; its
   **title just above the rectangle** (owner, 2026-11-09: so the rectangle wraps the cards' tops as
@@ -368,7 +384,8 @@ or taken out are unsaved changes (and dot the card), and Revert brings them back
   folding into rows with portals; a group gets three more cells from its neighbour in a column.
   **Monitoring** goes in one row under everything (wrapped at the board's width). A board with no
   groups and no diagnostic cards lays out exactly as before.
-- **Wires into Monitoring are dotted** (they only listen) and never portals. **Monitoring takes
+- **Wires into Monitoring are dotted** (they only listen); with Tidy's Portals on they are portals
+  (owner, 2026-11-09: long dotted wires across the board), each entry badge beside its scope. **Monitoring takes
   the diagnostic cards alone** (owner, 2026-11-09: an effect could be put in from the menu but not
   dragged in, and Monitoring's frame then vanished): a held effect does not light it, menus do
   not offer it, the server refuses it; a scope can leave it (its menu) and come back. Its frame is

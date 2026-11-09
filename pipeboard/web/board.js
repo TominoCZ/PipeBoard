@@ -362,11 +362,14 @@ const PB = (() => {
     const path = S.model.latency?.[S.pathKey]?.path || [], on = new Set(path);
     const steps = new Set(path.slice(1).map((k, i) => `${path[i]}>${k}`));
     for (const [k, el] of Object.entries(S.els)) el.classList.toggle("off-path", !!S.pathKey && !on.has(k));
+    const onExits = new Set();  // (a shared exit badge stays lit while any of its wires is on the path)
     for (const we of Object.values(S.wireEls)) {
       const off = !!S.pathKey && !steps.has(`${we.w.from[0]}>${we.w.to[0]}`);
       we.g.classList.toggle("off-path", off);
-      for (const end of we.ends || []) end.classList.toggle("off-path", off);
+      we.ends?.[1].classList.toggle("off-path", off);
+      if (we.ends && !off) onExits.add(we.ends[0]);
     }
+    for (const we of Object.values(S.wireEls)) we.ends?.[0].classList.toggle("off-path", !!S.pathKey && !onExits.has(we.ends[0]));
     for (const el of document.querySelectorAll(".lat.total")) el.classList.toggle("open", el.closest(".card")?.dataset.key === S.pathKey);
   }
   function closePath() {
@@ -901,6 +904,50 @@ const PB = (() => {
     return d;
   }
 
+  // The balance (owner): a wire against its plug's facing (into a column at or left of its source's)
+  // is what makes a graph messy; cards of one type (apps, speaker mixes, mic mixes, devices)
+  // belong together, not scattered by the flow. Each card in turn moves to the column that costs
+  // least: a backward wire costs `back`, a forward one `span` per column it skips, and a card
+  // `kin` times its mean distance to the cards of its type it has no path to (scopes of one source
+  // pulled together; a chain of effects left alone). Then empty columns close up.
+  // ponytail: greedy one-card moves, O(sweeps · cards² · columns); a real optimiser if boards grow
+  // past ~100 cards.
+  const TIDY_WEIGHTS = { back: 4, span: 0.25, kin: 1 };  // (owner's board rendered at several: span 1 traded long wires for backward ones, 0 let a chain drift off)
+  function settle(cards, wires, d) {
+    const { back, span, kin } = S.tidyWeights || TIDY_WEIGHTS, keys = cards.map((c) => c.key);
+    const out = {}, inn = {};
+    for (const k of keys) { out[k] = []; inn[k] = []; }
+    for (const w of wires) if (w.from[0] !== w.to[0] && out[w.from[0]] && out[w.to[0]]) { out[w.from[0]].push(w.to[0]); inn[w.to[0]].push(w.from[0]); }
+    // (types clump where sound starts or ends: apps, speaker and mic mixes, devices. Effects make
+    // chains, the flow places them; an unwired card pulls nothing: rendered, both scattered the board)
+    const ends = new Set(["app", "virtual", "hardware"]);
+    const type = Object.fromEntries(cards.map((c) => [c.key, ends.has(c.kind) && out[c.key].length + inn[c.key].length ? `${c.kind}/${c.role || ""}` : null]));
+    const reach = {};
+    for (const k of keys) {
+      const seen = new Set(), todo = [k];
+      while (todo.length) for (const n of out[todo.pop()]) if (!seen.has(n)) { seen.add(n); todo.push(n); }
+      reach[k] = seen;
+    }
+    const kinOf = Object.fromEntries(keys.map((a) => [a, type[a] ? keys.filter((b) => b !== a && type[b] === type[a] && !reach[a].has(b) && !reach[b].has(a)) : []]));
+    const wire = (s) => (s >= 1 ? span * (s - 1) : back);
+    const cost = (k, col) => out[k].reduce((t, n) => t + wire(d[n] - col), 0) + inn[k].reduce((t, n) => t + wire(col - d[n]), 0)
+      + kin * kinOf[k].reduce((t, n) => t + Math.abs(d[n] - col) * (1 / kinOf[k].length + 1 / kinOf[n].length), 0);
+    for (let sweep = 0, moved = true; kin + back + span && moved && sweep < 20; sweep++) {
+      moved = false;
+      for (const k of keys) {
+        const top = Math.max(...keys.map((x) => d[x]));
+        let best = d[k], least = cost(k, d[k]);
+        for (let col = -1; col <= top + 1; col++) { const c = cost(k, col); if (c < least - 1e-9) { best = col; least = c; } }
+        if (best === d[k]) continue;
+        d[k] = best; moved = true;
+        if (best < 0) for (const x of keys) d[x]++;
+      }
+    }
+    const used = [...new Set(keys.map((k) => d[k]))].sort((a, b) => a - b);
+    for (const k of keys) d[k] = used.indexOf(d[k]);
+    return d;
+  }
+
   // A column far taller than the rest (owner: five diagnostic cards fed from one EQ stacked into
   // one, and Tidy could neither fold the board nor show it any bigger): its cards that only
   // receive (nothing wired out of them) wrap into extra columns right after it, each no taller
@@ -926,7 +973,7 @@ const PB = (() => {
   // Columns by signal flow, folded into rows when asked: where each card goes, relative to [0, 0].
   // cards: [{key, kind, title}]; wires: [{from: [key], to: [key]}]; sz(key): its size in cells.
   function arrange(cards, wires, sz, rowsWanted) {
-    const d = regroup(cards, wires, depths(cards, wires)), cols = [];
+    const d = settle(cards, wires, regroup(cards, wires, depths(cards, wires))), cols = [];
     for (const c of cards) (cols[d[c.key]] = cols[d[c.key]] || []).push(c);
     const order = { hardware: 0, app: 1, virtual: 2, group: 2.5, effect: 3, plugin: 4, diag: 5 };
     // All in whole cells: every card lands exactly, a column's rows evenly spaced (owner).
@@ -966,8 +1013,8 @@ const PB = (() => {
 
   // Tidy (owner: groups): each group's cards laid out on their own, then the groups (each one big
   // card, its frame's size) and the loose cards by signal flow, folded into rows as before; the
-  // Monitoring group in a row under everything, its wires dotted and never portals. A board with
-  // no groups lays out exactly as it did.
+  // built-in Monitoring group in a row under everything, its wires dotted (portals with Portals
+  // on). Tidy itself never makes a group (owner). A board with no groups lays out exactly as it did.
   function layout(keys) {
     const cards = visible(), wires = visibleWires(), sz = (k) => S.sizes[k], by = {};
     for (const c of cards) { const g = groupOf(c.key); if (g) (by[g] ||= []).push(c); }
@@ -996,7 +1043,7 @@ const PB = (() => {
         edge[k] = ["first", "last"].filter((e) => top.edge[u].includes(e) && inner[u].edge[k].includes(e)).join("");
       }
     }
-    // Monitoring: one row under everything (wrapped at the board's width), no portals into it.
+    // Monitoring: one row under everything (wrapped at the board's width).
     if (mon.size) {
       const all = Object.entries(placed), left = Math.min(0, ...all.map(([, q]) => q.x));
       const right = Math.max(left + 40, ...all.map(([k, q]) => q.x + sz(k).w));
@@ -1055,17 +1102,22 @@ const PB = (() => {
   // edge, its entry badge in one column before the next row's left (owner), each at its socket's
   // height, nudged apart where two would touch; but from a card not at the row's edge, beside its
   // socket instead (null): a column there drew a stub across the whole row.
+  // With Portals on, two more (owner): every wire into Monitoring, its entry beside its scope; and
+  // a wire that goes against its plug's facing (its input left of its output: what makes a graph
+  // messy), its entry beside its socket. One exit spot per output plug, shared by its wires.
   function foldPortals() {
-    const { rows, rowOf, edge } = S.fold, cols = {}, set = {};
+    const { rows, rowOf, edge } = S.fold, cols = {}, set = {}, exits = {}, on = S.ws.tidy_portals === true;
     for (const w of visibleWires()) {
-      const rf = rowOf[w.from[0]], rt = rowOf[w.to[0]];
-      if (rf === undefined || rt === undefined || rf === rt || w.ghost) continue;
+      const rf = rowOf[w.from[0]], rt = rowOf[w.to[0]], tap = on && groupOf(w.to[0]) === MONITORING;
+      if (rf === undefined || (rt === undefined && !tap) || w.ghost) continue;
       const a = anchor(...w.from), b = anchor(...w.to);
       if (!a || !b) continue;
-      const out = edge[w.from[0]]?.includes("last") ? [rows[rf].right + PORTAL_COL / 2, cell(a.y)] : null;  // (cells: sockets sit on the grid)
-      const into = edge[w.to[0]]?.includes("first") ? [rows[rt].left - PORTAL_COL / 2, cell(b.y)] : null;
+      if (rf === rt && !(on && b.x < a.x)) continue;
+      const plug = plugOf(w), first = !(plug in exits);
+      if (first) exits[plug] = edge[w.from[0]]?.includes("last") ? [rows[rf].right + PORTAL_COL / 2, cell(a.y)] : null;  // (cells: sockets sit on the grid)
+      const out = exits[plug], into = !tap && rf !== rt && edge[w.to[0]]?.includes("first") ? [rows[rt].left - PORTAL_COL / 2, cell(b.y)] : null;
       set[w.id] = { how: "tidy", out, in: into };
-      if (out) (cols[`o${rf}`] ||= []).push([out, b.y]);  // (with the other end's height: from one
+      if (out && first) (cols[`o${rf}`] ||= []).push([out, b.y]);  // (with the other end's height: from one
       if (into) (cols[`i${rt}`] ||= []).push([into, a.y]);  //  socket, in the order they arrive: no crossing)
     }
     for (const col of Object.values(cols)) {
@@ -1160,25 +1212,42 @@ const PB = (() => {
   // Portals (owner): a wire drawn as a short stub out of its output into a lettered badge, and the
   // same badge leading into its input; the whole wire shows while a badge, either card or the
   // wire is hovered, or it is selected. Board-only: the sound still goes straight from A to B.
-  // Letters by wire id, so a pair keeps its letter while others come and go.
+  // One portal per output plug (owner): every portal wire from one output socket shares its letter
+  // and its exit badge; each input it reaches has its own entry badge with that letter. Letters by
+  // plug, so a plug keeps its letter while others come and go.
+  const plugOf = (w) => `${w.from[0]}:${w.from[1]}>`;  // (ends in ">": never a wire's own id)
   function portalLetters(wires) {
-    const ids = wires.map((w) => w.id).filter((id) => S.ws.portals?.[id]).sort();
-    return Object.fromEntries(ids.map((id, i) => [id, String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) + 1 : "")]));
+    const on = wires.filter((w) => S.ws.portals?.[w.id]), plugs = [...new Set(on.map(plugOf))].sort();
+    const at = Object.fromEntries(plugs.map((p, i) => [p, String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) + 1 : "")]));
+    return Object.fromEntries(on.map((w) => [w.id, at[plugOf(w)]]));
   }
   // The owner's pick (D of five drawn): a tunnel, a dark hole with rings fading inward and a lit
   // rim, the pair's letter in it, and an arrowhead on its edge for the way the sound goes: on the
   // right pointing away where the wire leaves, on the left pointing in where it arrives (owner).
-  function portalEnd(w, letter, color, by, out) {
-    const end = s("g", { class: "portal-end", style: `--pc:${color}`, "data-wire": w.id });
+  // An exit badge shared by several wires selects none of them (Delete must not take the wrong
+  // one): hovered it shows them all; right-click shows them as wires.
+  function portalEnd(wires, letter, color, by, out) {
+    const w = wires[0], many = wires.length > 1;
+    const end = s("g", { class: `portal-end ${out ? "out" : "in"}`, style: `--pc:${color}`, "data-wire": many ? "" : w.id, "data-plug": plugOf(w) });
     const R = 11, arrow = out ? `M${R - 1},-4 L${R + 4.5},0 L${R - 1},4 Z` : `M${-R - 4.5},-4 L${-R + 1},0 L${-R - 4.5},4 Z`;
     end.append(s("circle", { class: "portal-disc", r: R }), s("circle", { class: "portal-ring", r: 8 }),
                s("circle", { class: "portal-ring deep", r: 5.5 }), s("path", { class: "portal-arrow", d: arrow }),
                Object.assign(s("text", { class: "portal-letter", "text-anchor": "middle", dy: "3.2" }), { textContent: letter }));
-    end.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id, e); });
-    end.addEventListener("mouseenter", () => hover(w.id));
+    end.addEventListener("mousedown", (e) => { e.stopPropagation(); if (!many) select(w.id, e); });
+    end.addEventListener("mouseenter", () => hover(many ? plugOf(w) : w.id));
     end.addEventListener("mouseleave", () => hover(null));
-    end.dataset.tip = wireTip(w, by);
+    end.dataset.tip = many ? plugTip(wires, by) : wireTip(w, by);
     return end;
+  }
+  function plugTip(wires, by) {
+    const text = (e, side) => `${titleOf(by[e[0]])} ${(by[e[0]][side].find((x) => x.id === e[1]) || { label: "" }).label}`;
+    const kind = by[wires[0].from[0]].kind;
+    return JSON.stringify({ wire: [{ text: text(wires[0].from, "outputs"), kind }, { text: `${wires.length} inputs`, kind }],
+                            rows: wires.map((x, i) => [i ? "" : "To", text(x.to, "inputs")]), hint: "Right-click to show them as wires" });
+  }
+  function plugMenu(plug, x, y) {
+    const ids = visibleWires().filter((w) => plugOf(w) === plug && S.ws.portals?.[w.id]).map((w) => w.id);
+    openMenu(x, y, [{ label: "Show as wires", icon: "portal", hint: `${ids.length} wires`, action: () => setPortals(Object.fromEntries(ids.map((id) => [id, null]))) }]);
   }
 
   function drawWires() {
@@ -1186,7 +1255,8 @@ const PB = (() => {
     $("portal-layer").textContent = "";
     $("grads").textContent = "";
     S.wireEls = {};
-    const by = byKey(), letters = portalLetters(visibleWires());
+    const by = byKey(), letters = portalLetters(visibleWires()), plugWires = {}, plugEnds = {};
+    for (const w of visibleWires()) if (letters[w.id]) (plugWires[plugOf(w)] ||= []).push(w);
     const flagged = new Set(S.problems.filter((p) => p.severity !== "info").flatMap((p) => p.wires));
     visibleWires().forEach((w, i) => {
       const grad = s("linearGradient", { id: `g${i}`, gradientUnits: "userSpaceOnUse" });
@@ -1211,9 +1281,11 @@ const PB = (() => {
         const color = colors[by[w.from[0]].kind];
         g.classList.add("portal");
         parts.stubs = s("path", { class: "portal-stub", stroke: `url(#g${i})` });
-        parts.ends = [portalEnd(w, letters[w.id], color, by, true), portalEnd(w, letters[w.id], color, by, false)];
+        const plug = plugOf(w), first = !plugEnds[plug];
+        plugEnds[plug] ||= portalEnd(plugWires[plug], letters[w.id], color, by, true);  // (one exit per plug)
+        parts.ends = [plugEnds[plug], portalEnd([w], letters[w.id], color, by, false)];
         g.append(parts.stubs);
-        $("portal-layer").append(...parts.ends);  // above every wire: none can cover a badge (owner)
+        $("portal-layer").append(...(first ? parts.ends : parts.ends.slice(1)));  // above every wire: none can cover a badge (owner)
       }
       parts.hit.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id, e); });
       parts.hit.addEventListener("mouseenter", () => hover(w.id));
@@ -1249,7 +1321,7 @@ const PB = (() => {
       if (only && !only.has(w.from[0]) && !only.has(w.to[0])) continue;
       const a = anchor(...w.from), b = anchor(...w.to);
       const ends = S.wireEls[w.id].ends || [];
-      if (!a || !b) { g.style.display = "none"; ends.forEach((e) => { e.style.display = "none"; }); continue; }
+      if (!a || !b) { g.style.display = "none"; ends.forEach((e, i) => { if (i || !a) e.style.display = "none"; }); continue; }  // (an exit badge others share stays)
       g.style.display = "";
       ends.forEach((e) => { e.style.display = ""; });
       const lr = w.ch === "L" ? -1 : w.ch === "R" ? 1 : 0;  // L and R meet a stereo socket apart
@@ -1275,15 +1347,19 @@ const PB = (() => {
   // badge nearer than PORTAL_GAP to one already placed is pushed below it. Same portals, same spots.
   const PORTAL_GAP = 30;
   function placePortals() {
-    const spots = [];
+    const spots = [], outs = {};
     for (const we of Object.values(S.wireEls)) {
       const w = we.w, a = we.ends && anchor(...w.from), b = we.ends && anchor(...w.to);
+      we.spots = null;
       if (!a || !b) continue;
       // (a Tidy's badge at its spot; one whose card is being dragged follows it, beside its socket)
       const how = S.ws.portals?.[w.id], tidy = how && typeof how === "object", held = S.drag?.kind === "card" ? S.drag.key : null;
       const out = tidy && w.from[0] !== held ? how.out : null, into = tidy && w.to[0] !== held ? how.in : null;
-      spots.push({ we, i: 0, sock: a, x: out ? px(out[0]) : a.x + PORTAL_OUT, y: out ? px(out[1]) : a.y, id: `${w.id}>0` },
-                 { we, i: 1, sock: b, x: into ? px(into[0]) : b.x - PORTAL_OUT, y: into ? px(into[1]) : b.y, id: `${w.id}>1` });
+      const plug = plugOf(w);  // (the plug's first wire places its shared exit)
+      if (!outs[plug]) spots.push(outs[plug] = { sock: a, x: out ? px(out[0]) : a.x + PORTAL_OUT, y: out ? px(out[1]) : a.y, id: `${plug}0` });
+      const inSpot = { sock: b, x: into ? px(into[0]) : b.x - PORTAL_OUT, y: into ? px(into[1]) : b.y, id: `${w.id}>1` };
+      spots.push(inSpot);
+      we.spots = [outs[plug], inSpot];
     }
     spots.sort((p, q) => p.y - q.y || p.x - q.x || (p.id < q.id ? -1 : 1));
     // (Pushed below one, it may now touch another: again. Nearer than the gap less half a pixel:
@@ -1300,10 +1376,9 @@ const PB = (() => {
     // A stub's own S: handles half its length (a wire's curve took one this short for a wire going
     // back and looped it; owner saw it).
     const stub = (p, q) => { const h = Math.max(4, (q.x - p.x) / 2); return [p, { x: p.x + h, y: p.y }, { x: q.x - h, y: q.y }, q]; };
-    const at2 = {};
-    for (const p of spots) (at2[p.we.w.id] ||= [])[p.i] = p;
-    for (const [out, into] of Object.values(at2)) {
-      const we = out.we;
+    for (const we of Object.values(S.wireEls)) {
+      if (!we.spots) continue;
+      const [out, into] = we.spots;
       we.stubs.setAttribute("d", `${pathD(stub(out.sock, { x: out.x - 10, y: out.y }))} ${pathD(stub({ x: into.x + 10, y: into.y }, into.sock))}`);
       we.ends[0].setAttribute("transform", `translate(${out.x},${out.y})`);
       we.ends[1].setAttribute("transform", `translate(${into.x},${into.y})`);
@@ -1356,11 +1431,14 @@ const PB = (() => {
     S.hovered = [id, cardKey];
     const sel = S.wireEls[S.selected] ? S.selected : null;
     board.classList.toggle("focus", !!(id || cardKey || sel));
+    const lit = new Set();
     for (const { g, w, ends } of Object.values(S.wireEls)) {
-      const hot = w.id === id || w.id === sel || w.from[0] === cardKey || w.to[0] === cardKey;
+      const hot = w.id === id || plugOf(w) === id || w.id === sel || w.from[0] === cardKey || w.to[0] === cardKey;
       g.classList.toggle("hot", hot);
-      ends?.forEach((e) => e.classList.toggle("hot", hot));
+      ends?.[1].classList.toggle("hot", hot);
+      if (hot && ends) lit.add(ends[0]);
     }
+    for (const { ends } of Object.values(S.wireEls)) ends?.[0].classList.toggle("hot", lit.has(ends[0]));
   }
 
   // ---- live wires: each wire carries its sound along, like an oscilloscope in roll mode -------
@@ -2155,9 +2233,11 @@ const PB = (() => {
   }
 
   // The group whose frame a point on the screen is in (the smallest), or null.
+  // (its top reaches up to its title: the 3 px between them, board.css .frame-title, lit nothing, owner)
+  const TITLE_GAP = 4 / GRID;  // (cells: the title's 3 px off the rectangle, and a pixel more)
   function groupAt(x, y) {
     const p = toWorld(x, y), c = { x: p.x / GRID, y: p.y / GRID };
-    return Object.entries(S.frames || {}).filter(([, b]) => c.x > b.x && c.x < b.x + b.w && c.y > b.y && c.y < b.y + b.h)
+    return Object.entries(S.frames || {}).filter(([, b]) => c.x > b.x && c.x < b.x + b.w && c.y > b.y - TITLE_GAP && c.y < b.y + b.h)
       .sort(([, a], [, b]) => a.w * a.h - b.w * b.h)[0]?.[0] || null;
   }
   function boardMenu(x, y) {
@@ -3454,7 +3534,7 @@ const PB = (() => {
       e.preventDefault();
       hideTip();
       const wire = e.target.closest?.(".wire-g, .portal-end");
-      if (wire) return wireMenu(wire.dataset.wire, e.clientX, e.clientY);
+      if (wire) return wire.dataset.wire ? wireMenu(wire.dataset.wire, e.clientX, e.clientY) : plugMenu(wire.dataset.plug, e.clientX, e.clientY);
       const title = e.target.closest(".frame-title");
       const g = title?.dataset.group || (emptyAt(e) && groupAt(e.clientX, e.clientY));  // (its title, or its empty space)
       if (g) return groupMenu(g, e.clientX, e.clientY);
@@ -3835,6 +3915,14 @@ const PB = (() => {
     space: (g, act = "hover") => {
       const f = S.frames[g], p = toScreen({ x: px(f.x + 0.6), y: px(f.y + 0.6) }), at = { clientX: p.x, clientY: p.y, target: board, button: 0 };
       if (act === "hover") { onMove(at); if (!document.querySelector(".frame.lifted")) S.errors.push("a group's empty space hovered did not light it"); }
+      if (act === "gap") {  // every pixel between its title and its rectangle lights it (owner: no gap)
+        const t = document.querySelector(`.frame-title[data-group="${g}"]`).getBoundingClientRect(), top = toScreen({ x: 0, y: px(f.y) }).y;
+        for (let y = Math.floor(t.bottom); y <= Math.ceil(top) + 1; y++) {
+          S.hoverGroup = null;
+          onMove({ ...at, clientX: t.left + 10, clientY: y });
+          if (S.hoverGroup !== g) S.errors.push(`the gap under ${groupName(g)}'s title, ${Math.round(y - t.bottom)} px down, did not light it`);
+        }
+      }
       if (act === "menu") board.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: p.x, clientY: p.y }));
       if (act === "drag") {
         const keys = members()[g], before = Object.fromEntries(keys.map((k) => [k, { ...S.pos[k] }]));
@@ -3915,25 +4003,30 @@ const PB = (() => {
     showPlan, saveAs, askDelete, askTakeOver,
     // Tidy, then every column's rows must be evenly spaced, one gap apart (owner).
     // Tidy with the columns cut where asked ([] one row; [k] before column k…); what it gives.
+    // Tidy with these weights for the balance ({back, span, kin}; TIDY_WEIGHTS otherwise).
+    tidyWeighted: (w) => { S.tidyWeights = w; debug.tidy(); S.tidyWeights = null; },
     tidyCuts: (cuts) => { S.forceCuts = cuts; tidy(); S.forceCuts = null; return S.foldInfo; },
     columns: () => { S.forceCuts = []; layout(visible().map((c) => c.key)); S.forceCuts = null; return S.foldInfo.n; },
     tidy: () => {
       tidy();
       // (the loose cards' columns; a group's cards and the Monitoring row space themselves)
       const cols = {}, inGroup = Object.values(members()).flat();
-      for (const [k, p] of Object.entries(S.pos)) if (S.els[k] && !inGroup.includes(k)) (cols[p.x] ||= []).push({ y: p.y, h: S.sizes[k].h });
+      for (const [k, p] of Object.entries(S.pos)) if (S.els[k] && !inGroup.includes(k)) (cols[`${S.fold.rowOf[k]}:${p.x}`] ||= []).push({ y: p.y, h: S.sizes[k].h });  // (per row: two rows' columns can line up)
       for (const col of Object.values(cols)) {
         col.sort((a, b) => a.y - b.y);
         const gaps = col.slice(1).map((c, i) => Math.round(c.y - col[i].y - col[i].h));
         if (gaps.some((g) => g !== gaps[0])) S.errors.push(`tidy: uneven rows in a column, gaps ${gaps.join(", ")}`);
       }
-      // Portals: every wire between rows is one (not those into Monitoring: dotted, owner); no badge
-      // on a card or on another badge. No card inside a group's frame it is not in.
+      // Portals: every wire between rows is one, and with Portals on every wire into Monitoring;
+      // one exit badge per output plug; no badge on a card or on another badge. No card inside a
+      // group's frame it is not in.
       const { rowOf } = S.fold, ends = [...document.querySelectorAll(".portal-end")].map((e) => e.querySelector(".portal-disc").getBoundingClientRect());
       for (const w of visibleWires()) {
-        if (groupOf(w.to[0]) === MONITORING && !S.ws.portals?.[w.id]) continue;
+        if (groupOf(w.to[0]) === MONITORING && S.ws.tidy_portals !== true) continue;
         if (rowOf[w.from[0]] !== rowOf[w.to[0]] && !S.ws.portals?.[w.id]) S.errors.push(`tidy: a wire between rows is not a portal: ${w.id}`);
       }
+      const exits = [...document.querySelectorAll(".portal-end.out")].map((e) => e.dataset.plug);
+      if (new Set(exits).size !== exits.length) S.errors.push("tidy: an output plug has more than one exit badge");
       for (const [g, b] of Object.entries(S.frames || {}))
         for (const c of visible()) {
           const p = S.pos[c.key], z = S.sizes[c.key];
@@ -4117,7 +4210,7 @@ const PB = (() => {
     portalToggle: () => {
       const ws = visibleWires().filter((w) => !w.ghost).slice(0, 4).map((w) => w.id);
       setPortals(Object.fromEntries(ws.map((id) => [id, "hand"])));
-      const spots = () => Object.fromEntries([...document.querySelectorAll(".portal-end")].map((e, i) => [`${e.dataset.wire}>${i % 2}`, e.getAttribute("transform")]));
+      const spots = () => Object.fromEntries([...document.querySelectorAll(".portal-end")].map((e) => [`${e.dataset.plug}${e.dataset.wire}${e.classList[1]}`, e.getAttribute("transform")]));
       const before = spots();
       setPortals({ [ws[1]]: null });
       setPortals({ [ws[1]]: "hand" });
@@ -4128,12 +4221,19 @@ const PB = (() => {
         if (p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom) S.errors.push("portal toggle: two badges overlap");
       }));
     },
-    // The pointer on portal i's exit badge: its wire shows, whole.
-    portalHover: (i) => {
-      const end = document.querySelectorAll(".portal-end")[2 * i];
+    // The pointer on portal i's exit badge (or this card's shared one): its wires show, whole
+    // (all of them, from a shared one); menu: right-click it instead (a shared one: Show as wires).
+    portalHover: (i, menu = false) => {
+      const end = typeof i === "string" ? document.querySelector(`.portal-end.out[data-plug^="${i}:"][data-wire=""]`) : document.querySelectorAll(".portal-end.out")[i];
+      if (menu) {
+        const r = end?.getBoundingClientRect();
+        end?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r?.x, clientY: r?.y }));
+        if (end && !end.dataset.wire && !document.querySelector(".menu")?.textContent.includes("Show as wires")) S.errors.push("portal menu: no Show as wires");
+        return;
+      }
       end?.dispatchEvent(new MouseEvent("mouseenter"));
-      const we = S.wireEls[end?.dataset.wire];
-      if (!we || !we.g.classList.contains("hot")) S.errors.push("portal hover: its wire did not show");
+      const mine = Object.values(S.wireEls).filter((we) => we.ends?.[0] === end);
+      if (!mine.length || mine.some((we) => !we.g.classList.contains("hot"))) S.errors.push("portal hover: its wires did not show");
     },
     // A card appearing where another card has been moved to (owner: new app cards landed on top
     // of existing ones): its spot in a fresh layout is taken first, then it "appears".
