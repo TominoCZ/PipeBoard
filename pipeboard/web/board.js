@@ -1454,8 +1454,15 @@ const PB = (() => {
       for (const c of clipped) near[c] = 0;
       for (let k = 1; k < near.length; k++) near[k] = Math.min(near[k], near[k - 1] + 1);
       for (let k = near.length - 2; k >= 0; k--) near[k] = Math.min(near[k], near[k + 1] + 1);
-      const sigma = 24 / WAVE_PX;
-      const stops = pts.map((p, k) => [Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2)), Math.exp(-((near[k] / sigma) ** 2))])
+      // A stop every 6 px (the bell is ~24 px: as smooth as one per point), and none inside a run
+      // of no red but its two ends: one per point, a long wire had ~400 stops set every frame
+      // (traced: the glow doubled the page's and the GPU's work).
+      const sigma = 24 / WAVE_PX, every = Math.round(6 / WAVE_PX), red = (k) => Math.exp(-((near[k] / sigma) ** 2));
+      const ks = [];
+      for (let k = 0; k < pts.length; k += every) ks.push(k);
+      if (ks.at(-1) !== pts.length - 1) ks.push(pts.length - 1);
+      const stops = ks.filter((k, i) => red(k) > 0.004 || red(ks[i - 1] ?? k) > 0.004 || red(ks[i + 1] ?? k) > 0.004)
+        .map((k) => [Math.min(1, Math.max(0, ((pts[k][0] - a[0]) * dx + (pts[k][1] - a[1]) * dy) / len2)), red(k)])
         .sort((p, q) => p[0] - q[0]);
       clip = { a, b, stops };
     }
@@ -1491,7 +1498,12 @@ const PB = (() => {
           if (c) {
             path.setAttribute("d", shape.d);
             for (const [k, v] of Object.entries({ x1: c.a[0], y1: c.a[1], x2: c.b[0], y2: c.b[1] })) grad.setAttribute(k, v);
-            grad.replaceChildren(...c.stops.map(([t, o]) => s("stop", { offset: t.toFixed(4), "stop-color": "#ff5a4e", "stop-opacity": o.toFixed(3) })));
+            // The same stops kept and moved, an attribute set only when it changed: a stop changed
+            // restyles the whole page (Chrome; traced), so a still glow (Instant) costs nothing.
+            while (grad.childElementCount < c.stops.length) grad.append(s("stop", { "stop-color": "#ff5a4e" }));
+            while (grad.childElementCount > c.stops.length) grad.lastChild.remove();
+            const set = (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); };
+            c.stops.forEach(([t, o], k) => { set(grad.children[k], "offset", t.toFixed(4)); set(grad.children[k], "stop-opacity", o.toFixed(3)); });
           } else { we.clip.forEach((el) => el.remove()); we.clip = null; }
         }
       }
