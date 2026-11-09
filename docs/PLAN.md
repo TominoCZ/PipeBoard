@@ -793,7 +793,10 @@ that are gone now. Everything else is a comparison:
   with one (moved, renamed, made, or its settings changed: `profiles.unsaved`), always. While the
   changes card is hovered, and for 2.5 s after a Tidy, each moved card's saved spot shows as a
   dashed ghost with an arrow to where it is now, and everything without a change dims. Wires
-  added or removed get no dot.
+  added or removed get no dot. **A move is the user's only** (owner: "Moved 1 card" for an app
+  the board had placed by itself, then closed): the board sends the spots it picks itself (a new
+  card, an app back where another sits) as `auto`; the server lists the cards the user moved
+  since the save (`moved`, cleared by Save and Load), and only those on the board now count.
 - **The profile button** (bar): the profiles, the active one ticked and the launch one marked;
   Save; Save as new profile… (name checked as you type; replacing one asks first); Load at launch ›
   (Nothing, or a profile); Delete profile › (asks; says nothing on the system changes).

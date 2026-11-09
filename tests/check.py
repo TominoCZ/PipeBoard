@@ -140,6 +140,17 @@ def check_workspace():
     assert not workspace.apply(ws, {"op": "rename"}), "no key, no change"
     assert graph.pair([1, 2], [3, 4]) == [(1, 3), (2, 4)] and graph.pair([1], [3, 4]) == [(1, 3), (1, 4)]
     assert graph.pair([1, 2], [3]) == [(1, 3), (2, 3)]
+    # Moves offered for saving are the user's (owner: an app the board placed by itself showed as
+    # "Moved 1 card"), and only on cards shown now (that app had closed: nothing to show).
+    saved = {"wires": [], "cards": {"app": {"x": 4, "y": -4}, "mix": {"x": 0, "y": 0}}}
+    now = {"wires": [], "cards": {"app": {"x": 4, "y": -4}, "mix": {"x": 0, "y": 0}}}
+    workspace.apply(now, {"op": "place", "cards": {"app": {"x": -82, "y": -32}}, "auto": True})
+    assert profiles.changes(saved, now) == [] and profiles.unsaved(saved, now) == {}, "the board's own"
+    workspace.apply(now, {"op": "place", "cards": {"mix": {"x": 5, "y": 0}}})
+    assert profiles.changes(saved, now) == ["Moved 1 card"] and profiles.unsaved(saved, now) == {"mix": {"x": 0, "y": 0}}
+    assert profiles.changes(saved, now, shown={"app"}) == [], "not on the board: not counted"
+    workspace.apply(now, {"op": "place", "cards": {"mix": {"x": 9, "y": 0}}, "auto": True})
+    assert profiles.changes(saved, now) == [], "placed again by the board: no longer the user's move"
 
 
 def check_profiles():
@@ -185,7 +196,7 @@ def check_profiles():
     # made device and a retuned one; the plugin reporting its controls the first time is none.
     was = {"wires": [], "cards": {"a": {"x": 1, "y": 2}, "b": {"x": 3, "y": 4}, "c": {}, "p": {}},
            "devices": {"p": first, "q": plug}}
-    now = {"wires": [], "cards": {"a": {"x": 5, "y": 2}, "b": {"x": 3, "y": 4}, "c": {"nick": "C"}, "p": {}},
+    now = {"wires": [], "moved": ["a"], "cards": {"a": {"x": 5, "y": 2}, "b": {"x": 3, "y": 4}, "c": {"nick": "C"}, "p": {}},
            "devices": {"p": {**plug, "params": [{"i": 0, "value": 0.9}]}, "q": first, "n": plug}}
     assert profiles.unsaved(was, now) == {"a": {"x": 1, "y": 2}, "c": {}, "p": {}, "n": {}}, profiles.unsaved(was, now)
     for bad in ("", "../etc", "a/b", ".hidden", "x" * 41):
@@ -1920,6 +1931,14 @@ async def check_own_devices():
         assert board.ws["view"] == {"x": 1.0, "y": 2.0, "z": 0.5}, board.ws["view"]
         await board.load("Before")
         assert board.ws["view"] == board.store.read("Before")["view"], board.ws["view"]
+        # A move is still the user's after the server re-reads the graph (it dropped the list).
+        key = board.model["cards"][0]["key"]
+        await board.act(None, {"op": "place", "cards": {key: {"x": 70, "y": 70}}})
+        await board.op_save(None, {})
+        assert board.ws.get("moved") == [] and "Moved 1 card" not in board.profile_state()["changes"]
+        await board.act(None, {"op": "place", "cards": {key: {"x": 77, "y": 77}}})
+        assert board.ws.get("moved") == [key], board.ws.get("moved")
+        assert "Moved 1 card" in board.profile_state()["changes"], board.profile_state()["changes"]
 
 
 def profiles_missing(board):
@@ -2365,7 +2384,8 @@ def check_cells():
         workspace.save(path, ws)
         assert workspace.load(path)["cards"]["a"] == {"x": 5, "y": 6}, "a marked board is not converted again"
     assert profiles.snapshot({"cards": [], "wires": []}, {"cards": {"a": {"x": 5, "y": 6}}})["grid"] == "cells"
-    assert profiles._moved({"x": 5, "y": 6}, {"x": 6, "y": 6}) and not profiles._moved({"x": 5, "y": 6}, {"x": 5, "y": 6})
+    mine = {"moved": ["a"]}
+    assert profiles._moved({"x": 5, "y": 6}, {"x": 6, "y": 6}, mine, "a") and not profiles._moved({"x": 5, "y": 6}, {"x": 5, "y": 6}, mine, "a")
 
 
 UR_DEV, PEDAL = "alsa_card.usb-Example_Studio_Interface-00", "alsa_card.usb-Example_Guitar_Pedal-00"

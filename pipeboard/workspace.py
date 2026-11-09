@@ -80,10 +80,18 @@ def remember(card: dict, name: str) -> None:
     card["names"] = [name] + [n for n in card.get("names", []) if n != name][:HISTORY - 1]
 
 
-def place(cards: dict, moved: dict) -> None:
-    for key, p in moved.items():
+def place(ws: dict, op: dict) -> bool:
+    """Cards' new places (cells). The cards the user moved are listed (ws["moved"]) to offer for
+    saving; a spot the board picked by itself (op auto: a new card, an app back where another sits
+    now) is not their move (owner: "Moved 1 card" for an app they never touched)."""
+    done = set()
+    for key, p in (op.get("cards") or {}).items():
         if isinstance(p, dict) and all(isinstance(p.get(k), int | float) for k in ("x", "y")):
-            cards.setdefault(str(key), {}).update(x=round(p["x"]), y=round(p["y"]))  # (cells)
+            ws["cards"].setdefault(str(key), {}).update(x=round(p["x"]), y=round(p["y"]))
+            done.add(str(key))
+    mine = set(ws.get("moved", [])) - done
+    ws["moved"] = sorted(mine if op.get("auto") else mine | done)
+    return True
 
 
 def _view(ws: dict, op: dict) -> bool:
@@ -122,11 +130,11 @@ def _portals(ws: dict, op: dict) -> bool:
     return True
 
 
-WHOLE = {"place": lambda ws, op: place(ws["cards"], op.get("cards") or {}) or True,
+WHOLE = {"place": place,
          "view": _view, "portals": _portals,
          # Tidy, all at once (owner: no steps seen): the cards' new places and its own portals
-         "tidy": lambda ws, op: (place(ws["cards"], op.get("cards") or {})
-                                 or _portals(ws, {**op, "tidy": True})),
+         "tidy": lambda ws, op: (place(ws, {"cards": op.get("cards")})
+                                 and _portals(ws, {**op, "tidy": True})),
          # whether Tidy folds a long board into rows with portals (Tidy's menu; off unless on)
          "tidy-portals": lambda ws, op: ws.update(tidy_portals=bool(op.get("on"))) or True}
 

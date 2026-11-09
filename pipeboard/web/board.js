@@ -1003,10 +1003,11 @@ const PB = (() => {
   // Places sent to the server, held on the page until it has saved them (or 3 s): a board update
   // it sent just before carried the old spots, and a card dropped after a drag jumped back, then
   // forward again (owner: "teleport back and forth" after letting go). Tidy had the same guard.
-  function sendPlaces(cards) {
+  // auto: a spot the board picked by itself, not the user's move (not offered for saving).
+  function sendPlaces(cards, auto = false) {
     const still = S.placing && performance.now() - S.placing.at < 3000 ? S.placing.cards : {};
     S.placing = { cards: { ...still, ...cards }, at: performance.now() };
-    send({ op: "place", cards });
+    send({ op: "place", cards, auto });
   }
   function placeNew(keys, keep = false) {
     if (!keep) layout(keys);
@@ -1032,7 +1033,7 @@ const PB = (() => {
       S.pos[k] = at;
       boxes.push({ ...at, ...s });
     }
-    sendPlaces(Object.fromEntries(keys.map((k) => [k, S.pos[k]])));
+    sendPlaces(Object.fromEntries(keys.map((k) => [k, S.pos[k]])), true);
   }
 
   // Tidy: everything worked out first, then shown in one go and sent as one message, so no

@@ -181,9 +181,10 @@ class Board:
         saved = self.store.read(active) if active and active in self.store.names() else None
         gone = profiles.missing(self.ws, self.model)
         keys = {m["key"] for m in gone}
+        shown = {c["key"] for c in self.model["cards"]} | keys  # (drawn now, missing ones too)
         return {"active": active, "names": self.store.names(),
                 "launch": self.settings["launch"],
-                "changes": profiles.changes(saved, self.ws) if saved else [],
+                "changes": profiles.changes(saved, self.ws, shown) if saved else [],
                 "unsaved": profiles.unsaved(saved, self.ws) if saved else {},
                 "missing": gone, "ghosts": [w for w in self.ws["wires"]
                                             if w["from"][0] in keys or w["to"][0] in keys]}
@@ -509,7 +510,8 @@ class Board:
         key = f"pb:{dev['id']}"
         self.ws.setdefault("devices", {})[key] = dev
         self.created.add(key)
-        workspace.place(self.ws["cards"], {key: {"x": op.get("x", 0), "y": op.get("y", 0)}})
+        at = {key: {"x": op.get("x", 0), "y": op.get("y", 0)}}
+        workspace.place(self.ws, {"cards": at, "auto": True})  # (not a move: it is "Made …")
         return key, dev
 
     async def op_create_device(self, _page, op) -> str | None:
@@ -1137,7 +1139,7 @@ class Board:
                    if "counts" in d}
         view = self.ws.get("view") if keep_view else None
         self.ws = {**saved, "cards": saved.get("cards", {}), "wires": saved.get("wires", []),
-                   "view": view or saved.get("view")}
+                   "view": view or saved.get("view"), "moved": []}
         for key, counts in counted.items():  # (a Counter's totals run on, not the profile's)
             self.ws.get("devices", {}).get(key, {})["counts"] = counts
         self._set(active=name)
@@ -1176,6 +1178,7 @@ class Board:
         name = str(op.get("name") or self.profile_state()["active"] or "").strip()
         if not profiles.valid_name(name):
             return "A profile name is letters, digits, spaces and - _ ( ), up to 40."
+        self.ws["moved"] = []  # (moves since the save)
         self.store.write(name, self.ws)
         self._set(active=name)
         return None

@@ -52,6 +52,7 @@ def snapshot(model: dict, board: dict) -> dict:
             "devices": copy.deepcopy(board.get("devices", {})),
             "made": [i for i in board.get("made", []) if i in ids],  # wires the user made here
             "cut": [i for i in board.get("cut", []) if i not in ids],  # and unplugged here
+            "moved": [k for k in board.get("moved", []) if k in cards],  # cards the user moved here
             # wires drawn as portals (board-only: the sound goes straight from A to B)
             "portals": {i: how for i, how in board.get("portals", {}).items() if i in ids},
             "tidy_portals": board.get("tidy_portals", False)}
@@ -154,8 +155,10 @@ def _wid(w: dict) -> str:
     return f"{w['from'][0]}:{w['from'][1]}>{w['to'][0]}:{w['to'][1]}"
 
 
-def changes(saved: dict, now: dict) -> list[str]:
-    """What changed between a saved profile and the board now, one line each, for the user."""
+def changes(saved: dict, now: dict, shown: set | None = None) -> list[str]:
+    """What changed between a saved profile and the board now, one line each, for the user.
+    shown: the cards on the board now; a move counts only on one of them (owner: "Moved 1 card"
+    for an app that had closed, nothing to show)."""
     key = lambda w: (tuple(w["from"]), tuple(w["to"]), tuple(map(tuple, w["pairs"])))  # noqa: E731
     before, after = {key(w): w for w in saved.get("wires", [])}, {key(w): w for w in now["wires"]}
     # Only what the user did here (owner: "when something changes in the graph because of
@@ -178,7 +181,7 @@ def changes(saved: dict, now: dict) -> list[str]:
         if bool(a.get("hidden")) != bool(b.get("hidden")):
             lines.append(f"{'Removed' if b.get('hidden') else 'Put back'} {_name(now, k)}"
                          f" {'from' if b.get('hidden') else 'on'} the board")
-        moved += _moved(a, b)
+        moved += _moved(a, b, now, k) and (shown is None or k in shown)
     if moved:
         lines.append(f"Moved {moved} card{'s' if moved > 1 else ''}")
     # Portals too (owner: never offered for saving, the launch profile turned them back into wires)
@@ -203,7 +206,7 @@ def unsaved(saved: dict, now: dict) -> dict:
     out = {}
     for k, b in now["cards"].items():
         a = saved.get("cards", {}).get(k, {})
-        if _moved(a, b):
+        if _moved(a, b, now, k):
             out[k] = {"x": a["x"], "y": a["y"]}
         elif a.get("nick") != b.get("nick"):
             out[k] = {}
@@ -239,9 +242,10 @@ def _settings(dev: dict) -> tuple:
             bool(dev.get("mono")), dev.get("zoom", True), bool(dev.get("lines")))
 
 
-def _moved(a: dict, b: dict) -> bool:
-    """Moved by a cell or more (positions are whole cells)."""
-    return "x" in a and "x" in b and (a["x"], a["y"]) != (b["x"], b["y"])
+def _moved(a: dict, b: dict, now: dict, key: str) -> bool:
+    """Moved by the user (workspace.place) by a cell or more (positions are whole cells)."""
+    return (key in now.get("moved", []) and "x" in a and "x" in b
+            and (a["x"], a["y"]) != (b["x"], b["y"]))
 
 
 def _new_socket(old: dict, new: dict, side: str, sock: str) -> dict | None:
