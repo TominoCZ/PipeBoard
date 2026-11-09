@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fcntl
+import functools
 import hashlib
 import logging
 import os
@@ -19,6 +20,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import webbrowser
 from pathlib import Path
 
 from aiohttp import web
@@ -30,11 +32,29 @@ ROOT = Path(__file__).resolve().parent.parent
 BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 
 
+@functools.cache
+def chrome() -> str | None:
+    """A Chrome or Chromium that can start: --version goes through the packages' wrapper scripts to
+    the real binary, which the loader runs only with all its libraries there. GPU drivers are
+    loaded later and not looked at. Once per run."""
+    for name in BROWSERS:
+        if path := shutil.which(name):
+            try:
+                if subprocess.run([path, "--version"], capture_output=True,
+                                  timeout=10).returncode == 0:
+                    return path
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            print(f"pipeboard: {path} cannot start", file=sys.stderr)
+    return None
+
+
 def open_window(url: str, profile: Path) -> None:
-    """The page in a bare app window with its own profile, so it closes like an app."""
-    browser = next((p for b in BROWSERS if (p := shutil.which(b))), None)
-    if not browser:
-        print(f"pipeboard: no Chrome or Chromium found; open {url} yourself", file=sys.stderr)
+    """The page in a bare app window with its own profile, so it closes like an app; in the
+    default browser when no Chrome or Chromium can start."""
+    if not (browser := chrome()):
+        if not webbrowser.open(url):
+            print(f"pipeboard: no browser found; open {url} yourself", file=sys.stderr)
         return
     subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
                       "--no-default-browser-check", "--window-size=1500,920"],
@@ -216,7 +236,8 @@ def serve(args, url: str, data: Path, folder: Path) -> None:
     def show() -> None:
         """The tray's click: raise the open window, or open one."""
         async def go():
-            if not (board.pages and await raise_window()):
+            # KWin raises only the Chrome app window; a browser tab is opened again instead
+            if not (board.pages and chrome() and await raise_window()):
                 open_window(url, profile)
         asyncio.ensure_future(go())
 

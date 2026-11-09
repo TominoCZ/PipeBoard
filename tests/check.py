@@ -523,6 +523,32 @@ def check_apprt():
             apprt.RAISED.clear()
 
 
+def check_browser_fallback():
+    """A Chrome whose libraries are not all there (the loader exits 127) is passed over for the
+    next one; with none that can start, the board opens in the default browser."""
+    import webbrowser
+
+    from pipeboard import __main__ as main
+    opened, real = [], (main.BROWSERS, webbrowser.open)
+    webbrowser.open = lambda url: opened.append(url) or True
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = {}
+        for code in (0, 127):
+            fake[code] = Path(tmp) / f"chrome{code}"
+            fake[code].write_text(f"#!/bin/sh\nexit {code}\n")
+            fake[code].chmod(0o755)
+        try:
+            for browsers, want in (((fake[127], fake[0]), str(fake[0])), ((fake[127], "no-such"), None)):
+                main.BROWSERS = tuple(map(str, browsers))
+                main.chrome.cache_clear()
+                assert main.chrome() == want, (browsers, main.chrome())
+                main.open_window("u", Path(tmp))
+                assert opened == ([] if want else ["u"]), opened
+        finally:
+            main.BROWSERS, webbrowser.open = real
+            main.chrome.cache_clear()
+
+
 def check_usb_blocks():
     """An interface with implicit feedback (1 ms USB transfers) is offered whole milliseconds at
     its rate, and only those are accepted; any other, or 44.1 kHz, keeps the usual list."""
@@ -2859,6 +2885,7 @@ def main():
     check_headroom()
     check_usb_blocks()
     check_apprt()
+    check_browser_fallback()
     check_audible()
     check_cstates()
     check_kernel()
