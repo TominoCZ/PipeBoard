@@ -90,7 +90,7 @@ const PB = (() => {
     if (msg.type === "bye") { S.bye = true; window.close(); return; }  // PipeBoard is quitting
     if (msg.type === "plan") return showPlan(msg);
     if (msg.type === "scope") { newSources(msg.sources, msg.fresh); return; }
-    if (msg.type === "plugins") { S.pluginList = msg.list; S.picker?.(); return; }
+    if (msg.type === "plugins") { S.pluginList = msg.list; S.picker?.(msg.added); return; }
     if (msg.type === "eq-pcm") { EQ.pcm(msg.key, msg.pcm); return; }
     if (msg.type === "diag-keys") { DIAG.keys(msg.keys); return; }
     if (msg.type === "dyn-peaks") { DYN.peaks(msg.key, msg.peaks); return; }
@@ -656,8 +656,8 @@ const PB = (() => {
 
   // A list with a search box, to pick one plugin. items() → [{value, label, sub}], or null while
   // the list is still coming (the "plugins" message redraws an open picker). Resolves with the
-  // value, or null.
-  function picker({ title, items, placeholder, loading, ok = "Add" }) {
+  // value, or null. rescan(): asks for the list again; its answer says how many are new.
+  function picker({ title, items, placeholder, loading, rescan, ok = "Add" }) {
     return new Promise((done) => {
       closeMenu(); hideTip();
       const search = h("input", { type: "text", placeholder, "aria-label": placeholder, spellcheck: "false" });
@@ -665,11 +665,19 @@ const PB = (() => {
       const count = h("span", { class: "pick-count" });
       const no = h("button", { type: "button", text: "Cancel" });
       const yes = h("button", { type: "button", class: "primary", text: ok });
+      const again = rescan && h("button", { type: "button", text: "Rescan",
+                                           title: "Look for plugins installed since; only new ones take a while" });
+      let scanning = false, found = "";  // found: what the last Rescan found
+      again?.addEventListener("click", () => { scanning = true; found = ""; draw(); rescan(); });
       const box = h("div", { class: "dialog picker", role: "dialog", "aria-modal": "true", "aria-label": title },
-                    h("h2", { text: title }), search, list, h("div", { class: "actions" }, count, no, yes));
+                    h("h2", { text: title }), search, list, h("div", { class: "actions" }, count, again || null, no, yes));
       let shown = [], active = 0;
-      const draw = () => {
+      const draw = (added) => {
         const all = items(), words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+        if (added !== undefined) { scanning = false; found = added ? ` · ${added} new` : " · none new"; }
+        if (again) {  // (not while the first list is coming: everything would count as new)
+          again.disabled = !all || scanning; again.textContent = scanning ? "Scanning…" : "Rescan";
+        }
         list.textContent = "";
         if (!all) { list.append(h("div", { class: "pick-note", text: loading })); shown = []; return; }
         shown = all.filter((it) => words.every((w) => `${it.label} ${it.sub}`.toLowerCase().includes(w)));
@@ -683,7 +691,7 @@ const PB = (() => {
           row.addEventListener("dblclick", () => finish(it.value));
           list.append(row);
         });
-        count.textContent = `${shown.length} plugin${shown.length === 1 ? "" : "s"}`;
+        count.textContent = `${shown.length} plugin${shown.length === 1 ? "" : "s"}${found}`;
         list.querySelector(".pick.active")?.scrollIntoView({ block: "nearest" });
       };
       const veil = h("div", { class: "veil" }, box);
@@ -715,6 +723,7 @@ const PB = (() => {
     const ref = await picker({
       title: "Add a plugin", placeholder: "Search by name or maker",
       loading: "Looking for your plugins… The first look can take a minute.",
+      rescan: () => send({ op: "plugin-list", rescan: true }),
       items: () => S.pluginList && S.pluginList.map((p) => ({
         value: p.ref, label: p.name, sub: `${p.maker} · ${p.format.toUpperCase()} · ${shapeOf(p)}` })) });
     if (ref) makeDevice({ type: "plugin", plugin: ref }, ctx);
@@ -3156,11 +3165,12 @@ const PB = (() => {
     },
     cardMenu: (key) => { const r = S.els[key].getBoundingClientRect(); cardMenu(key, r.right - 20, r.top + 20); },
     // Plugins: the picker (with the fixture's list, searched for query), a card's controls, an open editor.
-    pickPlugin: (list, query = "") => {
+    pickPlugin: (list, query = "", added) => {  // added: as a Rescan's answer says
       S.pluginList = list.map((p) => ({ ...p, ref: `${p.format}:${p.path || ""}:${p.label}` }));
       pickPlugin({});
       const box = document.querySelector(".picker input");
       box.value = query; box.dispatchEvent(new Event("input"));
+      if (added !== undefined) S.picker(added);
     },
     editorOpen: (key) => { S.editors = [key]; render(); },
     // The EQ: open its panel with band sel picked and a made-up spectrum behind the curve.

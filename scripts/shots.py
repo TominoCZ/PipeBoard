@@ -378,6 +378,7 @@ SHOTS = {
     "plugin-menu": ("machine", BIG, plugged, "PB.debug.cardMenu('pb:dcomp01')"),
     "plugin-picker": ("machine", BIG, None, f"PB.debug.pickPlugin({LISTED})"),
     "plugin-search": ("machine", SMALL, None, f"PB.debug.pickPlugin({LISTED}, 'lsp comp')"),
+    "plugin-rescanned": ("machine", SMALL, None, f"PB.debug.pickPlugin({LISTED}, '', 2)"),
     "tip-plugin": ("machine", BIG, plugged, "PB.debug.showTip('.card[data-key=\"pb:dhum01\"] header', 1100, 400)"),
     "eq": ("machine", BIG, equalized, ""),
     "eq-panel": ("machine", BIG, equalized, "PB.debug.eqOpen('pb:deq01', 2)"),

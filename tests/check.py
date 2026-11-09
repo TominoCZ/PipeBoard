@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "tests" / "fixtures")]
 import asyncio  # noqa: E402
+import functools  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
@@ -1237,6 +1238,22 @@ async def check_plugins(board, page, next_state):
     rename stays on the board; a profile line; deleting it stops its host."""
     await page.send_json({"op": "plugin-list"})
     hum = next(p for p in (await message(page, "plugins"))["list"] if p["name"] == "Hum Remover")
+    # Rescan (the picker's button): lists them again and says how many are new.
+    from pipeboard import plugins  # noqa: PLC0415
+    every, listed = board.plugins.found, []
+
+    async def relist():
+        listed.append(1)
+        board.plugins.found, board.plugins.listing = every, None  # (as _list ends)
+    board.plugins.found, board.plugins._list = every[:-1], relist
+    board.plugins.installed = functools.partial(plugins.Plugins.installed, board.plugins)
+    for want in (1, 0):  # the one installed since, then none
+        await page.send_json({"op": "plugin-list", "rescan": True})
+        msg = await message(page, "plugins")
+        assert msg["added"] == want and len(msg["list"]) == len(every), (want, msg["added"])
+    await page.send_json({"op": "plugin-list"})
+    assert "added" not in await message(page, "plugins") and len(listed) == 2, "only Rescan lists"
+    del board.plugins.installed, board.plugins._list
     await page.send_json({"op": "create-device", "type": "plugin", "plugin": "vst3:/etc/evil.so:x",
                           "x": 0, "y": 0})
     await message(page, "toast")

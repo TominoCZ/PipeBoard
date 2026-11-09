@@ -674,14 +674,19 @@ class Board:
             self.plugins.send(op["key"], {"bypass": dev["bypass"]})
         return None
 
-    async def op_plugin_list(self, page, _op) -> str | None:
+    async def op_plugin_list(self, page, op) -> str | None:
         """The installed plugins, for the picker. The first listing can take a while (a big VST3
-        bundle is discovered once): it is sent when ready, without holding up the page."""
+        bundle is discovered once): it is sent when ready, without holding up the page.
+        `rescan`: look again (Rescan in the picker), and say how many are new."""
         async def send() -> None:
-            found = await self.plugins.installed()
+            rescan = bool(op.get("rescan"))
+            before = {plugins.ref(p) for p in self.plugins.found or []}
+            found = await self.plugins.installed(rescan)
+            msg = {"type": "plugins", "list": [{**p, "ref": plugins.ref(p)} for p in found]}
+            if rescan:
+                msg["added"] = sum(m["ref"] not in before for m in msg["list"])
             with contextlib.suppress(ConnectionError):
-                await page.send_str(json.dumps({"type": "plugins", "list": [
-                    {**p, "ref": plugins.ref(p)} for p in found]}))
+                await page.send_str(json.dumps(msg))
         asyncio.create_task(send())
         return None
 

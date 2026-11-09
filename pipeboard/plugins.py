@@ -63,9 +63,12 @@ class Plugins:
         self.found: list[dict] | None = None  # installed plugins, once listed
         self.listing: asyncio.Task | None = None
 
-    async def installed(self) -> list[dict]:
+    async def installed(self, rescan: bool = False) -> list[dict]:
         """The installed Linux effects; the first call lists them (VST3 bundles new to the cache
-        are discovered, LSP's takes ~50 s once), later ones reuse that."""
+        are discovered, LSP's takes ~50 s once), later ones reuse that. `rescan` lists them again:
+        LV2s ~1 s, unchanged VST3 bundles from the cache, so only what is new is slow."""
+        if rescan and not self.listing:
+            self.found = None
         if self.found is None:
             if not self.listing:
                 self.listing = asyncio.create_task(self._list())
@@ -196,6 +199,9 @@ class FakePlugins(Plugins):
     def __init__(self, heard: Callable[[str, dict], None], source):
         super().__init__(heard)
         self.source, self.found, self.running = source, FAKE_INSTALLED, set()
+
+    async def installed(self, rescan: bool = False) -> list[dict]:
+        return self.found  # (Rescan never lists the real ones)
 
     async def start(self, key: str, dev: dict) -> str | None:
         if key in self.running:
