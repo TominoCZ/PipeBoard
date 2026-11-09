@@ -93,7 +93,10 @@ SHOTS = {
     "effects/denoise": ("machine", shots.equalized, shots.SHOTS["denoise"][3], ("panel", WIDE, ".eq-panel")),
     "engine": ("machine", None, "PB.debug.engineOpen({block: 256, blocks: 2, prio: 90, tsched: true}, true)",
                ("panel", WIDE, ".eng")),
-    "latency-path": ("machine", mine_plain, "PB.debug.pathView('Voice Mix')", ("still", WIDE)),
+    # A sound card's own panel (its gear): rate, margin, scheduling, how close it came to running dry.
+    "engine-card": ("machine", None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 96000, 192000], dev_rate: 192000, "
+                    "fixed_rate: null}) || PB.debug.ifaceOpen() || PB.debug.fakeHeadroom()", ("panel", WIDE, ".iface-panel")),
+    "latency-path": ("machine", mine_plain, "PB.debug.tidy() || PB.debug.pathView('Voice Mix')", ("still", WIDE)),
     "diagnostics": ("machine", shots.diagnosed, "PB.debug.tidy() || PB.debug.fakeLive(99, null, false) || "
                     "PB.debug.fit(['music_player', 'pb:dwave01', 'pb:dster01', 'pb:dcount01', 'pb:dmeter01', 'pb:dspec01'])",
                     ("still", (1650, 1100))),

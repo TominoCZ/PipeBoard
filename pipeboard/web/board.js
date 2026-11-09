@@ -1587,10 +1587,11 @@ const PB = (() => {
     return { x0, y0, x1, y1 };
   }
 
-  function fit(animate = true, keys = visible().map((c) => c.key), maxZ = 1.1) {
+  // below: room kept clear at the bottom (a docked panel's height).
+  function fit(animate = true, keys = visible().map((c) => c.key), maxZ = 1.1, below = 0) {
     const b = bounds(keys);
     if (!b) return;
-    const top = 70, pad = 50, W = innerWidth, H = innerHeight;
+    const top = 70, pad = 50, W = innerWidth, H = innerHeight - below;
     const z = Math.min(maxZ, Math.max(0.35, Math.min((W - 2 * pad) / (b.x1 - b.x0), (H - top - pad) / (b.y1 - b.y0))));
     const to = { z, x: (W - (b.x1 - b.x0) * z) / 2 - b.x0 * z, y: top + (H - top - pad - (b.y1 - b.y0) * z) / 2 - b.y0 * z };
     if (!animate || S.mode === "preview") { S.view = to; applyView(); return; }
@@ -3353,8 +3354,7 @@ const PB = (() => {
       openPath(key);
       const keys = S.model.latency?.[key]?.path;
       if (!keys) { S.errors.push(`pathView: no path into ${key}`); return; }
-      fit(false, keys, 1.1);
-      S.view.y -= 70; applyView(false);
+      fit(false, keys, 1.1, $("latpath").offsetHeight + 14);  // (the whole path above the panel)
       if (S.mode === "preview") { S.drops = Object.fromEntries(keys.map((k) => [k, 0])); showDrops(); }  // (no server: none counted)
     },
     // A new state arriving with the panel open: the same panel stays (no redraw, no animation).

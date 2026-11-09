@@ -58,14 +58,19 @@ Tick **Show latency** to see what each effect adds and the total delay arriving 
 Click a total to see where it comes from: every step on the way, the delay of each, and whether
 anything dropped out while the panel was open.
 
-![The path into a voice mix: the interface's buffer 9.3 ms, a limiter 5 ms, the rest nothing; 14.3 ms in all](docs/images/latency-path.png)
+![The path into a voice mix: the interface's buffer 4.0 ms, a limiter 5.0 ms, the rest nothing; 9.0 ms in all](docs/images/latency-path.png)
 
-The clock readout in the bar opens the **Audio engine**: the block size and the interface's safety
-margin, with the round trip they make, and under Advanced the scheduling (interrupts or timer),
-the CPU's deep idle states, the low-latency kernel options, and PipeWire's priorities. A change is tried for a minute and goes
-back by itself unless you keep it.
+The clock readout in the bar opens the **Audio engine**: the block size, with the round trip it
+makes, and under Advanced the CPU's deep idle states, the low-latency kernel options, and
+PipeWire's priorities. A change is tried for a minute and goes back by itself unless you keep it.
 
-<img src="docs/images/engine.png" alt="The Audio engine panel, Advanced open: block 256, a 2-block margin, 8.0 ms round trip, timer scheduling, idle states, priorities" width="460">
+<img src="docs/images/engine.png" alt="The Audio engine panel, Advanced open: block 256 and the 8.0 ms round trip it makes, the sound cards, idle states, kernel options, priorities" width="460">
+
+Each sound card has its own panel, the gear at the bottom of its card: its safety margin, sample
+rate and scheduling (interrupts or timer), and how close it came to running out of sound in the
+last minute.
+
+![A sound card's panel: a 1-block safety margin, 192 kHz, interrupts, and its buffer headroom over the last minute](docs/images/engine-card.png)
 
 ## Diagnostics
 
@@ -111,10 +116,11 @@ young software, so expect rough edges.
 
 ## Using it
 
-- **Connect:** drag from an OUT socket to an IN socket. **Disconnect:** click a wire, then Delete;
-  or right-click a card › Disconnect to unplug it completely.
-- **Add:** right-click the board › Add node (effects, devices, apps). Drop a wire on empty board to
-  add something already connected.
+- **Connect:** drag from an OUT socket to an IN socket. **Disconnect:** click a wire, then Delete or
+  Disconnect in the bar that opens where you clicked (Insert puts a node in the middle of it); or
+  right-click a card › Disconnect to unplug it completely.
+- **Add:** right-click the board › Add node (effects, devices, apps); a new effect opens its
+  settings at once. Drop a wire on empty board to add something already connected.
 - **Numbers:** scroll or type, Enter applies, Esc cancels.
 - **Move around:** drag to pan, scroll to zoom, **F** to fit, **Tidy** to lay out by signal flow
   (see [Portals](#portals)). **Wires** sets how they show the sound: still, flowing, or instant.
