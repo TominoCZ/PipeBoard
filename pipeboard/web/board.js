@@ -2439,7 +2439,7 @@ const PB = (() => {
   // ---- status, tooltip, toast ---------------------------------------------------------------
   function setStatus(cls, text) { const el = $("status"); el.className = `status ${cls}`; el.textContent = text; }
   // ---- the audio engine (PLAN §8c): block size, safety margin, priority, tried for a minute ----
-  const BLOCKS = [128, 256, 512, 1024, 2048], MARGINS = [1, 2, 3];  // (the margin in whole blocks: engine.MARGIN_BLOCKS)
+  const BLOCKS = [128, 256, 512, 1024, 2048], MARGINS = [0, 1, 2, 3];  // (the margin in whole blocks: engine.MARGIN_BLOCKS)
   const roundTrip = (e, rate) => (2 * (e.block + e.margin) / rate) * 1000;  // in and out: block + margin each
   // Draws the open panel: the Audio engine's (S.iface null) or an interface's (S.iface its key),
   // once the server reads that interface (until then the figures would be another card's).
@@ -2449,14 +2449,14 @@ const PB = (() => {
     if (e.trial) { toast("A setting is being tried: keep or revert it first.", "info"); return; }
     if (S.iface && e.device !== S.iface) return;
     if (!$("engine")) { closeMenu(); toggleProblems(false); }  // (one popover at a time; not on a redraw)
-    S.pick = { block: e.block, blocks: e.margin_blocks || 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, rate: cardRate(e), device: e.device, advanced: S.pick?.advanced || false };
+    S.pick = { block: e.block, blocks: e.margin_blocks ?? 1, prio: e.prio, nice: e.nice, tsched: !!e.tsched, rate: cardRate(e), device: e.device, advanced: S.pick?.advanced || false };
     drawEngine();
   }
   // The safety margin in whole blocks (owner: only values that work; under one block the input
   // dropped out, over one did not fit until the buffer is made to fit: engine.texts).
   function p0() { S.pick.margin = S.pick.block * S.pick.blocks; }
   // Whether trying these values makes the interface start again (engine.reopens).
-  const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) || rateAsked(p, e) !== (e.fixed_rate || null) ||
+  const reopensNow = (p, e) => p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks ?? 1) || rateAsked(p, e) !== (e.fixed_rate || null) ||
     ((!p.tsched || !!e.irq_elsewhere) && p.block !== e.block);
   const kHz = (r) => `${+(r / 1000).toFixed(1)} kHz`;
   // What the open panel draws from the engine as it runs: drawn again when any of it changes.
@@ -2591,14 +2591,14 @@ const PB = (() => {
     return [row("Kernel", chips, restart ? "on restart" : ""),  // (only what the chips can't show)
             h("p", { class: "hint", text: "Low-latency options for the system's core. Rarely needed, small effect. Needs your password and a restart." })];
   }
-  // 1 · 2 · 3 blocks, the one running marked like the block's; each with its time under it (owner:
+  // None · 1 · 2 · 3 blocks, the one running marked like the block's; each with its time under it (owner:
   // a lone "5.3 ms" beside the buttons read as the buffer headroom's, then as awkward)
   function marginSeg(p, e) {
     return h("div", { class: "segmented words margins", role: "radiogroup", "aria-label": "Safety margin" }, ...MARGINS.map((v) => {
-      const ms = `${(v * p.block / e.rate * 1000).toFixed(1)} ms`;
-      const b = h("button", { type: "button", role: "radio", "aria-checked": String(p.blocks === v), class: v === (e.margin_blocks || 1) ? "cur" : "",
-                              "data-k": `blocks-${v}`, "aria-label": `${v === 1 ? "1 block" : `${v} blocks`}, ${ms}` },
-        h("span", { text: v === 1 ? "1 block" : `${v} blocks` }), h("small", { text: ms }));
+      const ms = `${(v * p.block / e.rate * 1000).toFixed(1)} ms`, name = v === 0 ? "None" : v === 1 ? "1 block" : `${v} blocks`;
+      const b = h("button", { type: "button", role: "radio", "aria-checked": String(p.blocks === v), class: v === (e.margin_blocks ?? 1) ? "cur" : "",
+                              "data-k": `blocks-${v}`, "aria-label": `${name}, ${ms}` },
+        h("span", { text: name }), h("small", { text: ms }));
       b.addEventListener("click", () => { p.blocks = v; drawEngine(); });
       return b;
     }));
@@ -2691,7 +2691,7 @@ const PB = (() => {
     p0();
     // The round trip compares only when the block changes (owner: a priority shown as a new
     // round trip); otherwise it is what runs (on the timer PipeWire pads the margin itself).
-    const e = S.engine, p = S.pick, rate = e.rate, resized = p.block !== e.block || p.blocks !== (e.margin_blocks || 1), shown = resized ? p : e;
+    const e = S.engine, p = S.pick, rate = e.rate, resized = p.block !== e.block || p.blocks !== (e.margin_blocks ?? 1), shown = resized ? p : e;
     // The sizes to offer (engine.blocks): an interface with implicit feedback (1 ms USB transfers)
     // whole transfers only; the one running stays shown even when it is not one of them.
     const offered = [...new Set([...(e.blocks?.length ? e.blocks : BLOCKS), e.block])].sort((a, b) => a - b);
@@ -2720,7 +2720,7 @@ const PB = (() => {
     // its file's priority applied only at a Try until 2026-11-08 (inside context.properties
     // PipeWire ignored it), and the panel showed the file's 95 while 88 ran (owner).
     const prioNow = e.prio_now ?? e.prio, niceNow = e.nice_now ?? e.nice, pending = prioNow !== e.prio || niceNow !== e.nice;
-    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || (!S.iface && (p.prio !== prioNow || p.nice !== niceNow)) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks || 1) ||
+    const changed = ["block", "prio", "nice"].some((k) => p[k] !== e[k]) || (!S.iface && (p.prio !== prioNow || p.nice !== niceNow)) || p.tsched !== !!e.tsched || p.blocks !== (e.margin_blocks ?? 1) ||
       rateAsked(p, e) !== (e.fixed_rate || null);
     S.engineShown = JSON.stringify(engineShown(e));
     const now = roundTrip(e, rate), next = roundTrip(shown, rate);
@@ -2739,7 +2739,7 @@ const PB = (() => {
     const cancel = h("button", { type: "button", class: "btn quiet", text: "Cancel" });
     // Only the priority or nice changed: nothing that can break the sound, so it is set, not
     // tried for a minute (owner: "Save" or "Set"); the server decides the same way.
-    const tried = p.block !== e.block || p.blocks !== (e.margin_blocks || 1) || p.tsched !== !!e.tsched || rateAsked(p, e) !== (e.fixed_rate || null);
+    const tried = p.block !== e.block || p.blocks !== (e.margin_blocks ?? 1) || p.tsched !== !!e.tsched || rateAsked(p, e) !== (e.fixed_rate || null);
     const go = h("button", { type: "button", class: "btn go", text: changed && !tried ? "Set" : "Try it", disabled: !changed });
     cancel.addEventListener("click", closeEngine);
     go.addEventListener("click", () => { send({ op: "engine-try", device: e.device, block: p.block, margin: p.margin, prio: p.prio, nice: p.nice, tsched: p.tsched, rate: rateAsked(p, e) }); closeEngine(); });

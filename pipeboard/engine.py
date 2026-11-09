@@ -37,8 +37,9 @@ ASOUND = Path("/proc/asound")
 # times a second; over one it did not fit its buffer of 3 periods). The buffer is made to fit:
 # twice the block and the margin: PipeWire steers the fill to block + headroom but clamps that
 # to half the buffer (alsa-pcm.c, max_delay), so a smaller buffer quietly cut the margin
-# (owner: 3 blocks of 128 ran as 320 - block = 1.5 blocks).
-MARGIN_BLOCKS = (1, 2, 3)
+# (owner: 3 blocks of 128 ran as 320 - block = 1.5 blocks). None (0) on request (owner: "an
+# option for no safety margin"), though on the UR44C under one block dropped out as above.
+MARGIN_BLOCKS = (0, 1, 2, 3)
 PRIO, NICE = (1, 95), (-19, 0)  # what the pipewire group may have (limits.d: rtprio 95, nice -19)
 DEFAULT_PRIO, DEFAULT_NICE = 88, -11  # PipeWire's own (pipewire.conf, module-rt)
 HEAD = "# Written by PipeBoard (Audio engine). Delete this file and restart PipeWire to undo.\n"
@@ -161,9 +162,9 @@ def _margin(dump: list[dict], found: list[dict], ids: set) -> int:
     rate still held the old one (a friend: the margin drawn as long as before the change until
     the margin was set again), and it adds what comes from upstream. Only when no node says its
     headroom: that figure, its own direction only."""
-    said = max((int(p.get("api.alsa.headroom") or 0) for p in found), default=0)
-    if said:
-        return said
+    said = [int(p["api.alsa.headroom"]) for p in found if str(p.get("api.alsa.headroom", "")).isdigit()]
+    if said:  # (0 is said too: no margin, asked for)
+        return max(said)
     own = {"input": "Input", "output": "Output"}
     ran = [lat.get("maxRate", 0) for o in dump if o["type"].endswith("Port")
            and _props(o).get("node.id") in ids
@@ -302,7 +303,7 @@ def check(op: dict, allowed=BLOCKS, offered: list[int] | None = None) -> dict:
     if v["block"] not in allowed:
         raise ValueError("That block size is not one PipeBoard offers.")
     if v["margin"] % v["block"] or v["margin"] // v["block"] not in MARGIN_BLOCKS:
-        raise ValueError("The safety margin is 1, 2 or 3 blocks.")
+        raise ValueError("The safety margin is none, 1, 2 or 3 blocks.")
     if not (PRIO[0] <= v["prio"] <= PRIO[1] and NICE[0] <= v["nice"] <= NICE[1]):
         raise ValueError(f"Priority is {PRIO[0]}…{PRIO[1]} and nice {NICE[0]}…{NICE[1]}.")
     if v["rate"] is not None and v["rate"] not in (offered or ()):

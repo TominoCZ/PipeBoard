@@ -348,6 +348,7 @@ SHOTS = {
     "engine-iface-away": ("machine", BIG, None, "PB.debug.ifaceAway()"),
     "engine-iface-redraw": ("machine", BIG, None, "PB.debug.ifaceRedraw()"),
     "engine-margin": ("machine", BIG, None, "PB.debug.ifaceOpen(null, {blocks: 2})"),
+    "engine-margin-none": ("machine", BIG, None, "PB.debug.ifaceOpen(null, {blocks: 0})"),
     # PipeWire running 88 and -11 while its file asks 95 and -19 (the owner's, 2026-11-08).
     "engine-priority-pending": ("machine", BIG, None, "PB.debug.fakeHeadroom('ok', {prio: 95, nice: -19, prio_now: 88, nice_now: -11}) || PB.debug.engineOpen({prio: 95, nice: -19}, true)"),
     # Advanced closed, its summary at its longest: idle states off, a kernel option waiting, apps.

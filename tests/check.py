@@ -2372,6 +2372,11 @@ def check_engine_devices():
             "audio.rate = 48000 node.force-rate = 48000 api.alsa.disable-tsched = true") in wp, wp
     assert "api.alsa.period-size = 1024 api.alsa.headroom = 1024 api.alsa.disable-tsched = false" in wp, \
         "the other interface kept, its period the new block"
+    # No margin (owner: "an option for no safety margin"): a rule with headroom 0, read back as none.
+    none = engine.texts(engine.check({**op, "margin": 0}, engine.BLOCKS, None), ["a"])["wireplumber"]
+    assert "api.alsa.headroom = 0 api.alsa.period-num = 2 " in none, none
+    assert engine.own_rules(none)[0]["blocks"] == 0
+    assert engine._margin([], [{"api.alsa.headroom": 0}], set()) == 0, "a headroom of 0 is said, not missing"
     # Only the card clocking the graph forces its rate on the graph (any forced node pulls its whole
     # group, context.c); another card runs at its own rate, converted (owner: "the rate IS global").
     lone = engine.texts({**v, "clocks": False}, ["a"], [{**others[0], "rate": 44100, "clocks": True}], 192000, 48000)["wireplumber"]
