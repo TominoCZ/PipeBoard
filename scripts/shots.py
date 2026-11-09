@@ -235,6 +235,72 @@ def chained(folder: Path, dump: list) -> list:
     return fixture.dump
 
 
+def studio(folder: Path, dump: list, grouped: bool = True) -> list:
+    """A board shaped like the owner's: speakers (Desktop Mix, Music Mix → Pre-EQ Gain → Bass EQ →
+    Limiter → Easy Effects → the interface), guitar (IN 3 → Instrument Mix → Guitar Gain → Guitar
+    EQ → Mic Instrument Mix), voice (IN 2 → Mic Mix → Compressor → De-Esser → Mic EQ → Stream Mix
+    and Mic Instrument Mix), and scopes on the speaker limiter, the guitar EQ and the mic EQ;
+    grouped: Speakers, Guitar and Voice made."""
+    fx = pipewire.Fixture(dump)
+    devs = {
+        "pre": {"id": "pre", "type": "gain", "name": "Pre-EQ Gain", "node": "pb_pre", "channels": 2, "gain_db": -16},
+        "bass": {**eq.new("Bass EQ"), "id": "bass", "node": "pb_bass", "bands": eq.clean([
+            {"type": "low-shelf", "freq": 90, "gain": 4, "q": 0.7}, {"type": "bell", "freq": 300, "gain": -2, "q": 1}])},
+        "slim": {**dynamics.new("limiter"), "id": "slim", "node": "pb_slim", "ceiling_db": -1.0},
+        "ggain": {"id": "ggain", "type": "gain", "name": "Guitar Gain", "node": "pb_ggain", "channels": 2, "gain_db": 6},
+        "geq": {**eq.new("Guitar EQ"), "id": "geq", "node": "pb_geq", "bands": eq.clean([
+            {"type": "low-cut", "freq": 70, "slope": 24}, {"type": "high-shelf", "freq": 6000, "gain": -6, "q": 0.7}])},
+        "comp": {**dynamics.new("compressor"), "id": "comp", "node": "pb_comp", "threshold_db": -30.0},
+        "ds": {**dynamics.new("deesser"), "id": "ds", "node": "pb_ds"},
+        "meq": {**eq.new("Mic EQ"), "id": "meq", "node": "pb_meq", "bands": eq.clean([
+            {"type": "low-cut", "freq": 90, "slope": 24}, {"type": "bell", "freq": 3500, "gain": 3, "q": 1}])},
+        "ster": {"id": "ster", "type": "stereo", "name": "Stereo", "node": "pb_ster", "channels": 2},
+        "met": {"id": "met", "type": "meter", "name": "Meter", "node": "pb_met", "channels": 2},
+        "spec": {"id": "spec", "type": "spectrum", "name": "Spectrum", "node": "pb_spec", "channels": 2},
+        "wave": {"id": "wave", "type": "waveform", "name": "Waveform", "node": "pb_wave", "channels": 2},
+    }
+    for d in devs.values():
+        asyncio.run(fx.create(d))
+    groups = {"gspk": ("Speakers", ["desktop_mix", "music_mix", "pb:pre", "pb:bass", "pb:slim"]),
+              "ggtr": ("Guitar", ["instrument_mix", "pb:ggain", "pb:geq"]),
+              "gvox": ("Voice", ["mic_mix", "pb:comp", "pb:ds", "pb:meq"])} if grouped else {}
+    workspace.save(folder / "workspace.json", {
+        "devices": {f"pb:{k}": d for k, d in devs.items()}, "tidy_portals": True,
+        "groups": {g: {"name": n} for g, (n, _) in groups.items()},
+        "cards": {k: {"group": g} for g, (_, keys) in groups.items() for k in keys}})
+    model = graph.build(fx.dump)
+    cards = {c["key"]: c for c in model["cards"]}
+    for w in model["wires"]:  # the mixes' old way out: through the chains instead
+        if w["from"][0] in ("desktop_mix", "music_mix") and w["to"][0] == "easyeffects:out":
+            for link in w["links"]:
+                asyncio.run(fx.unlink(link))
+
+    def link(a, b):
+        for p, q in graph.pair(cards[a]["outputs"][0]["ports"], cards[b]["inputs"][0]["ports"]):
+            asyncio.run(fx.link(p, q))
+    for a, b in [("desktop_mix", "pb:pre"), ("music_mix", "pb:pre"), ("pb:pre", "pb:bass"), ("pb:bass", "pb:slim"),
+                 ("pb:slim", "easyeffects:out"), ("instrument_mix", "pb:ggain"), ("pb:ggain", "pb:geq"),
+                 ("pb:geq", "mic_instrument_mix"), ("mic_mix", "pb:comp"), ("pb:comp", "pb:ds"), ("pb:ds", "pb:meq"),
+                 ("pb:meq", "stream_mix"), ("pb:meq", "mic_instrument_mix"),
+                 ("pb:slim", "pb:ster"), ("pb:slim", "pb:met"), ("pb:geq", "pb:spec"), ("pb:meq", "pb:wave")]:
+        link(a, b)
+    return fx.dump
+
+
+def studio_hidden(folder: Path, dump: list) -> list:
+    """The studio board with Input1 Mix taken off the board (to be put back inside a group)."""
+    dump = studio(folder, dump)
+    ws = workspace.load(folder / "workspace.json")
+    ws["cards"]["input1_mix"] = {"hidden": True}
+    workspace.save(folder / "workspace.json", ws)
+    return dump
+
+
+def studio_loose(folder: Path, dump: list) -> list:
+    """The studio board with no groups made (only the scopes' Monitoring)."""
+    return studio(folder, dump, grouped=False)
+
+
 def left_only(folder: Path, dump: list) -> list:
     """Music Player's left channel alone into the Studio Interface's mono IN 3 (a stereo output split by hand)."""
     fixture = pipewire.Fixture(dump)
@@ -393,6 +459,8 @@ SHOTS = {
     "eq-gestures": ("machine", BIG, equalized, "PB.debug.eqGestures('pb:deq01', 2, 4, 1)"),
     "eq-card-menu": ("machine", BIG, equalized, "PB.debug.cardMenu('pb:deq01')"),
     "eq-empty": ("machine", BIG, equalized, "PB.debug.eqOpen('pb:deq02', -1, false)"),
+    "power-press": ("machine", BIG, equalized, "PB.debug.pressThrough('pb:deq01')"),
+    "power-press-plugin": ("machine", BIG, plugged, "PB.debug.pressThrough('pb:dcomp01')"),
     "eq-bypass": ("machine", BIG, equalized, "PB.debug.eqBypass('pb:deq01') || PB.debug.eqOpen('pb:deq01', -1)"),
     "eq-small": ("machine", SMALL, equalized, "PB.debug.eqOpen('pb:deq01', 3)"),
     "eq-dynamic": ("machine", BIG, equalized, "PB.debug.eqOpen('pb:deq01', 2) || EQ.debug.dyn(1, -6) || EQ.debug.dyn(2, 5) || EQ.debug.select(2)"),
@@ -461,11 +529,40 @@ SHOTS = {
                  "['pb:dster01', 'pb:dwave01', 'pb:dmeter01', 'pb:dspec01'].forEach(PB.debug.diagOff) || PB.audit(), 500)"),
     "diag-menu": ("machine", BIG, diagnosed, "PB.debug.menu(560, 300, ['Add node', 'Diagnostic'])"),
     "bar-tidy": ("machine", BIG, None, "PB.debug.tidyMenu()"),
+    "bar-toggle": ("machine", BIG, None, "PB.debug.barToggle()"),
     "live-pedal": ("pedal", BIG, None, "PB.debug.fakeLive()"),
     "zoomed-out": ("machine", SMALL, None, "PB.debug.zoom(0.55)"),
     "empty": ("empty", SMALL, None, ""),
     "missing": ("machine", BIG, missing, "PB.debug.openProblems()"),
     "missing-menu": ("machine", BIG, missing, f"PB.debug.missingMenu('{PEDAL}')"),
+    # Groups (owner): Tidy lays out each group on its own and the groups like big cards; the scopes
+    # in the Monitoring row under everything, their wires dotted. Joining and leaving by dragging;
+    # made from a box (Shift + drag) or a card's menu.
+    "groups": ("machine", BIG, studio, "PB.debug.tidy()"),
+    "groups-loose": ("machine", BIG, studio_loose, "PB.debug.tidy()"),
+    "groups-drag-in": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.dragToFrame('input1_mix', 'ggtr')"),
+    "groups-drag-out": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.dragOut('pb:ggain')"),
+    "groups-drag-out-let-go": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.dragOut('pb:ggain', true)"),
+    "groups-drop-in": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.dropToFrame('input1_mix', 'ggtr')"),
+    # A node made, or a card put back, from a menu opened inside a group: in it, at its spot there.
+    "groups-made-in": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.arriveIn('ggtr')"),
+    "groups-last-out": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.lastOut('input1_mix', 'ggtr')"),
+    "groups-put-back": ("machine", BIG, studio_hidden, "PB.debug.tidy() || PB.debug.putBackIn('input1_mix', 'ggtr')"),
+    "groups-box": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.box(['instrument_mix', 'pb:ggain', 'pb:geq'])"),
+    "groups-name": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.box(['instrument_mix', 'pb:ggain', 'pb:geq']) || "
+                    "document.querySelector('#selbar button').click()"),
+    "groups-menu": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.cardMenu('instrument_mix', ['Add to group'])"),
+    "groups-space-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox')"),
+    "groups-space-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox', 'menu')"),
+    "groups-monitoring-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('monitoring', 'menu') || "
+                               "[...document.querySelectorAll('.menu .item')].find((x) => x.textContent.startsWith('Add node')).click()"),
+    "groups-space-drag": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox', 'drag')"),
+    "groups-menu-lit": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.menuLit(['gvox', 'monitoring'])"),
+    "groups-title-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.titleHover('ggtr')"),
+    "groups-title-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.groupMenu('ggtr')"),
+    "groups-name-move": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.nameAndMove(['instrument_mix', 'pb:ggain', 'pb:geq'], 'Guitar')"),
+    "groups-monitoring": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.monitorOnly('input1_mix', 'pb:spec')"),
+    "groups-move": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.moveGroup('ggtr', 0, -60)"),
     "changes": ("machine", BIG, changed, ""),
     # Unsaved changes on the board (owner): a dot on each changed card (Studio Interface moved too:
     # the dot on an amber outline); the changes card hovered shows where the moved ones were saved.

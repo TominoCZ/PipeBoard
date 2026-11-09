@@ -80,8 +80,8 @@ button { font: inherit; color: inherit; }
    so it stays apart from an amber outline. */
 .card .unsaved-dot { position: absolute; right: -5px; top: -5px; width: 11px; height: 11px; border-radius: 50%;
   background: #ff9a3c; box-shadow: 0 0 0 2.5px var(--board), 0 0 10px rgba(255, 154, 60, 0.6); pointer-events: none; }
-/* Where the moved cards were saved: shown while the changes card is hovered and just after a Tidy
-   (#board.show-moves), the cards without unsaved changes and the wires dimmed. */
+/* Where the moved cards were saved: shown while the changes card is hovered (#board.show-moves),
+   the cards without unsaved changes and the wires dimmed. */
 #moves { position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
 #moves svg { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
 #moves .trail { fill: none; stroke-width: 1.5; stroke-dasharray: 4 5; opacity: 0.6; }
@@ -93,6 +93,44 @@ button { font: inherit; color: inherit; }
 #board .card, #wires { transition: opacity 0.3s; }
 #board.show-moves #moves { opacity: 1; }
 #board.show-moves .card:not(.unsaved), #board.show-moves #wires { opacity: 0.35; }
+/* Groups (owner): a frame behind a group's cards and wires; its title on its own layer above the
+   wires (never under a cable), under the cards, on a backing in the frame's colour. Monitoring's
+   frame dashed. A card held over another group lights it; one pulled out leaves a hole. */
+#frames, #frame-tops { position: absolute; left: 0; top: 0; }
+.frame { position: absolute; left: 0; top: 0; border-radius: 16px; pointer-events: none;
+  background: rgba(255, 255, 255, 0.025); border: 1px solid rgba(255, 255, 255, 0.08); }
+.frame.mon { border-style: dashed; }
+/* While a card is held, a frame eases to the size it will have (the preview); else it snaps. */
+#board.holding :is(.frame, .frame-top) { transition: transform 0.14s ease-out, width 0.14s ease-out, height 0.14s ease-out, opacity 0.14s; }
+:is(.frame, .frame-top).going { opacity: 0.35; }
+.frame.hot { border: 2px solid rgba(232, 230, 227, 0.8); background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 4px rgba(232, 230, 227, 0.08), 0 0 36px rgba(232, 230, 227, 0.12); }
+.frame-top { position: absolute; left: 0; top: 0; pointer-events: none; }
+.frame-title { position: absolute; left: 2px; bottom: calc(100% + 3px); padding: 2px 8px; border-radius: 8px; background: rgba(18, 18, 18, 0.88);
+  font-size: 20px; font-weight: 600; color: var(--muted); white-space: nowrap; pointer-events: auto; cursor: grab; }
+.frame-title i { font-style: normal; color: var(--faint); font-weight: 500; margin-left: 8px; font-size: 16px; }
+.frame-title span[contenteditable="true"] { color: var(--text); cursor: text; user-select: text; outline: none; }
+.frame-title:has(span[contenteditable="true"]) { outline: 1.5px solid rgba(232, 230, 227, 0.6); background: #222; }
+.frame-top.hot .frame-title { color: var(--text); background: #1e1e1e; }
+/* The title is the group's handle: hovered, or the group being moved, the group's rectangle
+   lights up (owner: what will move), the title itself as it is. */
+.frame.lifted { border: 1.5px solid rgba(232, 230, 227, 0.6); background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 24px rgba(232, 230, 227, 0.08); }
+#board.moving-group, #board.moving-group .frame-title { cursor: grabbing; }
+.card .leaving { position: absolute; left: 50%; top: -26px; transform: translateX(-50%); font-size: 12px; white-space: nowrap;
+  padding: 2px 9px; border-radius: 8px; background: #3a3a3a; border: 1px solid rgba(255, 255, 255, 0.18); z-index: 6; }
+.card .leaving.joins { background: #2f6e66; border-color: #4fc1b0; }
+.card.picked { box-shadow: 0 0 0 2px rgba(232, 230, 227, 0.75), 0 6px 18px rgba(0, 0, 0, 0.45); }
+.boxsel { position: fixed; border: 1px dashed rgba(232, 230, 227, 0.7); background: rgba(232, 230, 227, 0.05);
+  border-radius: 4px; z-index: 20; pointer-events: none; }
+.selbar { position: fixed; z-index: 21; display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px;
+  background: #2a2a2a; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5); font-size: 12.5px; color: var(--muted); }
+.selbar button { background: #2f6e66; border: 1px solid #4fc1b0; border-radius: 7px; padding: 4px 12px; cursor: pointer; }
+.selbar button:hover, .selbar button:focus-visible { background: #38847a; outline: none; }
+.selbar kbd { font: 11px var(--font); color: var(--faint); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 5px; padding: 0 5px; }
+/* A wire into Monitoring only listens: dotted. */
+.wire-g.tap .wire { stroke-dasharray: 2 6; }
 /* Where a dragged card will drop: its outline on the grid. */
 .landing { position: absolute; left: 0; top: 0; border-radius: 10px; pointer-events: none;
   border: 1.5px dashed var(--c); background: color-mix(in srgb, var(--c) 7%, transparent); }

@@ -15,7 +15,7 @@ from pipeboard import dynamics, graph, workspace
 
 DEFAULT = "Default"
 # What the user sets on a card; "parked": the wires they made, set aside while it is off the board.
-BOARD = ("x", "y", "nick", "names", "hidden", "parked")
+BOARD = ("x", "y", "nick", "names", "hidden", "parked", "group")
 NAME = re.compile(r"^[\w][\w \-().']{0,39}$")  # also a file name: no slashes, no dots first
 
 
@@ -55,7 +55,11 @@ def snapshot(model: dict, board: dict) -> dict:
             "moved": [k for k in board.get("moved", []) if k in cards],  # cards the user moved here
             # wires drawn as portals (board-only: the sound goes straight from A to B)
             "portals": {i: how for i, how in board.get("portals", {}).items() if i in ids},
-            "tidy_portals": board.get("tidy_portals", False)}
+            "tidy_portals": board.get("tidy_portals", False),
+            # named frames (workspace: groups); one no card is in is gone (owner: "Add to group"
+            # offered groups that no longer existed: emptied, they had no frame left)
+            "groups": {g: dict(v) for g, v in board.get("groups", {}).items()
+                       if any(c.get("group") == g for c in cards.values())}}
 
 
 def missing(board: dict, model: dict) -> list[dict]:
@@ -197,7 +201,7 @@ def changes(saved: dict, now: dict, shown: set | None = None) -> list[str]:
               if k not in after]
     lines += [f"Changed the settings of {after[k]['name']}" for k in after
               if k in before and _settings_changed(before[k], after[k])]
-    return lines
+    return lines + _group_changes(saved, now)
 
 
 def unsaved(saved: dict, now: dict) -> dict:
@@ -208,13 +212,44 @@ def unsaved(saved: dict, now: dict) -> dict:
         a = saved.get("cards", {}).get(k, {})
         if _moved(a, b, now, k):
             out[k] = {"x": a["x"], "y": a["y"]}
-        elif a.get("nick") != b.get("nick"):
+        elif a.get("nick") != b.get("nick") or group_of(saved, k) != group_of(now, k):
             out[k] = {}
     before = saved.get("devices", {})
     for k, dev in now.get("devices", {}).items():
         if k not in before or _settings_changed(before[k], dev):
             out.setdefault(k, {})
     return out
+
+
+def group_of(board: dict, key: str) -> str | None:
+    """The group a card is in: its own choice, else Monitoring for a diagnostic card; a group that
+    no longer exists is none."""
+    card = board.get("cards", {}).get(key, {})
+    if "group" not in card:
+        return workspace.MONITORING if card.get("seen", {}).get("kind") == "diag" else None
+    g = card["group"]
+    return g if g == workspace.MONITORING or g in board.get("groups", {}) else None
+
+
+def _group_changes(saved: dict, now: dict) -> list[str]:
+    """Groups made, renamed, ungrouped; cards put in or taken out of one (not those a new group or
+    an ungroup already says)."""
+    # (a group no card was in, saved before such were dropped: never seen, so not a change)
+    was = {g: v for g, v in saved.get("groups", {}).items()
+           if any(c.get("group") == g for c in saved.get("cards", {}).values())}
+    new = now.get("groups", {})
+    name = lambda gs, g: "Monitoring" if g == workspace.MONITORING else gs[g]["name"]  # noqa: E731
+    lines = [f"Made the group {new[g]['name']}" for g in new if g not in was]
+    lines += [f"Renamed the group {was[g]['name']} to {new[g]['name']}" for g in new
+              if g in was and was[g]["name"] != new[g]["name"]]
+    lines += [f"Ungrouped {was[g]['name']}" for g in was if g not in new]
+    for k in now["cards"]:
+        a, b = group_of(saved, k), group_of(now, k)
+        if a == b or (b in new and b not in was) or (a in was and a not in new):
+            continue
+        lines.append(f"Put {_name(now, k)} in {name(new, b)}" if b
+                     else f"Took {_name(now, k)} out of {name(was, a)}")
+    return lines
 
 
 def _settings_changed(was: dict, dev: dict) -> bool:

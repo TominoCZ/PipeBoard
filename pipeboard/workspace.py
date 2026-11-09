@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 HISTORY = 12  # earlier names kept per card
@@ -130,7 +131,70 @@ def _portals(ws: dict, op: dict) -> bool:
     return True
 
 
+# Groups (PLAN §4): named frames around cards. ws["groups"] {id: {"name"}}; a card's "group" is a
+# group's id, MONITORING (built in, never in ws["groups"]), or None for none; a card without one is
+# in Monitoring if it is a diagnostic card, else in none (groups.effective).
+MONITORING = "monitoring"
+GROUP_ID = re.compile(r"^g[a-z0-9]{1,15}$")
+
+
+def group_name(name) -> str:
+    return " ".join(str(name or "").split())[:40] or "New group"
+
+
+def _group_new(ws: dict, op: dict) -> bool:
+    gid = str(op.get("id", ""))
+    if not GROUP_ID.match(gid) or gid in ws.get("groups", {}):
+        return False
+    ws.setdefault("groups", {})[gid] = {"name": group_name(op.get("name"))}
+    return _group_set(ws, {"cards": op.get("cards"), "group": gid})
+
+
+def _group_rename(ws: dict, op: dict) -> bool:
+    group = ws.get("groups", {}).get(str(op.get("id", "")))
+    if group is None:
+        return False
+    group["name"] = group_name(op.get("name"))
+    return True
+
+
+DIAG_TYPES = ("waveform", "stereo", "counter", "meter", "spectrum")  # (devices.DIAG)
+
+
+def _diag(ws: dict, key: str) -> bool:
+    return ws["cards"].get(key, {}).get("seen", {}).get("kind") == "diag" \
+        or ws.get("devices", {}).get(key, {}).get("type") in DIAG_TYPES
+
+
+def _group_set(ws: dict, op: dict) -> bool:
+    """Cards into a group (or out of every group: null). Monitoring takes only diagnostic cards
+    (owner: a wire into it is drawn as only listening; Tidy lays it out as the scopes' row)."""
+    gid = op.get("group")
+    if gid is not None and gid != MONITORING and gid not in ws.get("groups", {}):
+        return False
+    keys = [str(k) for k in op.get("cards") or [] if isinstance(k, str) and k]
+    if gid == MONITORING:
+        keys = [k for k in keys if _diag(ws, k)]
+    for k in keys:
+        ws["cards"].setdefault(k, {})["group"] = gid
+    return bool(keys)
+
+
+def _group_delete(ws: dict, op: dict) -> bool:
+    """Ungroup: the group goes, its cards stay where they are, in no group (a diagnostic card back
+    in Monitoring)."""
+    gid = str(op.get("id", ""))
+    if ws.get("groups", {}).pop(gid, None) is None:
+        return False
+    for card in ws["cards"].values():
+        if card.get("group") == gid:
+            del card["group"]
+    return True
+
+
 WHOLE = {"place": place,
+         "group-new": _group_new, "group-rename": _group_rename, "group-set": _group_set,
+         "group-delete": _group_delete,
          "view": _view, "portals": _portals,
          # Tidy, all at once (owner: no steps seen): the cards' new places and its own portals
          "tidy": lambda ws, op: (place(ws, {"cards": op.get("cards")})

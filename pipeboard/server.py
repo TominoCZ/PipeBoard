@@ -523,6 +523,9 @@ class Board:
         self.created.add(key)
         at = {key: {"x": op.get("x", 0), "y": op.get("y", 0)}}
         workspace.place(self.ws, {"cards": at, "auto": True})  # (not a move: it is "Made …")
+        if op.get("group"):  # made from a menu inside a group: in it (the page finds its spot)
+            workspace.apply(self.ws, {"op": "group-set", "cards": [key],
+                                      "group": op["group"]})
         return key, dev
 
     async def op_create_device(self, _page, op) -> str | None:

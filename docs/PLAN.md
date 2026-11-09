@@ -301,6 +301,14 @@ sources; a card the user put somewhere (a device made from a dropped wire, one s
 a menu) kept there, only moved to the nearest free spot (owner: a node made from a dropped wire
 landed far away, at a layout spot; shot drop-over).
 
+**Clicks on cards always land** (owner, 2026-11-09: the power button sometimes took a while, or
+ignored a click). A board state arriving between a press and its release redrew the card, so
+the button pressed was gone and the browser dropped the click. Now, while a card is pressed,
+states wait (as during a drag or typing) and are shown just after the click. A setting the user
+just changed (every power button, the plugin's too, now shown at once) stands for 3 s against a
+state the server sent before it had the change, which flipped the button back for a moment.
+Shots `power-press`, `power-press-plugin` fail without either.
+
 **Grid.** Positions are whole **cells** (a cell is 14 px; the dot grid is every 28 px, so corners
 land on a dot or halfway), and card sizes whole cells too (widths rounded up when drawn; the page
 audit fails a card off the grid). Owner: zoom only changes how the board is drawn, and Tidy cannot
@@ -315,6 +323,62 @@ there. No slide animation: wires would lag behind the card.
 close a loop (DFS back edges). On the user's graph that gives apps → speaker mixes → Easy Effects
 → Studio Interface → mic mixes, with no wire running backwards. Within a column, cards sit near what feeds
 them. Tidy re-runs it; dragged positions are saved.
+
+**Groups** (owner, 2026-11-09; renders and decisions in that session's `groups_design.md`). Cards
+can be grouped under a name: the board keeps `groups` `{id: {name}}` and each card its `group`
+(an id, `"monitoring"`, or `null` for none; a card without one is in Monitoring if it is a
+diagnostic card, else in none). Saved with the profile; made, renamed, ungrouped and cards put in
+or taken out are unsaved changes (and dot the card), and Revert brings them back.
+- **A frame** around each group's cards, behind the wires, the same margin on every side; its
+  **title just above the rectangle** (owner, 2026-11-09: so the rectangle wraps the cards' tops as
+  tightly as their sides; "on the top line", like a legend, was rendered and not picked), on a
+  layer above the wires (owner: never under a cable), under the cards, on a backing in the
+  board's colour, with the number of cards. Tidy keeps the title's room above each group. Monitoring's frame is dashed and says "built in".
+- **Making one:** Shift + drag on empty board draws a box (a plain drag still pans); the cards it
+  touches get a ring and a bar "N cards · Group… · Ctrl G". Or a card's menu: **New group** (this
+  card in it), **Add to group ›**, **Leave <group>**. A new group's title is selected to type (no
+  guide text, owner).
+- **Joining by dragging,** by where the pointer is (owner: "hovering over a group"): over
+  another group's frame, the frame lights up (a bright border and a glow), its title brightens,
+  the card says "Joins Guitar", and the landing outline shows where it will go: the free spot in
+  the group's own rhythm nearest where it is let go (under or over one of its columns at Tidy's
+  row gap, or a new column at Tidy's column gap), clear of every card and of other groups' frames
+  (owner: not cell by cell to grow the group). **The frame previews its new size** while the card
+  is held: grown to take it, its old group shrunk without it, faded if that was its last card; it
+  eases there while a card is held and snaps otherwise (Tidy, moving a group). A group left with
+  no card is removed.
+- **Moving a card out of its frame keeps it in its group** (owner, changed 2026-11-09: it used
+  to leave): the frame stretches to follow it, cell by cell, as it is dragged. A card leaves a
+  group from its menu (Leave <group>), or by being let go into another group.
+- **Made inside a group** (owner): a node made, or a card put back, from the board's menu (or a
+  wire's drop menu) opened inside a group's frame is in that group (the create op carries
+  `group`), at the spot a card let go at that point would take.
+- **The title and the group's empty space** (owner) drag the whole group (whole cells); hovered,
+  while the group is moved, or while a menu opened on it is open (any: its own, Monitoring's
+  board menu, a wire's drop menu inside it), the group's rectangle lights up (owner:
+  the rectangle, not the title: what will move, and that it can be right-clicked). A left drag
+  on a group's empty space moves the group instead of panning (empty board outside groups and
+  the middle button still pan; Shift still draws a box). Right-click on its empty space or its
+  title: **the group's own menu, only what is about the group** (owner: the board's Fit, Tidy
+  and Launch at login made no sense there): its name, **Add node ›** (made in the group, at that
+  spot), Rename, Ungroup; Monitoring's the same without Rename and Ungroup; double-click or right-click › Rename;
+  right-click › Ungroup (the cards stay where they are).
+- **Tidy** lays out each group's cards on their own (columns by signal flow, wires inside the
+  group only), then the groups (each one big card, its frame's size) and the loose cards as before,
+  folding into rows with portals; a group gets three more cells from its neighbour in a column.
+  **Monitoring** goes in one row under everything (wrapped at the board's width). A board with no
+  groups and no diagnostic cards lays out exactly as before.
+- **Wires into Monitoring are dotted** (they only listen) and never portals. **Monitoring takes
+  the diagnostic cards alone** (owner, 2026-11-09: an effect could be put in from the menu but not
+  dragged in, and Monitoring's frame then vanished): a held effect does not light it, menus do
+  not offer it, the server refuses it; a scope can leave it (its menu) and come back. Its frame is
+  always drawn (it was once left out while another card sat inside, for boards whose scopes were
+  spread out before groups: it vanished under a held card and when it stretched).
+- **A group's title, once named, is done editing** (owner: it kept the editing outline, took Enter
+  as a new line inside, and would not drag the group, as Monitoring's did).
+- Open (owner, for later): a wire crossing a group it is not part of: leave it, or a portal.
+  Later: folding a group into one effect card with named ins and outs and its inner graph
+  viewable and editable.
 
 The board is a flat near-black (#121212) with a sparse dot grid and a faint grain (owner's pick of six,
 rendered on their board).
@@ -802,8 +866,9 @@ that are gone now. Everything else is a comparison:
   save). Picking another profile shows that profile's saved view.
 - **Unsaved changes on the board** (owner, 2026-11-09): an orange dot on the corner of every card
   with one (moved, renamed, made, or its settings changed: `profiles.unsaved`), always. While the
-  changes card is hovered, and for 2.5 s after a Tidy, each moved card's saved spot shows as a
-  dashed ghost with an arrow to where it is now, and everything without a change dims. Wires
+  changes card is hovered, each moved card's saved spot shows as a dashed ghost with an arrow to
+  where it is now, and everything without a change dims. Not after a Tidy (owner, 2026-11-09: it
+  showed for 2.5 s at first; on a large board with groups that was very confusing). Wires
   added or removed get no dot. **A move is the user's only** (owner: "Moved 1 card" for an app
   the board had placed by itself, then closed): the board sends the spots it picks itself (a new
   card, an app back where another sits) as `auto`; the server lists the cards the user moved

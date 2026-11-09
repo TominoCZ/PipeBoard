@@ -151,6 +151,31 @@ def check_workspace():
     assert profiles.changes(saved, now, shown={"app"}) == [], "not on the board: not counted"
     workspace.apply(now, {"op": "place", "cards": {"mix": {"x": 9, "y": 0}}, "auto": True})
     assert profiles.changes(saved, now) == [], "placed again by the board: no longer the user's move"
+    # Groups (owner): made, renamed, cards in and out, ungrouped; unsafe ids and unknown groups refused;
+    # a diagnostic card is in Monitoring until taken out; saved with the profile.
+    was = {"wires": [], "cards": {"g": {"seen": {"title": "Guitar Gain", "kind": "effect"}},
+                                  "s": {"seen": {"title": "Stereo", "kind": "diag"}}}}
+    now = json.loads(json.dumps(was))
+    assert profiles.group_of(now, "s") == workspace.MONITORING and profiles.group_of(now, "g") is None
+    assert workspace.apply(now, {"op": "group-new", "id": "gab1", "name": "  Guitar  ", "cards": ["g"]})
+    assert now["groups"] == {"gab1": {"name": "Guitar"}} and profiles.group_of(now, "g") == "gab1"
+    assert profiles.changes(was, now) == ["Made the group Guitar"] and profiles.unsaved(was, now) == {"g": {}}
+    for bad in ({"op": "group-new", "id": "../x", "cards": ["g"]}, {"op": "group-new", "id": "gab1", "cards": ["g"]},
+                {"op": "group-set", "cards": ["g"], "group": "gnope"}, {"op": "group-rename", "id": "gnope", "name": "x"}):
+        assert not workspace.apply(now, bad), bad
+    assert profiles.snapshot({"cards": [], "wires": []}, now)["groups"] == now["groups"], "saved in the profile"
+    empty = {**now, "groups": {**now["groups"], "gempty": {"name": "New group"}}}
+    assert "gempty" not in profiles.snapshot({"cards": [], "wires": []}, empty)["groups"], "a group no card is in goes"
+    assert profiles.changes(empty, now) == [], "an empty group dropped is no change"
+    assert not workspace.apply(now, {"op": "group-set", "cards": ["g"], "group": workspace.MONITORING}), \
+        "Monitoring takes the scopes alone"
+    assert workspace.apply(now, {"op": "group-set", "cards": ["s"], "group": workspace.MONITORING})
+    was = json.loads(json.dumps(now))
+    workspace.apply(now, {"op": "group-set", "cards": ["s"], "group": None})
+    workspace.apply(now, {"op": "group-rename", "id": "gab1", "name": "x" * 60})
+    assert profiles.changes(was, now) == [f"Renamed the group Guitar to {'x' * 40}", "Took Stereo out of Monitoring"], profiles.changes(was, now)
+    workspace.apply(now, {"op": "group-delete", "id": "gab1"})
+    assert "group" not in now["cards"]["g"] and profiles.changes(was, now)[0] == "Ungrouped Guitar"
 
 
 def check_profiles():

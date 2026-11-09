@@ -97,8 +97,18 @@ const PB = (() => {
     if (msg.type === "drops") { S.drops = msg.counts; showDrops(); return; }
     if (msg.type === "headroom") { S.headroom = msg; showHeadroom(); return; }
     if (msg.type !== "state") return;
-    if (S.drag || S.editing) { S.queued = msg; return; }
+    if (S.drag || S.editing || S.pressing) { S.queued = msg; return; }
     load(msg);
+  }
+  // A state held back (a drag, a box being typed in, a card pressed) shown once it is let go.
+  function flushQueued() {
+    if (S.queued && !S.drag && !S.editing && !S.pressing) { const q = S.queued; S.queued = null; load(q); }
+  }
+  // A setting the user just changed on a card (its power button): a state the server sent before
+  // it had that change shows the old value, the button flipping back for a moment (owner: "takes a
+  // while"); for 3 s the user's own value stands, then the server's word does.
+  function keepMine(key, fields) {
+    S.mine = { ...S.mine, [key]: { ...S.mine?.[key], ...fields, at: performance.now() } };
   }
 
   // ---- loading and drawing the model --------------------------------------------------------
@@ -106,6 +116,10 @@ const PB = (() => {
     S.lastState = msg;
     const first = !S.model.cards.length && !S.ws.view;
     S.problems = msg.problems || []; S.events = msg.events || []; S.ws = msg.workspace || { cards: {} };
+    for (const [k, { at, ...fields }] of Object.entries(S.mine || {})) {
+      if (performance.now() - at > 3000 || !S.ws.devices?.[k]) delete S.mine[k];
+      else Object.assign(S.ws.devices[k], fields);
+    }
     S.showLatency = !!msg.show_latency;
     $("show-latency").checked = S.showLatency;
     S.profile = msg.profile || null;
@@ -223,6 +237,14 @@ const PB = (() => {
     if (back.some((k) => !isApp(k))) placeNew(back.filter((k) => !isApp(k)), true);
     const missing = visible().filter((c) => !S.pos[c.key]).map((c) => c.key);
     if (missing.length) placeNew(missing);
+    // A card made (or put back) from a menu opened inside a group: the group's spot for that point.
+    const want = S.slotNext && performance.now() < S.slotNext.until ? S.slotNext : null;
+    const made = want && visible().find((c) => !S.shown.has(c.key) && S.pos[c.key] && (want.key ? c.key === want.key : groupOf(c.key) === want.g));
+    if (made) {
+      S.slotNext = null;
+      S.pos[made.key] = slotIn(want.g, made.key, want.at);
+      sendPlaces({ [made.key]: S.pos[made.key] }, true);
+    }
     S.shown = new Set(visible().map((c) => c.key));
     if (S.pathKey) markPath();
     for (const c of visible()) placeCard(c.key);
@@ -230,6 +252,8 @@ const PB = (() => {
     renderProblems();
     renderProfile();
     drawUnsaved();
+    drawFrames();
+    for (const k of S.picked || []) S.els[k]?.classList.add("picked");
     $("empty").hidden = S.model.cards.length > 0;
   }
 
@@ -470,6 +494,7 @@ const PB = (() => {
   function eqBypass(key) {
     const dev = S.ws.devices[key];
     dev.bypass = !dev.bypass;
+    keepMine(key, { bypass: dev.bypass });
     send({ op: "eq-set", key, bands: dev.bands || [], bypass: dev.bypass });
     if (EQ.isOpen(key)) EQ.sync(key, dev, true);  // the card's own change: never an echo
     render();
@@ -489,7 +514,7 @@ const PB = (() => {
     const on = !dev.bypass;
     const power = cardBtn({ icon: "bypass", cls: "bypass", label: on ? "Turn off" : "Turn on", pressed: !on,
       tip: on ? "On · click to turn it off (it stops measuring, saving the work)" : "Off: not measuring · click to turn it on",
-      action: () => { dev.bypass = on; send({ op: "diag-on", key, on: !on }); if (on) DIAG.close(); render(); } });
+      action: () => { dev.bypass = on; keepMine(key, { bypass: on }); send({ op: "diag-on", key, on: !on }); if (on) DIAG.close(); render(); } });
     if (dev.type === "counter") return counterRow(key, dev, power);
     const v = DIAG.view(key, dev.type, on);
     v.display.addEventListener("click", () => on && openDiag(key));
@@ -616,12 +641,14 @@ const PB = (() => {
   function gainBypass(key) {
     const dev = S.ws.devices[key];
     dev.bypass = !dev.bypass;
+    keepMine(key, { bypass: dev.bypass });
     send({ op: "gain-bypass", key, on: dev.bypass });
     render();
   }
   function dynFlag(key, flag) {
     const dev = S.ws.devices[key];
     dev[flag] = !dev[flag];
+    keepMine(key, { [flag]: dev[flag] });
     send({ op: "dyn-set", key, [flag]: dev[flag] });
     if (DYN.isOpen(key)) DYN.sync(key, dev, true);  // the card's own change: never an echo
     render();
@@ -644,10 +671,17 @@ const PB = (() => {
   }
 
   // ---- plugins (M8): Bypass and the plugin's own window; its controls live in that window ----
+  function pluginBypass(key) {  // (shown at once, as the other power buttons; owner: it lagged)
+    const dev = S.ws.devices[key];
+    dev.bypass = !dev.bypass;
+    keepMine(key, { bypass: dev.bypass });
+    send({ op: "plugin-bypass", key, on: dev.bypass });
+    render();
+  }
   function pluginFoot(key, dev) {
     const open = (S.editors || []).includes(key);
     const foot = h("div", { class: "card-foot" }, ...(dev.params ? [
-      dev.bypassable ? bypassBtn(!!dev.bypass, () => send({ op: "plugin-bypass", key, on: !dev.bypass })) : null,
+      dev.bypassable ? bypassBtn(!!dev.bypass, () => pluginBypass(key)) : null,
       dev.editor ? gearBtn(open, "the plugin's own window", () => send({ op: "plugin-editor", key, on: !open })) : null,
     ] : [h("span", { class: "card-note", text: "Starting…" })]));
     foot.addEventListener("mousedown", (e) => e.stopPropagation());  // pressing a button never drags the card
@@ -740,7 +774,13 @@ const PB = (() => {
     if (fields.type === "eq" || fields.type === "plugin" || DYN.KINDS[fields.type])
       S.opening = { type: fields.type, known: new Set(Object.keys(S.ws.devices || {})), until: performance.now() + 20000 };
     if (ctx.insert) send({ op: "insert-device", wire: ctx.insert, ...fields, ...where });
-    else send({ op: "create-device", ...fields, ...where, connect: ctx.connect });
+    else {
+      // Made inside a group (owner): in it, at the spot a card let go there would take.
+      const scope = ["waveform", "stereo", "counter", "meter", "spectrum"].includes(fields.type);
+      const group = S.menuGroup === MONITORING && !scope ? null : S.menuGroup;  // (Monitoring: the scopes alone)
+      if (group) S.slotNext = { g: group, at: where, until: performance.now() + 20000 };
+      send({ op: "create-device", ...fields, ...where, connect: ctx.connect, group });
+    }
   }
 
   function openNew() {
@@ -865,8 +905,8 @@ const PB = (() => {
   // one, and Tidy could neither fold the board nor show it any bigger): its cards that only
   // receive (nothing wired out of them) wrap into extra columns right after it, each no taller
   // than the tallest other column. What passes sound on stays in its own column.
-  function wrapTall(list, wires, gap) {
-    const tall = (col) => col.reduce((t, c) => t + S.sizes[c.key].h + gap, 0);
+  function wrapTall(list, wires, gap, sz) {
+    const tall = (col) => col.reduce((t, c) => t + sz(c.key).h + gap, 0);
     const out = [];
     list.forEach((col, i) => {
       const target = Math.max(28, ...list.filter((_, j) => j !== i).map(tall));
@@ -874,7 +914,7 @@ const PB = (() => {
       if (tall(col) <= target * 1.4 || ends.length < 2) { out.push(col); return; }
       let cur = col.filter((c) => !ends.includes(c)), h = tall(cur);
       for (const c of ends) {
-        const ch = S.sizes[c.key].h + gap;
+        const ch = sz(c.key).h + gap;
         if (cur.length && h + ch > target) { out.push(cur); cur = []; h = 0; }
         cur.push(c); h += ch;
       }
@@ -883,18 +923,21 @@ const PB = (() => {
     return out;
   }
 
-  function layout(keys) {
-    const cards = visible(), wires = visibleWires(), d = regroup(cards, wires, depths(cards, wires));
-    const cols = [];
+  // Columns by signal flow, folded into rows when asked: where each card goes, relative to [0, 0].
+  // cards: [{key, kind, title}]; wires: [{from: [key], to: [key]}]; sz(key): its size in cells.
+  function arrange(cards, wires, sz, rowsWanted) {
+    const d = regroup(cards, wires, depths(cards, wires)), cols = [];
     for (const c of cards) (cols[d[c.key]] = cols[d[c.key]] || []).push(c);
-    const order = { hardware: 0, app: 1, virtual: 2, effect: 3, plugin: 4, diag: 5 };
+    const order = { hardware: 0, app: 1, virtual: 2, group: 2.5, effect: 3, plugin: 4, diag: 5 };
     // All in whole cells: every card lands exactly, a column's rows evenly spaced (owner).
     const ROW_GAP = 2, COL_GAP = 9;
-    const list = wrapTall(cols.filter(Boolean), wires, ROW_GAP), at = {};
+    const list = wrapTall(cols.filter(Boolean), wires, ROW_GAP, sz), at = {};
     list.forEach((col, i) => col.forEach((c) => { at[c.key] = i; }));
-    const wide = list.map((col) => Math.max(...col.map((c) => S.sizes[c.key].w)));
-    const high = list.map((col) => col.reduce((t, c) => t + S.sizes[c.key].h + ROW_GAP, 0));
-    const bands = fold(wide, high, wires.map((w) => [at[w.from[0]], at[w.to[0]]]).filter(([a, b]) => a !== undefined && b !== undefined));
+    const wide = list.map((col) => Math.max(...col.map((c) => sz(c.key).w)));
+    const gap = (c) => ROW_GAP + (c.kind === "group" ? 3 : 0);  // (a group's title needs room from its neighbour)
+    const high = list.map((col) => col.reduce((t, c) => t + sz(c.key).h + gap(c), 0));
+    const bands = rowsWanted ? fold(wide, high, wires.map((w) => [at[w.from[0]], at[w.to[0]]]).filter(([a, b]) => a !== undefined && b !== undefined))
+      : [[0, list.length]];
     const placed = {}, rows = [], rowOf = {}, edge = {};
     let top = 0;
     bands.forEach(([from, to], r) => {
@@ -911,18 +954,65 @@ const PB = (() => {
           placed[c.key] = { x, y };
           rowOf[c.key] = r;
           edge[c.key] = (col === list[from] ? "first" : "") + (col === list[to - 1] ? "last" : "");
-          y += S.sizes[c.key].h + ROW_GAP;
+          y += sz(c.key).h + gap(c);
         }
-        x += Math.max(...col.map((c) => S.sizes[c.key].w)) + COL_GAP;
+        x += Math.max(...col.map((c) => sz(c.key).w)) + COL_GAP;
       }
       rows.push({ left, right: x - COL_GAP });
       top += tallest + ROW_BAND_GAP;
     });
+    return { placed, rows, rowOf, edge };
+  }
+
+  // Tidy (owner: groups): each group's cards laid out on their own, then the groups (each one big
+  // card, its frame's size) and the loose cards by signal flow, folded into rows as before; the
+  // Monitoring group in a row under everything, its wires dotted and never portals. A board with
+  // no groups lays out exactly as it did.
+  function layout(keys) {
+    const cards = visible(), wires = visibleWires(), sz = (k) => S.sizes[k], by = {};
+    for (const c of cards) { const g = groupOf(c.key); if (g) (by[g] ||= []).push(c); }
+    const unit = (k) => { const g = groupOf(k); return g && g !== MONITORING ? `group:${g}` : k; };
+    const inner = {};
+    for (const [g, list] of Object.entries(by)) {
+      if (g === MONITORING) continue;
+      const set = new Set(list.map((c) => c.key));
+      const a = arrange(list, wires.filter((w) => set.has(w.from[0]) && set.has(w.to[0])), sz, false), q = Object.entries(a.placed);
+      const w = Math.max(...q.map(([k, p]) => p.x + sz(k).w)), h2 = Math.max(...q.map(([k, p]) => p.y + sz(k).h));
+      inner[`group:${g}`] = { ...a, w: w + 2 * FRAME_PAD, h: h2 + 2 * FRAME_PAD + FRAME_HEAD };
+    }
+    const mon = new Set((by[MONITORING] || []).map((c) => c.key));
+    const units = [...cards.filter((c) => !mon.has(c.key) && unit(c.key) === c.key),
+                   ...Object.keys(inner).map((u) => ({ key: u, kind: "group", title: groupName(u.slice(6)) }))];
+    const links = wires.filter((w) => !mon.has(w.from[0]) && !mon.has(w.to[0]))
+      .map((w) => ({ ...w, from: [unit(w.from[0]), w.from[1]], to: [unit(w.to[0]), w.to[1]] }))
+      .filter((w) => w.from[0] !== w.to[0]);
+    const top = arrange(units, links, (k) => inner[k] || sz(k), true);
+    const placed = {}, rowOf = {}, edge = {};
+    for (const [u, p] of Object.entries(top.placed)) {
+      if (!inner[u]) { placed[u] = p; rowOf[u] = top.rowOf[u]; edge[u] = top.edge[u]; continue; }
+      for (const [k, q] of Object.entries(inner[u].placed)) {  // a card at its group's row edge only if at the group's own edge too
+        placed[k] = { x: p.x + FRAME_PAD + q.x, y: p.y + FRAME_PAD + FRAME_HEAD + q.y };
+        rowOf[k] = top.rowOf[u];
+        edge[k] = ["first", "last"].filter((e) => top.edge[u].includes(e) && inner[u].edge[k].includes(e)).join("");
+      }
+    }
+    // Monitoring: one row under everything (wrapped at the board's width), no portals into it.
+    if (mon.size) {
+      const all = Object.entries(placed), left = Math.min(0, ...all.map(([, q]) => q.x));
+      const right = Math.max(left + 40, ...all.map(([k, q]) => q.x + sz(k).w));
+      let x = left + FRAME_PAD, y = (all.length ? Math.max(...all.map(([k, q]) => q.y + sz(k).h)) + ROW_BAND_GAP : 0) + FRAME_PAD + FRAME_HEAD, line = 0;
+      for (const c of by[MONITORING]) {
+        if (x > left + FRAME_PAD && x + sz(c.key).w > right) { x = left + FRAME_PAD; y += line + 2; line = 0; }
+        placed[c.key] = { x, y };
+        x += sz(c.key).w + 9;
+        line = Math.max(line, sz(c.key).h);
+      }
+    }
     // Centred on cell [0, 0] (owner): shifted by whole cells, half the board's size each way.
-    const all = Object.entries(placed), dx = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.x + S.sizes[k].w))) / 2);
-    const dy = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.y + S.sizes[k].h))) / 2);
+    const all = Object.entries(placed), dx = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.x + sz(k).w))) / 2);
+    const dy = -Math.floor((Math.max(0, ...all.map(([k, q]) => q.y + sz(k).h))) / 2);
     for (const [, q] of all) { q.x += dx; q.y += dy; }
-    for (const row of rows) { row.left += dx; row.right += dx; }
+    const rows = top.rows.map((r) => ({ left: r.left + dx, right: r.right + dx }));
     S.fold = { rows, rowOf, edge };
     for (const k of keys) S.pos[k] = placed[k];
     return keys;
@@ -1045,10 +1135,8 @@ const PB = (() => {
     keys.forEach(placeCard);
     setPortals(portals, true, false);  // (redraws the wires)
     send({ op: "tidy", cards, set: portals });
+    drawFrames();
     fit(true);
-    S.movesUntil = performance.now() + 2500;  // where the cards came from, for a moment (owner)
-    showMoves();
-    setTimeout(showMoves, 2600);
   }
 
   // ---- wires --------------------------------------------------------------------------------
@@ -1105,7 +1193,7 @@ const PB = (() => {
       grad.append(s("stop", { offset: "0", "stop-color": colors[by[w.from[0]].kind] }),
                   s("stop", { offset: "1", "stop-color": colors[by[w.to[0]].kind] }));
       $("grads").append(grad);
-      const g = s("g", { class: "wire-g", "data-wire": w.id });
+      const g = s("g", { class: `wire-g${groupOf(w.to[0]) === MONITORING ? " tap" : ""}`, "data-wire": w.id });  // (into Monitoring: it only listens, dotted)
       const cls = ["wire", w.partial && "partial", w.failed && "failed", w.ghost && "ghost", flagged.has(w.id) && "flagged",
                    S.selected === w.id && "selected"].filter(Boolean).join(" ");
       const parts = { g, grad, shadow: s("path", { class: "wire-shadow" }),
@@ -1551,6 +1639,18 @@ const PB = (() => {
     send({ op: "tidy-portals", on });
     if (retidy) tidy();
   }
+  // A bar button's menu: clicking the same button again closes it (owner: it only ever opened).
+  // A press outside a menu closes it before the click arrives, so the press notes whether this
+  // button's menu was open (S.pressedOpen); a click from the keyboard finds it still open.
+  function barMenu(btn, open) {
+    btn.addEventListener("click", (e) => {
+      const was = S.pressedOpen === btn || (menus.length && S.menuOpener === btn);
+      S.pressedOpen = null;
+      if (was) { closeMenu(); return; }
+      open(e);
+      S.menuOpener = btn;
+    });
+  }
   function tidyMenu(e) {
     const r = e.currentTarget.closest(".split").getBoundingClientRect(), on = S.ws.tidy_portals === true;
     openMenu(r.left, r.bottom + 6, [{ label: "Portals", desc: "A long board folds into rows; the wires between them become lettered portals",
@@ -1587,6 +1687,8 @@ const PB = (() => {
     const boxes = keys.filter((k) => S.pos[k] && S.sizes[k])
       .map((k) => ({ x: px(S.pos[k].x), y: px(S.pos[k].y), w: px(S.sizes[k].w), h: px(S.sizes[k].h) }));  // (pixels: the view)
     if (!boxes.length) return null;
+    const groups = new Set(keys.map(groupOf));  // (a group's frame and title in full)
+    for (const [g, f] of Object.entries(S.frames || {})) if (groups.has(g)) boxes.push({ x: px(f.x), y: px(f.y - FRAME_HEAD), w: px(f.w), h: px(f.h + FRAME_HEAD) });  // (its title above)
     const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
     const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
     return { x0, y0, x1, y1 };
@@ -1617,6 +1719,7 @@ const PB = (() => {
     // page, and the selection paste on release) made a middle drag stop and stutter (owner).
     if (e.button === 1) e.preventDefault();
     closeMenu();
+    if (!e.shiftKey) pick([]);
     if (!S.iface) closeEngine();  // popovers, like the menus: any press on the board closes them (owner); an interface's panel is docked, it stays
     toggleProblems(false);
     const sock = e.target.closest(".sock"), head = e.target.closest(".card header");
@@ -1629,11 +1732,19 @@ const PB = (() => {
     }
     if (head && e.button === 0 && !e.target.isContentEditable) {
       const key = head.parentElement.dataset.key, p = toWorld(e.clientX, e.clientY);
-      S.drag = { kind: "card", key, dx: p.x - px(S.pos[key].x), dy: p.y - px(S.pos[key].y), moved: false };
+      S.drag = { kind: "card", key, dx: p.x - px(S.pos[key].x), dy: p.y - px(S.pos[key].y), moved: false,
+                 from: { ...S.pos[key] }, was: groupOf(key), drop: undefined };
       S.els[key].classList.add("dragging");
       return;
     }
     if (e.target.closest(".card")) return;
+    const title = e.target.closest(".frame-title");
+    if (title && e.button === 0 && !e.target.isContentEditable) {  // the title moves the whole group
+      return moveGroupFrom(title.dataset.group, e);
+    }
+    if (e.shiftKey && e.button === 0) { S.drag = { kind: "box", sx: e.clientX, sy: e.clientY }; return; }  // a box picks cards
+    const space = e.button === 0 && emptyAt(e) && groupAt(e.clientX, e.clientY);  // a group's empty space moves it (owner)
+    if (space) return moveGroupFrom(space, e);
     select(null);
     S.drag = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: S.view.x, vy: S.view.y };
     board.classList.add("panning");
@@ -1687,7 +1798,7 @@ const PB = (() => {
 
   function onMove(e) {
     const d = S.drag;
-    if (!d) return tip(e);
+    if (!d) { hoverSpace(e); return tip(e); }
     if (d.kind === "pan") {
       S.view = { ...S.view, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy };
       applyView();
@@ -1699,14 +1810,23 @@ const PB = (() => {
       d.moved = true;
       placeCard(d.key);
       placeWires(new Set([d.key]));
+      dropTarget(d, { x: p.x / GRID, y: p.y / GRID });
       showLanding(d);
-    } else if (d.kind === "wire") moveWire(e.clientX, e.clientY);
+    } else if (d.kind === "group") {
+      const p = toWorld(e.clientX, e.clientY), dx = Math.round((p.x - d.at.x) / GRID), dy = Math.round((p.y - d.at.y) / GRID);
+      if (dx === d.dx && dy === d.dy) return;
+      Object.assign(d, { dx, dy, moved: !!(dx || dy) });
+      for (const k of d.keys) { S.pos[k] = { x: d.from[k].x + dx, y: d.from[k].y + dy }; placeCard(k); }
+      placeWires(new Set(d.keys));
+      drawFrames();
+    } else if (d.kind === "box") drawBox(d, e.clientX, e.clientY);
+    else if (d.kind === "wire") moveWire(e.clientX, e.clientY);
   }
 
   function showLanding(d) {
-    const el = $("landing"), size = S.sizes[d.key], at = S.pos[d.key];
-    el.hidden = at.x === d.to.x && at.y === d.to.y;
-    Object.assign(el.style, { transform: `translate(${px(d.to.x)}px, ${px(d.to.y)}px)`,
+    const el = $("landing"), size = S.sizes[d.key], at = S.pos[d.key], to = d.slot || d.to;  // (into a group: its spot there)
+    el.hidden = at.x === to.x && at.y === to.y;
+    Object.assign(el.style, { transform: `translate(${px(to.x)}px, ${px(to.y)}px)`,
                               width: `${px(size.w)}px`, height: `${px(size.h)}px` });
     el.className = `landing k-${byKey()[d.key].kind}`;
   }
@@ -1722,22 +1842,24 @@ const PB = (() => {
     if (d.kind === "card") {
       S.els[d.key]?.classList.remove("dragging");
       $("landing").hidden = true;
+      S.els[d.key]?.querySelector(".leaving")?.remove();
       if (d.moved) {
-        S.pos[d.key] = d.to;
-        // A Tidy's badges on the moved card's own wires: beside its sockets from now on (owner: they
-        // stayed behind when the card moved); the other end keeps its spot.
-        const moved = {};
-        for (const [id, how] of Object.entries(S.ws.portals || {})) {
-          const w = typeof how === "object" && S.model.wires.find((x) => x.id === id);
-          if (w && (w.from[0] === d.key || w.to[0] === d.key))
-            moved[id] = { ...how, out: w.from[0] === d.key ? null : how.out, in: w.to[0] === d.key ? null : how.in };
-        }
-        if (Object.keys(moved).length) setPortals(moved);
+        S.pos[d.key] = d.slot || d.to;
+        portalsFollow([d.key]);
         placeCard(d.key);
         placeWires(new Set([d.key]));
         sendPlaces({ [d.key]: S.pos[d.key] });
+        if (d.drop !== undefined) joinGroup([d.key], d.drop);
       }
+      drawFrames();
     }
+    if (d.kind === "group") { board.classList.remove("moving-group"); drawFrames(); }
+    if (d.kind === "group" && d.moved) {
+      portalsFollow(d.keys);
+      placeWires(new Set(d.keys));
+      sendPlaces(Object.fromEntries(d.keys.map((k) => [k, S.pos[k]])));
+    }
+    if (d.kind === "box") endBox(d);
     if (d.kind === "wire") finishWire(d);
     if (S.queued) { const q = S.queued; S.queued = null; load(q); }
   }
@@ -1822,6 +1944,7 @@ const PB = (() => {
     plugin: '<rect x="2" y="4" width="10" height="8" rx="1.5"/><path d="M5 4V2.2h4V4"/>',
     virtual: '<rect x="2.5" y="2.5" width="9" height="9" rx="2" stroke-dasharray="2.2 1.6"/>',
     rename: '<path d="M2.5 11.5l.6-2.6 6.4-6.4 2 2-6.4 6.4z"/>',
+    group: '<rect x="1.5" y="2.5" width="11" height="9" rx="2" stroke-dasharray="2 1.6"/>',
     hide: '<path d="M1.5 7s2-3.8 5.5-3.8S12.5 7 12.5 7 10.5 10.8 7 10.8 1.5 7 1.5 7z"/><path d="M2.5 12l9-10"/>',
     names: '<circle cx="7" cy="7" r="5"/><path d="M7 4.2V7l2 1.3"/>',
     check: '<path d="M3 7.5l2.6 2.6L11 4.5"/>',
@@ -1840,6 +1963,7 @@ const PB = (() => {
   // engine panel and the problems list each close the others as they open; the last one stays.
   function openMenu(x, y, items) {
     closeMenu();
+    S.menuGroup = null;  // (set by the board's menus opened inside a group)
     if (!S.iface) closeEngine();  // (an interface's panel is docked, not a popover)
     toggleProblems(false);
     hideTip();
@@ -1917,6 +2041,8 @@ const PB = (() => {
     menus[level - 1]?.querySelectorAll(".item.open").forEach((r) => r.classList.remove("open"));
   }
   const closeMenu = () => {
+    S.menuOpener = null;
+    if (S.menuLit) { S.menuLit = null; drawFrames(); }
     clearTimeout(subTimer);
     closeFrom(0);
     S.dropPath?.remove();  // a dropped wire's dashed path goes with its menu
@@ -2002,6 +2128,8 @@ const PB = (() => {
   function dropMenu(x, y, d) {
     const ctx = { connect: d.side === "out" ? { from: [d.key, d.sock] } : { to: [d.key, d.sock] } };
     openMenu(x, y, [{ head: "Add and connect" }, ...addNodeItems(ctx)]);
+    S.menuGroup = S.menuLit = groupAt(x, y);
+    drawFrames();
   }
 
   // A wire's menu: put a node in the middle of it, or disconnect it.
@@ -2026,6 +2154,12 @@ const PB = (() => {
     drawWires();
   }
 
+  // The group whose frame a point on the screen is in (the smallest), or null.
+  function groupAt(x, y) {
+    const p = toWorld(x, y), c = { x: p.x / GRID, y: p.y / GRID };
+    return Object.entries(S.frames || {}).filter(([, b]) => c.x > b.x && c.x < b.x + b.w && c.y > b.y && c.y < b.y + b.h)
+      .sort(([, a], [, b]) => a.w * a.h - b.w * b.h)[0]?.[0] || null;
+  }
   function boardMenu(x, y) {
     openMenu(x, y, [
       { label: "Add node", icon: "add", sub: addNodeItems() },
@@ -2039,6 +2173,8 @@ const PB = (() => {
       { label: "Launch at login", icon: S.autostart ? "check" : "", hint: "in the tray",
         action: () => { S.autostart = !S.autostart; send({ op: "autostart", on: S.autostart }); } },
     ]);
+    S.menuGroup = S.menuLit = groupAt(x, y);  // (a node made from here goes in that group; lit while open)
+    drawFrames();
   }
 
   function replacements(c) {
@@ -2069,10 +2205,11 @@ const PB = (() => {
     const dev = S.ws.devices[c.key], plug = dev.type === "plugin" && dev.params;
     const open = (S.editors || []).includes(c.key);
     openMenu(x, y, [
+      ...groupItems(c.key),
       { label: "Rename", icon: "rename", hint: "double-click", action: () => startRename(c.key) },
       ...(names.length ? [{ label: "Names", icon: "names", sub: names }] : []),
       ...(plug && dev.editor ? [{ label: open ? "Close editor" : "Open editor", icon: "plugin", action: () => send({ op: "plugin-editor", key: c.key, on: !open }) }] : []),
-      ...(plug && dev.bypassable ? [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => send({ op: "plugin-bypass", key: c.key, on: !dev.bypass }) }] : []),
+      ...(plug && dev.bypassable ? [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => pluginBypass(c.key) }] : []),
       ...(dev.type === "eq" ? [{ label: "Edit EQ", icon: "eq", action: () => openEq(c.key) },
                                { label: "Bypass", icon: dev.bypass ? "check" : "", action: () => eqBypass(c.key) }] : []),
       ...(dev.type === "gain" ? [{ label: "Bypass", icon: dev.bypass ? "check" : "", action: () => gainBypass(c.key) }] : []),
@@ -2161,6 +2298,7 @@ const PB = (() => {
     ];
     const iface = c.kind === "hardware" && ifaceOf(key);
     openMenu(x, y, [
+      ...groupItems(key),
       { label: "Rename", icon: "rename", hint: "double-click", action: () => startRename(key) },
       ...(names.length ? [{ label: "Names", icon: "names", sub: names }] : []),
       ...(iface ? [{ label: "Interface settings…", icon: "interface", hint: "margin, rate", action: () => openIface(iface.key) }] : []),
@@ -2172,7 +2310,9 @@ const PB = (() => {
 
   function showAt(key) {
     const p = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
+    const g = S.menuGroup === MONITORING && byKey()[key]?.kind !== "diag" ? null : S.menuGroup;
     S.pos[key] = { x: cell(p.x), y: cell(p.y) };
+    if (g) { S.slotNext = { g, at: { ...S.pos[key] }, key, until: performance.now() + 20000 }; joinGroup([key], g); }
     sendPlaces({ [key]: S.pos[key] });
     setHidden(key, false);
   }
@@ -2250,7 +2390,8 @@ const PB = (() => {
 
   // Unsaved changes on the board (owner): an orange dot on every card with one, always. Where the
   // moved ones were saved (a dashed ghost, an arrow to the card now) while the changes card is
-  // hovered and for a moment after a Tidy, everything else dimmed.
+  // hovered, everything else dimmed. Not after a Tidy (owner: on a large board, with groups, a
+  // flash of every move was very confusing).
   function drawUnsaved() {
     const marks = (S.profile?.active && S.profile.unsaved) || {}, layer = $("moves"), svg = s("svg");
     layer.textContent = "";
@@ -2275,14 +2416,258 @@ const PB = (() => {
       svg.append(s("path", { class: "trail", stroke: col, d: `M${p.x},${p.y} L${q.x},${q.y}` }),
                  s("path", { class: "trail-head", fill: col, d: `M${q.x},${q.y} L${q.x - ux * A - uy * W},${q.y - uy * A + ux * W} L${q.x - ux * A + uy * W},${q.y - uy * A - ux * W}Z` }));
     }
-    showMoves();  // (a Tidy's moves arrive with the state after it)
+    showMoves();
   }
-  // Only with something to show (owner: a Tidy that moved nothing dimmed every card): a moved
-  // card's ghost after a Tidy, any card with a change under the hovered changes card.
+  // Only with something to show (owner: it once dimmed every card): a card with a change.
   function showMoves() {
-    const what = S.movesHover ? cardsEl.querySelector(".unsaved")
-      : performance.now() < (S.movesUntil || 0) && $("moves").querySelector(".ghost");
-    board.classList.toggle("show-moves", !!what);
+    board.classList.toggle("show-moves", !!(S.movesHover && cardsEl.querySelector(".unsaved")));
+  }
+
+  // ---- groups: named frames around cards (PLAN §4, owner) ------------------------------------
+  // A card's group is its own choice (its board entry's "group": an id, MONITORING, or null for
+  // none), else Monitoring for a diagnostic card. Each group is drawn as a frame around its cards,
+  // behind the wires; its title sits on a layer above the wires (owner: never under a cable). A
+  // card let go over another group's frame joins it; one pulled out of its own frame leaves it.
+  // Made from a box (Shift + drag on empty board: Group…, Ctrl G) or a card's menu (New group).
+  // (cells: the rectangle's margin around its cards; the room above it for its title, owner: the
+  // title above the rectangle, so it wraps the cards' tops as tightly as their other sides)
+  const MONITORING = "monitoring", FRAME_PAD = 2, FRAME_HEAD = 3;
+  function groupOf(key) {
+    const ws = saved(key);
+    if (!("group" in ws)) return byKey()[key]?.kind === "diag" ? MONITORING : null;
+    return ws.group === MONITORING || S.ws.groups?.[ws.group] ? ws.group : null;
+  }
+  const groupName = (g) => (g === MONITORING ? "Monitoring" : S.ws.groups?.[g]?.name || "");
+  function members() {
+    const out = {};
+    for (const c of visible()) {
+      const g = groupOf(c.key);
+      if (g && S.pos[c.key] && S.sizes[c.key]) (out[g] ||= []).push(c.key);
+    }
+    return out;
+  }
+  // A group's frame, in cells, around its cards: a held card counts where it was picked up.
+  // A held card counts at the cell it would drop into (owner: the group stretches as it is dragged
+  // about; dragging a card out of its frame does not take it out). extra: more boxes inside it (a
+  // held card in the spot it would take in another group).
+  function frameBox(keys, extra = []) {
+    const at = (k) => (S.drag?.kind === "card" && S.drag.key === k ? S.drag.to || S.drag.from : S.pos[k]);
+    const bs = [...keys.map((k) => ({ ...at(k), ...S.sizes[k] })), ...extra];
+    const x = Math.min(...bs.map((q) => q.x)), y = Math.min(...bs.map((q) => q.y));
+    const r = Math.max(...bs.map((q) => q.x + q.w)), b = Math.max(...bs.map((q) => q.y + q.h));
+    return { x: x - FRAME_PAD, y: y - FRAME_PAD, w: r - x + 2 * FRAME_PAD, h: b - y + 2 * FRAME_PAD };  // (its title above it)
+  }
+  // The frames are kept (one per group) and only restyled, so a frame changing size while a card
+  // is held eases there: the preview of what the group becomes (owner) when the card is let go:
+  // grown to take it in its spot, or shrunk without it; the last card leaving fades it out.
+  function drawFrames() {
+    if (S.renamingGroup) return;  // (a redraw would replace the title being typed)
+    const d = S.drag?.kind === "card" ? S.drag : null, els = S.frameEls ||= {}, seen = new Set();
+    board.classList.toggle("holding", !!d);
+    S.frames = {};
+    for (const [g, keys] of Object.entries(members())) {
+      const b = frameBox(keys);
+      // (Monitoring's frame was once left out while another card sat inside it, for boards from
+      // before groups whose scopes were spread out: it vanished under a card held over it, and
+      // when it stretched to follow a scope, owner. A Tidy gathers the scopes.)
+      S.frames[g] = b;  // (what a drop is tested against: the frame as it is)
+      const hot = !!d && d.drop === g, leaving = !!d && !!d.drop && d.was === g;  // (off to another group)
+      const rest = leaving ? keys.filter((k) => k !== d.key) : keys;
+      const show = hot && d.slot ? frameBox(keys, [{ ...d.slot, ...S.sizes[d.key] }]) : leaving && rest.length ? frameBox(rest) : b;
+      let el = els[g];
+      if (!el) {
+        el = els[g] = { frame: h("div"), top: h("div"), name: h("span"), count: h("i") };
+        const title = h("b", { class: "frame-title", "data-group": g }, el.name, el.count);
+        // Its title moves the group (owner: show it): hovered, the title and the whole frame light up.
+        const lift = (on) => { el.hover = on; drawFrames(); };
+        title.addEventListener("mouseenter", () => lift(true));
+        title.addEventListener("mouseleave", () => lift(false));
+        el.top.append(title);
+        $("frames").append(el.frame);
+        $("frame-tops").append(el.top);
+      }
+      seen.add(g);
+      const box = `transform: translate(${px(show.x)}px, ${px(show.y)}px); width: ${px(show.w)}px; height: ${px(show.h)}px`;
+      const going = leaving && !rest.length;  // (the group goes with its last card)
+      const lifted = el.hover || S.hoverGroup === g || S.menuLit === g || (S.drag?.kind === "group" && S.drag.g === g) ? " lifted" : "";  // (title or empty space hovered, its menu open, or the group held)
+      el.frame.className = `frame${g === MONITORING ? " mon" : ""}${hot ? " hot" : ""}${going ? " going" : ""}${lifted}`;
+      el.frame.style.cssText = box;
+      el.top.className = `frame-top${hot ? " hot" : ""}${going ? " going" : ""}${lifted}`;
+      el.top.style.cssText = box;
+      el.name.textContent = groupName(g);
+      el.count.textContent = g === MONITORING ? "built in" : String(hot ? keys.length + 1 : rest.length);
+    }
+    for (const [g, el] of Object.entries(els)) if (!seen.has(g)) { el.frame.remove(); el.top.remove(); delete els[g]; }
+  }
+  // Where a held card would go, by where the pointer is (owner: hovering a group with a card):
+  // into the smallest other group whose frame it is over, landing in that group's spot for it
+  // (slotIn); else it stays in its own group, wherever it is put (undefined: no change). The frame
+  // lights up and the card says "Joins …".
+  function dropTarget(d, at) {
+    const inside = (b) => at.x > b.x && at.x < b.x + b.w && at.y > b.y && at.y < b.y + b.h;
+    const fits = (g) => g !== MONITORING || byKey()[d.key]?.kind === "diag";  // (Monitoring: the scopes alone)
+    const over = Object.entries(S.frames || {}).filter(([g, b]) => g !== d.was && fits(g) && inside(b))
+      .sort(([, a], [, b]) => a.w * a.h - b.w * b.h)[0]?.[0];
+    d.slot = over ? slotIn(over, d.key, d.to) : null;
+    if (over !== d.drop) {
+      d.drop = over;
+      S.els[d.key].querySelector(".leaving")?.remove();
+      if (over) S.els[d.key].append(h("span", { class: "leaving joins", text: `Joins ${groupName(over)}` }));
+    }
+    if (d.was || over) drawFrames();  // (its own group stretches to follow it)
+  }
+  // A card let go into a group (owner: not cell by cell): the free spot in the group's own rhythm
+  // nearest to where it was let go: under or over one of its columns (Tidy's row gap), or a new
+  // column on either side (Tidy's column gap), clear of every card.
+  function slotIn(g, key, want) {
+    const keys = (members()[g] || []).filter((k) => k !== key), sz = S.sizes[key];
+    if (!keys.length) return want;
+    const box = (k) => ({ ...S.pos[k], ...S.sizes[k] }), cand = [], cols = {};
+    for (const k of keys) (cols[S.pos[k].x] ||= []).push(box(k));
+    for (const [x, bs] of Object.entries(cols)) {
+      cand.push({ x: +x, y: Math.max(...bs.map((b) => b.y + b.h)) + 2 }, { x: +x, y: Math.min(...bs.map((b) => b.y)) - 2 - sz.h });
+    }
+    const all = keys.map(box), l = Math.min(...all.map((b) => b.x)), r = Math.max(...all.map((b) => b.x + b.w));
+    const t = Math.min(...all.map((b) => b.y)), btm = Math.max(...all.map((b) => b.y + b.h));
+    const y = Math.max(t, Math.min(Math.round(want.y), btm - sz.h));
+    cand.push({ x: r + 9, y }, { x: l - 9 - sz.w, y });
+    const others = visible().filter((c) => c.key !== key && S.pos[c.key] && S.sizes[c.key]).map((c) => box(c.key));
+    const frames = Object.entries(S.frames || {}).filter(([o]) => o !== g).map(([, b]) => b);  // (the group grows: not into another)
+    const apart = (p, b, mx, my) => p.x + sz.w + mx <= b.x || b.x + b.w + mx <= p.x || p.y + sz.h + my <= b.y || b.y + b.h + my <= p.y;
+    const free = (p) => others.every((b) => apart(p, b, 1, 1))  // (and the group's rectangle and title clear of another's)
+      && frames.every((b) => apart(p, b, 2 * FRAME_PAD, 2 * FRAME_PAD + FRAME_HEAD));
+    const near = (p) => Math.hypot(p.x - want.x, p.y - want.y);
+    return cand.filter(free).sort((a, b) => near(a) - near(b))[0] || want;
+  }
+  function joinGroup(keys, g) {
+    const left = new Set(keys.map(groupOf).filter((o) => o && o !== g && o !== MONITORING));
+    for (const k of keys) S.ws.cards[k] = { ...saved(k), group: g };
+    send({ op: "group-set", cards: keys, group: g });
+    // A group left with no card at all goes (it could not be seen or reached any more).
+    for (const o of left) if (!Object.values(S.ws.cards).some((c) => c.group === o)) ungroup(o);
+    drawWires();  // (a wire into Monitoring is dotted)
+    drawFrames();
+  }
+  function makeGroup(keys) {
+    const id = `g${Math.random().toString(36).slice(2, 10)}`;
+    S.ws.groups = { ...S.ws.groups, [id]: { name: "New group" } };
+    for (const k of keys) S.ws.cards[k] = { ...saved(k), group: id };
+    send({ op: "group-new", id, name: "New group", cards: keys });
+    pick([]);
+    drawWires();
+    drawFrames();
+    startGroupRename(id);
+  }
+  function ungroup(g) {
+    const { [g]: _, ...rest } = S.ws.groups || {};
+    S.ws.groups = rest;
+    for (const [k, c] of Object.entries(S.ws.cards)) if (c.group === g) { const { group: __, ...keep } = c; S.ws.cards[k] = keep; }
+    send({ op: "group-delete", id: g });
+    drawWires();
+    drawFrames();
+  }
+  // The title typed in place (no guide text, owner): Enter or leaving it keeps it, Esc goes back.
+  function startGroupRename(g) {
+    const el = document.querySelector(`.frame-title[data-group="${g}"] span`);
+    if (!el || g === MONITORING) return;
+    const before = el.textContent;
+    S.renamingGroup = S.editing = true;
+    el.contentEditable = "true";
+    el.focus();
+    getSelection().selectAllChildren(el);
+    const keys = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); el.blur(); }
+      if (e.key === "Escape") { el.textContent = before; el.blur(); }
+      e.stopPropagation();
+    };
+    el.addEventListener("keydown", keys);
+    el.addEventListener("blur", () => {
+      el.removeEventListener("keydown", keys);
+      el.contentEditable = "false";  // (owner: left editable, it kept the outline, took Enter as a new line, and would not drag)
+      const name = el.textContent.replace(/\s+/g, " ").trim().slice(0, 40) || before;
+      S.renamingGroup = S.editing = false;
+      if (name !== before && S.ws.groups?.[g]) { S.ws.groups[g] = { ...S.ws.groups[g], name }; send({ op: "group-rename", id: g, name }); }
+      drawFrames();
+      if (S.queued && !S.drag) { const q = S.queued; S.queued = null; load(q); }
+    }, { once: true });
+  }
+  // A group's own menu (owner: only what is about the group; the board's Fit, Tidy and Launch at
+  // login are on the empty board's): Add node › (made in it, at that spot), Rename, Ungroup;
+  // Monitoring has no Rename or Ungroup.
+  function groupMenu(g, x, y) {
+    openMenu(x, y, [
+      { head: groupName(g) },
+      { label: "Add node", icon: "add", sub: addNodeItems() },
+      ...(g === MONITORING ? [] : [
+        { sep: true },
+        { label: "Rename", icon: "rename", hint: "double-click the title", action: () => startGroupRename(g) },
+        { label: "Ungroup", icon: "group", hint: "the cards stay", action: () => ungroup(g) }]),
+    ]);
+    S.menuGroup = S.menuLit = g;  // (a node added from here goes in it; lit while its menu is open)
+    drawFrames();
+  }
+  // The pointer on empty board (not a card, a wire, a socket, a title).
+  const emptyAt = (e) => e.target === board || e.target === world;
+  // A group's empty space under the pointer: its rectangle lights up (owner: it can be moved from
+  // there, and right-clicked).
+  function hoverSpace(e) {
+    const g = emptyAt(e) ? groupAt(e.clientX, e.clientY) : null;
+    if (g === (S.hoverGroup || null)) return;
+    S.hoverGroup = g;
+    drawFrames();
+  }
+  function moveGroupFrom(g, e) {
+    const keys = members()[g] || [];
+    S.drag = { kind: "group", g, keys, at: toWorld(e.clientX, e.clientY), from: Object.fromEntries(keys.map((k) => [k, { ...S.pos[k] }])), moved: false };
+    board.classList.add("moving-group");
+  }
+  function groupItems(key) {
+    // (only groups with cards on the board: one with none has no frame, it could not be seen)
+    const scope = byKey()[key]?.kind === "diag";  // (Monitoring takes the scopes alone)
+    const g = groupOf(key), others = Object.keys(members()).filter((o) => o !== g && (o !== MONITORING || scope));
+    return [
+      { label: "New group", icon: "group", hint: "this card in it", action: () => makeGroup([key]) },
+      ...(others.length ? [{ label: "Add to group", icon: "group", sub: others.map((o) => ({ label: groupName(o), action: () => joinGroup([key], o) })) }] : []),
+      ...(g ? [{ label: `Leave ${groupName(g)}`, icon: "group", action: () => joinGroup([key], null) }] : []),
+      { sep: true },
+    ];
+  }
+  // Picked cards (a Shift + drag box): a ring on each, and a bar to make them a group.
+  function pick(keys, at) {
+    S.picked = keys;
+    for (const [k, el] of Object.entries(S.els)) el.classList.toggle("picked", keys.includes(k));
+    $("selbar")?.remove();
+    if (!keys.length) return;
+    const go = h("button", { type: "button", text: "Group…" });
+    go.addEventListener("click", () => makeGroup(S.picked));
+    const bar = h("div", { id: "selbar", class: "selbar" }, `${keys.length} card${keys.length > 1 ? "s" : ""}`, go, h("kbd", { text: "Ctrl G" }));
+    document.body.append(bar);
+    const r = bar.getBoundingClientRect();
+    Object.assign(bar.style, { left: `${Math.max(8, Math.min(at.x, innerWidth - r.width - 8))}px`, top: `${Math.max(8, Math.min(at.y, innerHeight - r.height - 8))}px` });
+  }
+  function drawBox(d, x, y) {
+    let el = $("boxsel");
+    if (!el) document.body.append(el = h("div", { id: "boxsel", class: "boxsel" }));
+    Object.assign(el.style, { left: `${Math.min(d.sx, x)}px`, top: `${Math.min(d.sy, y)}px`, width: `${Math.abs(x - d.sx)}px`, height: `${Math.abs(y - d.sy)}px` });
+    d.box = { l: Math.min(d.sx, x), t: Math.min(d.sy, y), r: Math.max(d.sx, x), b: Math.max(d.sy, y) };
+  }
+  function endBox(d) {
+    $("boxsel")?.remove();
+    if (!d.box) return;
+    const { l, t, r, b } = d.box;
+    const keys = Object.entries(S.els).filter(([, el]) => { const q = el.getBoundingClientRect(); return q.left < r && l < q.right && q.top < b && t < q.bottom; }).map(([k]) => k);
+    pick(keys, { x: l, y: b + 10 });
+  }
+  // A Tidy's badges on moved cards' own wires: beside their sockets from now on (owner: they stayed
+  // behind when the card moved); the other end keeps its spot.
+  function portalsFollow(keys) {
+    const set = new Set(keys), moved = {};
+    for (const [id, how] of Object.entries(S.ws.portals || {})) {
+      const w = typeof how === "object" && S.model.wires.find((x) => x.id === id);
+      if (w && (set.has(w.from[0]) || set.has(w.to[0])))
+        moved[id] = { ...how, out: set.has(w.from[0]) ? null : how.out, in: set.has(w.to[0]) ? null : how.in };
+    }
+    if (Object.keys(moved).length) setPortals(moved);
   }
 
   function profileMenu(x, y) {
@@ -3063,25 +3448,29 @@ const PB = (() => {
     addEventListener("mousemove", onMove);
     addEventListener("mouseup", onUp);
     board.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });  // (no middle-click paste)
+    board.addEventListener("mouseleave", () => { if (S.hoverGroup) { S.hoverGroup = null; drawFrames(); } });
     board.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.view.z * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
     board.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       hideTip();
       const wire = e.target.closest?.(".wire-g, .portal-end");
       if (wire) return wireMenu(wire.dataset.wire, e.clientX, e.clientY);
+      const title = e.target.closest(".frame-title");
+      const g = title?.dataset.group || (emptyAt(e) && groupAt(e.clientX, e.clientY));  // (its title, or its empty space)
+      if (g) return groupMenu(g, e.clientX, e.clientY);
       const card = e.target.closest(".card");
       if (card) cardMenu(card.dataset.key, e.clientX, e.clientY); else boardMenu(e.clientX, e.clientY);
     });
-    $("add").addEventListener("click", (e) => {
+    barMenu($("add"), (e) => {
       const r = e.currentTarget.getBoundingClientRect();
       openMenu(r.left, r.bottom + 6, addNodeItems());
       S.menuAt = toWorld(innerWidth / 2, innerHeight / 2);
     });
     $("fit").addEventListener("click", () => fit());
-    $("wires-btn").addEventListener("click", wiresMenu);
-    $("tidy-more").addEventListener("click", tidyMenu);
+    barMenu($("wires-btn"), wiresMenu);
+    barMenu($("tidy-more"), tidyMenu);
     document.addEventListener("visibilitychange", sayVisible);
-    $("profile").addEventListener("click", (e) => {
+    barMenu($("profile"), (e) => {
       const r = e.currentTarget.getBoundingClientRect();
       profileMenu(r.left, r.bottom + 6);
     });
@@ -3106,6 +3495,7 @@ const PB = (() => {
       S.menuAt = toWorld(r.left, r.bottom + 30);
     });
     $("problems-btn").addEventListener("click", () => toggleProblems());
+    $("frame-tops").addEventListener("dblclick", (e) => { const t = e.target.closest(".frame-title"); if (t) startGroupRename(t.dataset.group); });
     addEventListener("keydown", (e) => {
       if (e.target.isContentEditable || e.target.tagName === "INPUT") return;
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -3114,10 +3504,22 @@ const PB = (() => {
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") unlinkSelected();
-      if (e.key === "Escape") { cancelWire(); closeMenu(); select(null); toggleProblems(false); }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "g" || e.key === "G") && S.picked?.length) { e.preventDefault(); makeGroup(S.picked); return; }
+      if (e.key === "Escape") { cancelWire(); closeMenu(); select(null); toggleProblems(false); pick([]); }
       if (e.key === "f" || e.key === "F") fit();
     });
-    addEventListener("mousedown", (e) => { hideTip(); if (!e.target.closest(".menu, #add, #profile")) closeMenu(); }, true);
+    addEventListener("mousedown", (e) => {
+      // A press on a card: board updates wait until it is let go, and its click has gone through
+      // (owner: the power button sometimes ignored a click: a state arriving between press and
+      // release redrew the card, the button pressed was gone, and the browser drops that click).
+      S.pressing = e.button === 0 && !!e.target.closest?.(".card");
+      hideTip();
+      S.pressedOpen = menus.length && S.menuOpener && e.target.closest("button") === S.menuOpener ? S.menuOpener : null;
+      if (!e.target.closest(".menu, #add, #profile")) closeMenu();
+    }, true);
+    const released = () => { if (S.pressing) { S.pressing = false; setTimeout(flushQueued); } };  // (after the click)
+    addEventListener("mouseup", released, true);
+    addEventListener("blur", released);
     addEventListener("resize", () => placeChip());
     addEventListener("error", (e) => S.errors.push(String(e.message)));
     const err = console.error.bind(console);
@@ -3128,7 +3530,8 @@ const PB = (() => {
   function audit() {
     const faults = [...S.errors];
     const rect = (el) => el && !el.hidden && el.getClientRects().length ? el.getBoundingClientRect() : null;
-    const cards = Object.entries(S.els).map(([k, el]) => [k, el.getBoundingClientRect()]);
+    const cards = Object.entries(S.els).filter(([k]) => !(S.drag?.kind === "card" && S.drag.key === k))  // (a held card may be over another)
+      .map(([k, el]) => [k, el.getBoundingClientRect()]);
     for (let i = 0; i < cards.length; i++) {
       for (let j = i + 1; j < cards.length; j++) {
         const [a, b] = [cards[i][1], cards[j][1]];
@@ -3230,8 +3633,8 @@ const PB = (() => {
       render();
       if (hover) $("changes").dispatchEvent(new MouseEvent("mouseenter"));
     },
-    // The board dragged about by `drags` ([key, dx, dy] px) and saved so, then tidied: Tidy shows
-    // where its cards came from.
+    // The board dragged about by `drags` ([key, dx, dy] px) and saved so, then tidied: the moved
+    // cards dotted, nothing dimmed (owner: no flash of every move after a Tidy).
     tidyMoves: (drags) => {
       for (const [k, dx, dy] of drags) { debug.drag(k, dx, dy); onUp(); }
       const was = structuredClone(S.pos);
@@ -3240,6 +3643,7 @@ const PB = (() => {
       S.profile = { ...S.profile, unsaved: Object.fromEntries(moved.map((k) => [k, was[k]])),
                     changes: [`Moved ${moved.length} cards`, "Made 3 portals"] };
       render();
+      if (board.classList.contains("show-moves")) S.errors.push("Tidy dimmed the board to show its moves");
     },
     fakeEvents: (kind = "mix", showSeen = false) => {
       const now = Date.now() / 1000, ur = S.model.cards.find((c) => c.kind === "hardware")?.key, ev = (o) => ({ cards: [], data: {}, peak: {}, count: 1, active: false, new: true, seen: null, ...o });
@@ -3287,7 +3691,175 @@ const PB = (() => {
         row?.click();
       }
     },
-    cardMenu: (key) => { const r = S.els[key].getBoundingClientRect(); cardMenu(key, r.right - 20, r.top + 20); },
+    cardMenu: (key, path = []) => {
+      const r = S.els[key].getBoundingClientRect();
+      cardMenu(key, r.right - 20, r.top + 20);
+      for (const label of path) [...menus.at(-1).querySelectorAll(".item")].find((x) => x.textContent.startsWith(label))?.click();
+    },
+    // Groups: a card held over a group's frame (fx, fy: where in it), or pulled out below its own;
+    // a Shift + drag box around some cards; a group title's menu.
+    dragToFrame: (key, g, fx = 0.85, fy = 0.8) => {
+      const f = S.frames[g], r = S.els[key].querySelector("header").getBoundingClientRect(), w = toScreen({ x: px(f.x + f.w * fx), y: px(f.y + f.h * fy) });
+      debug.drag(key, w.x - (r.left + 40), w.y - (r.top + r.height / 2));  // (the pointer: where drag holds the header)
+    },
+    // Right-click inside a group (fx, fy: where in its frame), Add node › Gain; the new card
+    // arriving as the server would send it (in the group, at the click): it must take the
+    // group's spot for that point. putBackIn: the same for a card put back on the board.
+    arriveIn: (g, fx = 0.9, fy = 0.6) => {
+      const f = S.frames[g], at = toScreen({ x: px(f.x + f.w * fx), y: px(f.y + f.h * fy) });
+      boardMenu(at.x, at.y);
+      makeDevice({ type: "gain" });
+      closeMenu();
+      const src = S.model.cards.find((c) => c.key === "pb:ggain"), where = S.slotNext.at, st = structuredClone(S.lastState);
+      st.model.cards.push({ ...structuredClone(src), key: "pb:gnew", title: "Gain 2" });
+      st.workspace.devices["pb:gnew"] = { ...st.workspace.devices["pb:ggain"], id: "gnew", name: "Gain 2" };
+      st.workspace.cards["pb:gnew"] = { group: g, ...where };
+      load(st);
+      const p = S.pos["pb:gnew"];
+      if (groupOf("pb:gnew") !== g || (p.x === where.x && p.y === where.y)) S.errors.push(`a card made inside ${groupName(g)} was not put in its spot there`);
+    },
+    putBackIn: (key, g, fx = 0.9, fy = 0.6) => {
+      const f = S.frames[g], at = toScreen({ x: px(f.x + f.w * fx), y: px(f.y + f.h * fy) });
+      boardMenu(at.x, at.y);
+      showAt(key);
+      closeMenu();
+      if (groupOf(key) !== g) S.errors.push(`${key} put back inside ${groupName(g)} is not in it`);
+    },
+    // A group of one card, that card let go into another group: the old group fades while it is
+    // held there, and goes once it is let go (no card left).
+    lastOut: (key, into) => {
+      makeGroup([key]);
+      document.activeElement.blur();  // (the new title, left as it is)
+      const g = groupOf(key);
+      debug.dragToFrame(key, into);
+      if (!document.querySelector(".frame.going")) S.errors.push("a group whose last card is held over another did not fade");
+      onUp();
+      if (S.ws.groups?.[g]) S.errors.push("a group left with no cards was kept");
+      if (groupOf(key) !== into) S.errors.push(`${key} did not join ${groupName(into)}`);
+    },
+    // A new group named by typing and Enter: its title is done editing (no outline, no more
+    // typing) and drags the group like Monitoring's.
+    nameAndMove: (keys, name) => {
+      makeGroup(keys);
+      const t = document.querySelector(".frame-title span[contenteditable='true']"), g = t.closest(".frame-title").dataset.group;
+      t.textContent = name;
+      t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      const title = document.querySelector(`.frame-title[data-group="${g}"]`);
+      if (title.querySelector("span").isContentEditable) S.errors.push("a group's title stayed editable after Enter");
+      if (groupName(g) !== name) S.errors.push(`the group was named "${groupName(g)}", not "${name}"`);
+      debug.moveGroup(g, 0, 14);  // (a cell down, into free space)
+    },
+    // Monitoring takes the scopes alone: an effect held over it does not light it, its menu does
+    // not offer it; a scope does join it.
+    monitorOnly: (effect, scope) => {
+      debug.dragToFrame(effect, MONITORING, 0.5, 0.5);
+      if (document.querySelector(".frame.mon.hot") || S.drag?.drop === MONITORING) S.errors.push(`${effect} held over Monitoring would join it`);
+      if (!document.querySelector(".frame.mon")) S.errors.push("Monitoring's frame vanished under a held card");
+      S.drag.to = { ...S.drag.from };  // (let go where it was picked up)
+      onUp();
+      if (groupItems(effect).some((it) => it.sub?.some((x) => x.label === "Monitoring"))) S.errors.push("an effect's menu offers Monitoring");
+      joinGroup([scope], null);
+      if (!groupItems(scope).some((it) => it.sub?.some((x) => x.label === "Monitoring"))) S.errors.push("a scope's menu does not offer Monitoring");
+      debug.dropToFrame(scope, MONITORING, 0.5, 0.5);
+      debug.fit();
+    },
+    // …and let go there: it must join the group, in the spot the outline showed.
+    dropToFrame: (key, g, fx, fy) => {
+      debug.dragToFrame(key, g, fx, fy);
+      const shown = S.drag?.slot && { ...S.drag.slot };
+      onUp();
+      if (groupOf(key) !== g) S.errors.push(`${key} let go over ${groupName(g)} did not join it`);
+      if (!shown || S.pos[key].x !== shown.x || S.pos[key].y !== shown.y) S.errors.push(`${key} did not land where its outline showed`);
+    },
+    // A member dragged out of its frame (up, into the gap between rows): it stays in its group,
+    // and the frame stretches to take it, while held and once let go (owner).
+    dragOut: (key, letGo = false) => {
+      const g = groupOf(key), f = S.frames[g], r = S.els[key].querySelector("header").getBoundingClientRect(), t = toScreen({ x: 0, y: px(f.y) });
+      debug.drag(key, 20, t.y - (r.top + r.height / 2) - 40);  // (the pointer up, out of the top)
+      const holds = () => { const b = frameBox(members()[g]), p = S.drag?.to || S.pos[key], z = S.sizes[key];
+                            return b.x <= p.x && b.y <= p.y && p.x + z.w <= b.x + b.w && p.y + z.h <= b.y + b.h; };
+      if (!holds()) S.errors.push(`${groupName(g)} did not stretch to the held ${key}`);
+      if (!letGo) return;
+      onUp();
+      if (groupOf(key) !== g) S.errors.push(`${key} moved out of ${groupName(g)}'s frame left the group`);
+      if (!holds()) S.errors.push(`${groupName(g)} does not take in ${key} where it was let go`);
+    },
+    box: (keys) => {
+      const rs = keys.map((k) => S.els[k].getBoundingClientRect());
+      const l = Math.min(...rs.map((r) => r.left)) - 16, t = Math.min(...rs.map((r) => r.top)) - 16;
+      const r = Math.max(...rs.map((q) => q.right)) + 16, b = Math.max(...rs.map((q) => q.bottom)) + 16;
+      onDown({ target: board, button: 0, shiftKey: true, clientX: l, clientY: t });
+      onMove({ clientX: r, clientY: b });
+      onUp();
+    },
+    // The title dragged (dx, dy screen px): every card of the group moves the same whole cells.
+    moveGroup: (g, dx, dy) => {
+      const t = document.querySelector(`.frame-title[data-group="${g}"]`), r = t.getBoundingClientRect(), keys = members()[g];
+      const before = Object.fromEntries(keys.map((k) => [k, { ...S.pos[k] }]));
+      onDown({ target: t, button: 0, clientX: r.left + 10, clientY: r.top + 10 });
+      onMove({ clientX: r.left + 10 + dx, clientY: r.top + 10 + dy });
+      onUp();
+      const moves = new Set(keys.map((k) => `${S.pos[k].x - before[k].x},${S.pos[k].y - before[k].y}`));
+      if (moves.size !== 1 || moves.has("0,0")) S.errors.push(`moving ${groupName(g)} by its title moved its cards by ${[...moves].join(" / ")}`);
+    },
+    // Each bar button with a menu, pressed and clicked like a mouse does: open, closed, open again.
+    barToggle: () => {
+      for (const id of ["add", "wires-btn", "tidy-more", "profile"]) {
+        const b = $(id), press = () => { b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); b.click(); };
+        const seen = [press(), menus.length, press(), menus.length, press(), menus.length].filter((_, i) => i % 2);
+        if (seen.join() !== "1,0,1") S.errors.push(`#${id}: menus open after each click ${seen.join(", ")} (want 1, 0, 1)`);
+        closeMenu();
+      }
+      $("tidy-more").dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      $("tidy-more").click();
+    },
+    // The power button pressed, a board state arriving before it is let go (and another, sent
+    // before the server had the change, just after): the button pressed must still be there when
+    // released (a browser drops a click whose press and release land on two elements), the click
+    // must toggle it, and the late state must not flip it back.
+    pressThrough: (key) => {
+      const btn = () => S.els[key].querySelector(".bypass"), was = !!S.ws.devices[key].bypass, stale = structuredClone(S.lastState);
+      const pressed = btn();
+      pressed.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      receive(stale);
+      if (btn() !== pressed) S.errors.push("a board state redrew the card while its power button was held: the click is lost");
+      pressed.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      pressed.click();
+      setTimeout(() => {
+        receive(structuredClone(stale));
+        if (!!S.ws.devices[key].bypass === was) S.errors.push("the power button's click was undone by a late board state");
+      });
+    },
+    // A point in a group's empty space (its margin, by the top-left corner): hovered, right-clicked,
+    // or dragged from (the group must move, every card the same whole cells).
+    space: (g, act = "hover") => {
+      const f = S.frames[g], p = toScreen({ x: px(f.x + 0.6), y: px(f.y + 0.6) }), at = { clientX: p.x, clientY: p.y, target: board, button: 0 };
+      if (act === "hover") { onMove(at); if (!document.querySelector(".frame.lifted")) S.errors.push("a group's empty space hovered did not light it"); }
+      if (act === "menu") board.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: p.x, clientY: p.y }));
+      if (act === "drag") {
+        const keys = members()[g], before = Object.fromEntries(keys.map((k) => [k, { ...S.pos[k] }]));
+        onDown(at); onMove({ ...at, clientX: p.x, clientY: p.y + 40 }); onUp();
+        const moves = new Set(keys.map((k) => `${S.pos[k].x - before[k].x},${S.pos[k].y - before[k].y}`));
+        if (moves.size !== 1 || moves.has("0,0")) S.errors.push(`dragging ${groupName(g)} by its empty space moved its cards by ${[...moves].join(" / ")}`);
+      }
+    },
+    // Right-clicked on its empty space and on its title, then the pointer moved onto the menu: the
+    // group stays lit until the menu closes (owner), Monitoring too (its menu is the board's).
+    menuLit: (groups) => {
+      for (const g of groups) for (const where of ["space", "title"]) {
+        const f = S.frames[g], t = document.querySelector(`.frame-title[data-group="${g}"]`), r = t.getBoundingClientRect();
+        const p = where === "space" ? toScreen({ x: px(f.x + 0.6), y: px(f.y + 0.6) }) : { x: r.left + 10, y: r.top + 8 };
+        (where === "space" ? board : t).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: p.x, clientY: p.y }));
+        const menu = menus.at(-1);
+        board.dispatchEvent(new MouseEvent("mouseleave"));
+        onMove({ target: menu, clientX: p.x + 300, clientY: p.y + 200 });
+        if (!document.querySelector(".frame.lifted")) S.errors.push(`${groupName(g)} went dark with its menu (from its ${where}) still open`);
+        closeMenu();
+        if (document.querySelector(".frame.lifted")) S.errors.push(`${groupName(g)} stayed lit after its menu closed`);
+      }
+    },
+    titleHover: (g) => document.querySelector(`.frame-title[data-group="${g}"]`).dispatchEvent(new MouseEvent("mouseenter")),
+    groupMenu: (g) => { const t = document.querySelector(`.frame-title[data-group="${g}"]`).getBoundingClientRect(); groupMenu(g, t.left + 10, t.bottom + 4); },
     // Plugins: the picker (with the fixture's list, searched for query), a card's controls, an open editor.
     pickPlugin: (list, query = "", added) => {  // added: as a Rescan's answer says
       S.pluginList = list.map((p) => ({ ...p, ref: `${p.format}:${p.path || ""}:${p.label}` }));
@@ -3347,16 +3919,27 @@ const PB = (() => {
     columns: () => { S.forceCuts = []; layout(visible().map((c) => c.key)); S.forceCuts = null; return S.foldInfo.n; },
     tidy: () => {
       tidy();
-      const cols = {};
-      for (const [k, p] of Object.entries(S.pos)) if (S.els[k]) (cols[p.x] ||= []).push({ y: p.y, h: S.sizes[k].h });
+      // (the loose cards' columns; a group's cards and the Monitoring row space themselves)
+      const cols = {}, inGroup = Object.values(members()).flat();
+      for (const [k, p] of Object.entries(S.pos)) if (S.els[k] && !inGroup.includes(k)) (cols[p.x] ||= []).push({ y: p.y, h: S.sizes[k].h });
       for (const col of Object.values(cols)) {
         col.sort((a, b) => a.y - b.y);
         const gaps = col.slice(1).map((c, i) => Math.round(c.y - col[i].y - col[i].h));
         if (gaps.some((g) => g !== gaps[0])) S.errors.push(`tidy: uneven rows in a column, gaps ${gaps.join(", ")}`);
       }
-      // Portals: every wire between rows is one; no badge on a card or on another badge.
+      // Portals: every wire between rows is one (not those into Monitoring: dotted, owner); no badge
+      // on a card or on another badge. No card inside a group's frame it is not in.
       const { rowOf } = S.fold, ends = [...document.querySelectorAll(".portal-end")].map((e) => e.querySelector(".portal-disc").getBoundingClientRect());
-      for (const w of visibleWires()) if (rowOf[w.from[0]] !== rowOf[w.to[0]] && !S.ws.portals?.[w.id]) S.errors.push(`tidy: a wire between rows is not a portal: ${w.id}`);
+      for (const w of visibleWires()) {
+        if (groupOf(w.to[0]) === MONITORING && !S.ws.portals?.[w.id]) continue;
+        if (rowOf[w.from[0]] !== rowOf[w.to[0]] && !S.ws.portals?.[w.id]) S.errors.push(`tidy: a wire between rows is not a portal: ${w.id}`);
+      }
+      for (const [g, b] of Object.entries(S.frames || {}))
+        for (const c of visible()) {
+          const p = S.pos[c.key], z = S.sizes[c.key];
+          if (p && z && groupOf(c.key) !== g && p.x < b.x + b.w && b.x < p.x + z.w && p.y < b.y + b.h && b.y < p.y + z.h)
+            S.errors.push(`tidy: ${c.key} sits in the ${groupName(g)} frame, not its group`);
+        }
       const cardBoxes = Object.values(S.els).map((el) => el.getBoundingClientRect());
       const meet = (p, q) => p.left < q.right && q.left < p.right && p.top < q.bottom && q.top < p.bottom;
       ends.forEach((p, i) => {
@@ -3776,6 +4359,13 @@ const PB = (() => {
       onDown({ target: head, button: 0, clientX: x, clientY: y });
       onMove({ clientX: x + dx, clientY: y + dy, altKey: false });
     },
+    // Cards put at these cells, and these wires made portals: for layouts worked out outside the
+    // board (design mocks over real shots).
+    placeAll: (cells) => {
+      for (const [k, p] of Object.entries(cells)) if (S.els[k]) { S.pos[k] = { x: p.x, y: p.y }; placeCard(k); }
+      drawWires();
+    },
+    portals: (ids) => setPortals(Object.fromEntries(ids.map((id) => [id, "hand"]))),
     zoom: (z) => { S.moved = true; zoomAt(innerWidth / 2, innerHeight / 2, z); },
     fit: (keys, dy = 0, dx = 0) => { S.moved = true; fit(false, keys || undefined); S.view.y += dy; S.view.x += dx; applyView(false); },  // dy: room for a panel
   };
