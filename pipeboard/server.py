@@ -184,6 +184,7 @@ class Board:
         return {"active": active, "names": self.store.names(),
                 "launch": self.settings["launch"],
                 "changes": profiles.changes(saved, self.ws) if saved else [],
+                "unsaved": profiles.unsaved(saved, self.ws) if saved else {},
                 "missing": gone, "ghosts": [w for w in self.ws["wires"]
                                             if w["from"][0] in keys or w["to"][0] in keys]}
 

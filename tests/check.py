@@ -181,6 +181,13 @@ def check_profiles():
     assert profiles.changes({"wires": [], "cards": {}, "devices": {"p": first}},
                             {"wires": [], "cards": {}, "devices": {"p": {**plug, "params": [{"i": 0, "value": 0.9}]}}}) \
         == ["Changed the settings of Calf Vinyl"]
+    # The board's dots (owner): a moved card with its saved spot (for its ghost), a renamed one, a
+    # made device and a retuned one; the plugin reporting its controls the first time is none.
+    was = {"wires": [], "cards": {"a": {"x": 1, "y": 2}, "b": {"x": 3, "y": 4}, "c": {}, "p": {}},
+           "devices": {"p": first, "q": plug}}
+    now = {"wires": [], "cards": {"a": {"x": 5, "y": 2}, "b": {"x": 3, "y": 4}, "c": {"nick": "C"}, "p": {}},
+           "devices": {"p": {**plug, "params": [{"i": 0, "value": 0.9}]}, "q": first, "n": plug}}
+    assert profiles.unsaved(was, now) == {"a": {"x": 1, "y": 2}, "c": {}, "p": {}, "n": {}}, profiles.unsaved(was, now)
     for bad in ("", "../etc", "a/b", ".hidden", "x" * 41):
         assert not profiles.valid_name(bad), bad
     assert profiles.valid_name("Studio (night)")

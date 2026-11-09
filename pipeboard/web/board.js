@@ -229,6 +229,7 @@ const PB = (() => {
     drawWires();
     renderProblems();
     renderProfile();
+    drawUnsaved();
     $("empty").hidden = S.model.cards.length > 0;
   }
 
@@ -1044,6 +1045,9 @@ const PB = (() => {
     setPortals(portals, true, false);  // (redraws the wires)
     send({ op: "tidy", cards, set: portals });
     fit(true);
+    S.movesUntil = performance.now() + 2500;  // where the cards came from, for a moment (owner)
+    showMoves();
+    setTimeout(showMoves, 2600);
   }
 
   // ---- wires --------------------------------------------------------------------------------
@@ -2232,6 +2236,7 @@ const PB = (() => {
     btn.classList.toggle("dirty", P.changes.length > 0);
     const card = $("changes"), list = $("change-list");
     card.hidden = !(P.active && P.changes.length);
+    if (card.hidden && S.movesHover) { S.movesHover = false; showMoves(); }  // (saved or reverted under the mouse)
     if (card.hidden) return;
     $("changes-title").textContent = `${P.active} · unsaved changes`;
     list.textContent = "";
@@ -2240,6 +2245,43 @@ const PB = (() => {
       list.append(h("li", { class: sign, text: sign ? line.slice(2) : line }));
     }
     if (P.changes.length > 6) list.append(h("li", { class: "more", text: `and ${P.changes.length - 6} more` }));
+  }
+
+  // Unsaved changes on the board (owner): an orange dot on every card with one, always. Where the
+  // moved ones were saved (a dashed ghost, an arrow to the card now) while the changes card is
+  // hovered and for a moment after a Tidy, everything else dimmed.
+  function drawUnsaved() {
+    const marks = (S.profile?.active && S.profile.unsaved) || {}, layer = $("moves"), svg = s("svg");
+    layer.textContent = "";
+    layer.append(svg);
+    for (const [k, was] of Object.entries(marks)) {
+      const el = S.els[k];
+      if (!el) continue;
+      el.classList.add("unsaved");
+      el.append(h("span", { class: "unsaved-dot", "aria-label": "Unsaved change" }));
+      const now = S.pos[k], sz = S.sizes[k];
+      if (was.x == null || !now || !sz) continue;
+      const w = px(sz.w), ht = px(sz.h), a = { x: px(was.x), y: px(was.y) }, b = { x: px(now.x), y: px(now.y) };
+      layer.append(h("div", { class: `ghost k-${byKey()[k].kind}`, style: `transform: translate(${a.x}px, ${a.y}px); width: ${w}px; height: ${ht}px` },
+                     h("span", { text: el.querySelector(".title")?.textContent || "" })));
+      // The arrow: from the ghost's edge to the card's, along the line between their centres.
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
+      const edge = Math.min(w / 2 / Math.abs(ux || 1e-9), ht / 2 / Math.abs(uy || 1e-9));
+      if (len < 2 * edge + 16) continue;  // the spots touch: the ghost says enough
+      const cx = a.x + w / 2, cy = a.y + ht / 2, p = { x: cx + ux * (edge + 4), y: cy + uy * (edge + 4) };
+      const q = { x: cx + dx - ux * (edge + 6), y: cy + dy - uy * (edge + 6) }, A = 8, W = 4.5;
+      const col = getComputedStyle(el).getPropertyValue("--c");
+      svg.append(s("path", { class: "trail", stroke: col, d: `M${p.x},${p.y} L${q.x},${q.y}` }),
+                 s("path", { class: "trail-head", fill: col, d: `M${q.x},${q.y} L${q.x - ux * A - uy * W},${q.y - uy * A + ux * W} L${q.x - ux * A + uy * W},${q.y - uy * A - ux * W}Z` }));
+    }
+    showMoves();  // (a Tidy's moves arrive with the state after it)
+  }
+  // Only with something to show (owner: a Tidy that moved nothing dimmed every card): a moved
+  // card's ghost after a Tidy, any card with a change under the hovered changes card.
+  function showMoves() {
+    const what = S.movesHover ? cardsEl.querySelector(".unsaved")
+      : performance.now() < (S.movesUntil || 0) && $("moves").querySelector(".ghost");
+    board.classList.toggle("show-moves", !!what);
   }
 
   function profileMenu(x, y) {
@@ -3043,6 +3085,8 @@ const PB = (() => {
       profileMenu(r.left, r.bottom + 6);
     });
     $("save-changes").addEventListener("click", () => send({ op: "profile-save" }));
+    $("changes").addEventListener("mouseenter", () => { S.movesHover = true; showMoves(); });
+    $("changes").addEventListener("mouseleave", () => { S.movesHover = false; showMoves(); });
     $("revert-changes").addEventListener("click", () => send({ op: "profile-revert" }));
     $("tidy").addEventListener("click", tidy);
     $("clock").addEventListener("click", () => { const was = $("engine") && !S.iface; closeEngine(); if (!was) openEngine(); });
@@ -3096,11 +3140,12 @@ const PB = (() => {
     }
     // A tag or badge must stack above the card's outline layer (it once sat under it). Hit-testing
     // cannot tell: the outline ignores the mouse. So compare the stacking order itself.
-    for (const tag of document.querySelectorAll(".card .badge, .card .warn, .card .lat")) {
+    for (const tag of document.querySelectorAll(".card .badge, .card .warn, .card .lat, .card .unsaved-dot")) {
       const card = tag.closest(".card"), z = (s) => parseInt(s.zIndex, 10) || 0;
       if (z(getComputedStyle(tag)) <= z(getComputedStyle(card, "::before")))
         faults.push(`under the card outline: "${tag.textContent}" on ${card.dataset.key}`);
     }
+    if (board.classList.contains("show-moves") && !cardsEl.querySelector(".card.unsaved")) faults.push("every card dimmed: no unsaved change to show");
     if (!$("tip").hidden && (menus.length || document.querySelector(".veil"))) faults.push("a tooltip shows over an open menu");
     const menuBoxes = [...document.querySelectorAll(".menu")].map((m) => m.getBoundingClientRect());
     for (let i = 0; i < menuBoxes.length; i++) {
@@ -3172,6 +3217,29 @@ const PB = (() => {
     openProblems: () => toggleProblems(true),
     // Notifications with made-up events: "mix" (a dropout going on with the GPU named as its cause,
     // a clipping 4 times, an EQ that stopped, a device gone, already seen), or none ("none").
+    // Unsaved changes as the server would send them (the preview has no server): the `moved` cards
+    // saved [dx, dy] cells from where they are, the `changed` ones otherwise changed; `hover`: the
+    // changes card under the mouse.
+    fakeUnsaved: (moved = {}, changed = [], hover = false) => {
+      const unsaved = Object.fromEntries(changed.map((k) => [k, {}]));
+      for (const [k, [dx, dy]] of Object.entries(moved)) unsaved[k] = { x: S.pos[k].x + dx, y: S.pos[k].y + dy };
+      const n = Object.keys(moved).length, title = (k) => byKey()[k].title;
+      S.profile = { ...S.profile, unsaved, changes: [...(n ? [`Moved ${n} card${n > 1 ? "s" : ""}`] : []),
+                                                    ...changed.map((k) => `Changed the settings of ${title(k)}`)] };
+      render();
+      if (hover) $("changes").dispatchEvent(new MouseEvent("mouseenter"));
+    },
+    // The board dragged about by `drags` ([key, dx, dy] px) and saved so, then tidied: Tidy shows
+    // where its cards came from.
+    tidyMoves: (drags) => {
+      for (const [k, dx, dy] of drags) { debug.drag(k, dx, dy); onUp(); }
+      const was = structuredClone(S.pos);
+      tidy();
+      const moved = Object.keys(was).filter((k) => S.els[k] && (was[k].x !== S.pos[k].x || was[k].y !== S.pos[k].y));
+      S.profile = { ...S.profile, unsaved: Object.fromEntries(moved.map((k) => [k, was[k]])),
+                    changes: [`Moved ${moved.length} cards`, "Made 3 portals"] };
+      render();
+    },
     fakeEvents: (kind = "mix", showSeen = false) => {
       const now = Date.now() / 1000, ur = S.model.cards.find((c) => c.kind === "hardware")?.key, ev = (o) => ({ cards: [], data: {}, peak: {}, count: 1, active: false, new: true, seen: null, ...o });
       S.events = kind === "none" ? [] : [

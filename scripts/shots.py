@@ -467,6 +467,12 @@ SHOTS = {
     "missing": ("machine", BIG, missing, "PB.debug.openProblems()"),
     "missing-menu": ("machine", BIG, missing, f"PB.debug.missingMenu('{PEDAL}')"),
     "changes": ("machine", BIG, changed, ""),
+    # Unsaved changes on the board (owner): a dot on each changed card (Studio Interface moved too:
+    # the dot on an amber outline); the changes card hovered shows where the moved ones were saved.
+    "unsaved": ("machine", BIG, equalized, f"PB.debug.fakeUnsaved({{desktop_mix: [-4, -12], '{UR}': [0, 8]}}, ['pb:deq01'])"),
+    "unsaved-hover": ("machine", BIG, equalized, f"PB.debug.fakeUnsaved({{desktop_mix: [-4, -12], '{UR}': [0, 8]}}, ['pb:deq01'], true)"),
+    "unsaved-tidy": ("machine", BIG, chained, "PB.debug.tidyMoves([['pb:dlim01', 60, 140], ['pb:dcomp01', -380, 330], "
+                     "['pb:dgate01', -150, 200], ['pb:dds01', 260, -120], ['desktop_mix', 420, -380], ['music_player', 120, 470]])"),
     "profile-menu": ("machine", BIG, changed, "PB.debug.profileMenu(['Load at launch'])"),
     "load-preview": ("machine", BIG, None, f"PB.debug.showPlan({PLAN})"),
     "save-as": ("machine", BIG, None, "PB.debug.saveAs()"),

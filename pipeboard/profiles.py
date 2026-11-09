@@ -192,12 +192,33 @@ def changes(saved: dict, now: dict) -> list[str]:
               if k not in before]
     lines += [f"Deleted {WHAT.get(before[k]['type'], 'the')} {before[k]['name']}" for k in before
               if k not in after]
-    # (a plugin's controls count once the profile has them: the first time it loads, it reports
-    # them itself, and that read as the user's edit, owner's "Changed the settings of Calf Vinyl")
     lines += [f"Changed the settings of {after[k]['name']}" for k in after
-              if k in before and _settings(before[k]) != _settings(
-                  after[k] if before[k].get("params") else {**after[k], "params": []})]
+              if k in before and _settings_changed(before[k], after[k])]
     return lines
+
+
+def unsaved(saved: dict, now: dict) -> dict:
+    """The cards with an unsaved change, for the board's dots (owner): moved, renamed, made, or
+    their settings changed; a moved one with the spot it was saved at, for its ghost."""
+    out = {}
+    for k, b in now["cards"].items():
+        a = saved.get("cards", {}).get(k, {})
+        if _moved(a, b):
+            out[k] = {"x": a["x"], "y": a["y"]}
+        elif a.get("nick") != b.get("nick"):
+            out[k] = {}
+    before = saved.get("devices", {})
+    for k, dev in now.get("devices", {}).items():
+        if k not in before or _settings_changed(before[k], dev):
+            out.setdefault(k, {})
+    return out
+
+
+def _settings_changed(was: dict, dev: dict) -> bool:
+    """A device's settings changed since the save (a plugin's controls count once the profile has
+    them: the first time it loads, it reports them itself, and that read as the user's edit,
+    owner's "Changed the settings of Calf Vinyl")."""
+    return _settings(was) != _settings(dev if was.get("params") else {**dev, "params": []})
 
 
 WHAT = {"mic": "the virtual microphone", "speaker": "the virtual speaker", "gain": "the gain",

@@ -70,12 +70,29 @@ button { font: inherit; color: inherit; }
 .card::before { content: ""; position: absolute; inset: calc(var(--bw) / -2); border: var(--bw) solid var(--c);
   border-radius: calc(10px + var(--bw) / 2); pointer-events: none; z-index: 1; }
 /* What sits on or beyond the card's edge (problem tag, missing badge, rename hint) goes above it. */
-.card .badge, .card .warn, .card .rename-hint, .card .lat { z-index: 3; }
+.card .badge, .card .warn, .card .rename-hint, .card .lat, .card .unsaved-dot { z-index: 3; }
 .card.dragging { box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55); z-index: 5; opacity: 0.92; }
 /* The card whose panel (EQ, limiter, compressor) is open: a ring and a glow in its colour. */
 .card.editing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent),
   0 0 26px color-mix(in srgb, var(--c) 45%, transparent), 0 6px 18px rgba(0, 0, 0, 0.45); }
 .card.editing { --bw: 2px; }
+/* An unsaved change on a card (owner): an orange dot on its corner, ringed in the board's colour
+   so it stays apart from an amber outline. */
+.card .unsaved-dot { position: absolute; right: -5px; top: -5px; width: 11px; height: 11px; border-radius: 50%;
+  background: #ff9a3c; box-shadow: 0 0 0 2.5px var(--board), 0 0 10px rgba(255, 154, 60, 0.6); pointer-events: none; }
+/* Where the moved cards were saved: shown while the changes card is hovered and just after a Tidy
+   (#board.show-moves), the cards without unsaved changes and the wires dimmed. */
+#moves { position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+#moves svg { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+#moves .trail { fill: none; stroke-width: 1.5; stroke-dasharray: 4 5; opacity: 0.6; }
+#moves .trail-head { opacity: 0.75; }
+.ghost { position: absolute; left: 0; top: 0; border-radius: 10px;
+  border: 1.5px dashed color-mix(in srgb, var(--c) 60%, transparent); background: color-mix(in srgb, var(--c) 6%, transparent); }
+.ghost span { position: absolute; left: 11px; right: 11px; top: 6px; font-size: 11px; color: var(--faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#board .card, #wires { transition: opacity 0.3s; }
+#board.show-moves #moves { opacity: 1; }
+#board.show-moves .card:not(.unsaved), #board.show-moves #wires { opacity: 0.35; }
 /* Where a dragged card will drop: its outline on the grid. */
 .landing { position: absolute; left: 0; top: 0; border-radius: 10px; pointer-events: none;
   border: 1.5px dashed var(--c); background: color-mix(in srgb, var(--c) 7%, transparent); }
@@ -85,6 +102,8 @@ button { font: inherit; color: inherit; }
 .landing.k-effect { --c: var(--effect); }
 .landing.k-plugin { --c: var(--plugin); }
 .landing.k-diag { --c: var(--diag); }
+.ghost.k-hardware { --c: var(--hardware); } .ghost.k-virtual { --c: var(--virtual); } .ghost.k-app { --c: var(--app); }
+.ghost.k-effect { --c: var(--effect); } .ghost.k-plugin { --c: var(--plugin); } .ghost.k-diag { --c: var(--diag); }
 .card.k-hardware { --c: var(--hardware); }
 .card.k-virtual { --c: var(--virtual); }
 .card.k-app { --c: var(--app); }

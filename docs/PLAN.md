@@ -786,6 +786,11 @@ that are gone now. Everything else is a comparison:
   changes ("+ Music Player → Music Mix", "− Music Player → Desktop Mix", "Renamed Mic Mix to Stream Mic",
   "Moved 2 cards") with **Revert** and **Save**. Ctrl+S saves. Moving cards counts as a change
   (user).
+- **Unsaved changes on the board** (owner, 2026-11-09): an orange dot on the corner of every card
+  with one (moved, renamed, made, or its settings changed: `profiles.unsaved`), always. While the
+  changes card is hovered, and for 2.5 s after a Tidy, each moved card's saved spot shows as a
+  dashed ghost with an arrow to where it is now, and everything without a change dims. Wires
+  added or removed get no dot.
 - **The profile button** (bar): the profiles, the active one ticked and the launch one marked;
   Save; Save as new profile… (name checked as you type; replacing one asks first); Load at launch ›
   (Nothing, or a profile); Delete profile › (asks; says nothing on the system changes).
