@@ -1427,13 +1427,16 @@ const PB = (() => {
   }
 
   // Hovering a card or wire quietens every other wire; a selected wire stays lit the whole time.
+  // A hovered group (its title or empty space) is every card in it hovered (owner: its portals'
+  // wires shown, as from a card).
   function hover(id, cardKey) {
     S.hovered = [id, cardKey];
-    const sel = S.wireEls[S.selected] ? S.selected : null;
-    board.classList.toggle("focus", !!(id || cardKey || sel));
+    const sel = S.wireEls[S.selected] ? S.selected : null, group = S.hoverGroup || S.titleGroup;
+    const cards = new Set(group ? members()[group] : []).add(cardKey);
+    board.classList.toggle("focus", !!(id || cardKey || sel || group));
     const lit = new Set();
     for (const { g, w, ends } of Object.values(S.wireEls)) {
-      const hot = w.id === id || plugOf(w) === id || w.id === sel || w.from[0] === cardKey || w.to[0] === cardKey;
+      const hot = w.id === id || plugOf(w) === id || w.id === sel || cards.has(w.from[0]) || cards.has(w.to[0]);
       g.classList.toggle("hot", hot);
       ends?.[1].classList.toggle("hot", hot);
       if (hot && ends) lit.add(ends[0]);
@@ -2559,7 +2562,7 @@ const PB = (() => {
         el = els[g] = { frame: h("div"), top: h("div"), name: h("span"), count: h("i") };
         const title = h("b", { class: "frame-title", "data-group": g }, el.name, el.count);
         // Its title moves the group (owner: show it): hovered, the title and the whole frame light up.
-        const lift = (on) => { el.hover = on; drawFrames(); };
+        const lift = (on) => { el.hover = on; S.titleGroup = on ? g : null; drawFrames(); hover(...S.hovered); };
         title.addEventListener("mouseenter", () => lift(true));
         title.addEventListener("mouseleave", () => lift(false));
         el.top.append(title);
@@ -2695,6 +2698,7 @@ const PB = (() => {
     if (g === (S.hoverGroup || null)) return;
     S.hoverGroup = g;
     drawFrames();
+    hover(...S.hovered);
   }
   function moveGroupFrom(g, e) {
     const keys = members()[g] || [];
@@ -3476,11 +3480,13 @@ const PB = (() => {
 
   function tip(e) {
     const el = e.target.closest?.("[data-tip]"), box = $("tip");
+    // Anywhere in a card is the card hovered, its portals' wires shown (owner: easier to follow),
+    // a spot with no tooltip too.
+    const card = !S.drag && !menus.length && e.target.closest?.(".card");
     clearTimeout(tipTimer);
-    if (!el) { box.hidden = true; hover(null); return; }
+    if (!el) { box.hidden = true; hover(null, card ? card.dataset.key : null); return; }
     if (menus.length || document.querySelector(".veil")) { box.hidden = true; return; }  // a menu or dialog is up
-    const card = e.target.closest(".card");
-    if (card && !S.drag) hover(null, card.dataset.key);
+    if (card) hover(null, card.dataset.key);
     tipTimer = setTimeout(() => {
       fillTip(box, el.dataset.tip);
       box.hidden = false;
@@ -3528,7 +3534,7 @@ const PB = (() => {
     addEventListener("mousemove", onMove);
     addEventListener("mouseup", onUp);
     board.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });  // (no middle-click paste)
-    board.addEventListener("mouseleave", () => { if (S.hoverGroup) { S.hoverGroup = null; drawFrames(); } });
+    board.addEventListener("mouseleave", () => { if (S.hoverGroup) { S.hoverGroup = null; drawFrames(); hover(...S.hovered); } });
     board.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, S.view.z * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
     board.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -3914,7 +3920,18 @@ const PB = (() => {
     // or dragged from (the group must move, every card the same whole cells).
     space: (g, act = "hover") => {
       const f = S.frames[g], p = toScreen({ x: px(f.x + 0.6), y: px(f.y + 0.6) }), at = { clientX: p.x, clientY: p.y, target: board, button: 0 };
-      if (act === "hover") { onMove(at); if (!document.querySelector(".frame.lifted")) S.errors.push("a group's empty space hovered did not light it"); }
+      if (act === "hover") {
+        onMove(at);
+        if (!document.querySelector(".frame.lifted")) S.errors.push("a group's empty space hovered did not light it");
+        // its cards' wires lit, their portals' shown whole (owner: as hovering a card)
+        const keys = new Set(members()[g]), mine = Object.values(S.wireEls).filter((we) => keys.has(we.w.from[0]) || keys.has(we.w.to[0]));
+        if (!mine.length || mine.some((we) => !we.g.classList.contains("hot"))) S.errors.push(`${groupName(g)} hovered: its cards' wires did not all show`);
+      }
+      if (act === "title") {
+        document.querySelector(`.frame-title[data-group="${g}"]`).dispatchEvent(new MouseEvent("mouseenter"));
+        const keys = new Set(members()[g]);
+        if (Object.values(S.wireEls).some((we) => (keys.has(we.w.from[0]) || keys.has(we.w.to[0])) && !we.g.classList.contains("hot"))) S.errors.push(`${groupName(g)}'s title hovered: its cards' wires did not all show`);
+      }
       if (act === "gap") {  // every pixel between its title and its rectangle lights it (owner: no gap)
         const t = document.querySelector(`.frame-title[data-group="${g}"]`).getBoundingClientRect(), top = toScreen({ x: 0, y: px(f.y) }).y;
         for (let y = Math.floor(t.bottom); y <= Math.ceil(top) + 1; y++) {
@@ -4234,6 +4251,18 @@ const PB = (() => {
       end?.dispatchEvent(new MouseEvent("mouseenter"));
       const mine = Object.values(S.wireEls).filter((we) => we.ends?.[0] === end);
       if (!mine.length || mine.some((we) => !we.g.classList.contains("hot"))) S.errors.push("portal hover: its wires did not show");
+    },
+    // The pointer anywhere in a card with a portal (a button, a spot with no tooltip): its
+    // portals' wires show whole (owner), as from its title.
+    cardPortals: (key) => {
+      const card = document.querySelector(`.card[data-key="${key}"]`);
+      const mine = Object.values(S.wireEls).filter((we) => we.ends && (we.w.from[0] === key || we.w.to[0] === key));
+      const spots = [card?.querySelector("header"), card?.querySelector(":scope > :not(header) [data-tip]"), card?.querySelector(".body")];
+      if (!mine.length || spots.some((el) => !el)) { S.errors.push(`card portals: ${key} has no portal or no body to hover`); return; }
+      for (const el of spots) {
+        tip({ target: el, clientX: 0, clientY: 0 });
+        if (mine.some((we) => !we.g.classList.contains("hot"))) S.errors.push(`card hovered at ${el.className || el.tagName}: its portals' wires did not show`);
+      }
     },
     // A card appearing where another card has been moved to (owner: new app cards landed on top
     // of existing ones): its spot in a fresh layout is taken first, then it "appears".

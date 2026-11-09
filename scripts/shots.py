@@ -553,6 +553,9 @@ SHOTS = {
                     "document.querySelector('#selbar button').click()"),
     "groups-menu": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.cardMenu('instrument_mix', ['Add to group'])"),
     "groups-space-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox')"),
+    # A hovered group is its cards hovered: the Limiter's portals shown as wires (owner).
+    "groups-space-portals": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gspk')"),
+    "groups-title-portals": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gspk', 'title')"),
     "groups-space-gap": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gspk', 'gap')"),
     "groups-space-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('gvox', 'menu')"),
     "groups-monitoring-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.space('monitoring', 'menu') || "
@@ -564,6 +567,8 @@ SHOTS = {
     "groups-name-move": ("machine", BIG, studio_loose, "PB.debug.tidy() || PB.debug.nameAndMove(['instrument_mix', 'pb:ggain', 'pb:geq'], 'Guitar')"),
     # One portal per output plug (owner): the limiter's one exit badge to both scopes, lit; its menu.
     "groups-plug-hover": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.portalHover('pb:slim')"),
+    # Anywhere in a card shows its portals' wires (owner: easier to follow than the title only).
+    "card-portals": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.cardPortals('pb:slim')"),
     "groups-plug-menu": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.portalHover('pb:slim', true)"),
     "groups-monitoring": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.monitorOnly('input1_mix', 'pb:spec')"),
     "groups-move": ("machine", BIG, studio, "PB.debug.tidy() || PB.debug.moveGroup('ggtr', 0, -60)"),
