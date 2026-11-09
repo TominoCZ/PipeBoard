@@ -1127,13 +1127,17 @@ class Board:
         errors += [e for r in plan["remove"] if (e := await self.source.unlink(r["link"]))]
         return f"PipeWire refused a change: {errors[0]}" if errors else None
 
-    async def load(self, name: str) -> str | None:
+    async def load(self, name: str, keep_view: bool = False) -> str | None:
+        """keep_view: the camera stays where it is (owner: at launch it went back to where it was
+        when the profile was last saved; a Revert too). Picking another profile shows its own."""
         saved = self.store.read(name)
         if saved is None:
             return f"There is no profile called {name}."
         counted = {k: d["counts"] for k, d in self.ws.get("devices", {}).items()
                    if "counts" in d}
-        self.ws = {**saved, "cards": saved.get("cards", {}), "wires": saved.get("wires", [])}
+        view = self.ws.get("view") if keep_view else None
+        self.ws = {**saved, "cards": saved.get("cards", {}), "wires": saved.get("wires", []),
+                   "view": view or saved.get("view")}
         for key, counts in counted.items():  # (a Counter's totals run on, not the profile's)
             self.ws.get("devices", {}).get(key, {})["counts"] = counts
         self._set(active=name)
@@ -1213,7 +1217,7 @@ class Board:
                 errors.append(e)
         if errors:
             return f"Could not undo everything: {errors[0]}"
-        return await self.load(active)
+        return await self.load(active, keep_view=True)
 
     async def op_delete(self, _page, op) -> str | None:
         name = str(op.get("name", ""))
@@ -2182,7 +2186,7 @@ async def startup(board: Board) -> None:
     await board.apply_names()
     if board.settings["launch"]:
         log.info("loading %s: %s", board.settings["launch"],
-                 await board.load(board.settings["launch"]) or "ok")
+                 await board.load(board.settings["launch"], keep_view=True) or "ok")
         await board.refresh()
     board.watch_trial()  # (a trial whose minute ran out while PipeBoard was down: back at once)
 

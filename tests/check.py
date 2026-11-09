@@ -1913,6 +1913,13 @@ async def check_own_devices():
         await board.op_revert(None, {})
         assert any(o["info"]["props"].get("pipeboard.id") == "dlater" for o in fixture.dump
                    if o["type"].endswith("Node")), "Revert left it on the system"
+        # The camera is not the profile's (owner: a restart put it back where it was at the
+        # last save): a Revert and the launch keep it; picking a profile shows that one's.
+        board.ws["view"] = {"x": 1.0, "y": 2.0, "z": 0.5}
+        await board.op_revert(None, {})
+        assert board.ws["view"] == {"x": 1.0, "y": 2.0, "z": 0.5}, board.ws["view"]
+        await board.load("Before")
+        assert board.ws["view"] == board.store.read("Before")["view"], board.ws["view"]
 
 
 def profiles_missing(board):

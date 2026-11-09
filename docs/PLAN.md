@@ -786,6 +786,9 @@ that are gone now. Everything else is a comparison:
   changes ("+ Music Player → Music Mix", "− Music Player → Desktop Mix", "Renamed Mic Mix to Stream Mic",
   "Moved 2 cards") with **Revert** and **Save**. Ctrl+S saves. Moving cards counts as a change
   (user).
+- **The camera** (pan and zoom) is the board's, not the profile's: loading the launch profile and
+  a Revert keep it where it was (owner, 2026-11-09: a restart put it back where it was at the last
+  save). Picking another profile shows that profile's saved view.
 - **Unsaved changes on the board** (owner, 2026-11-09): an orange dot on the corner of every card
   with one (moved, renamed, made, or its settings changed: `profiles.unsaved`), always. While the
   changes card is hovered, and for 2.5 s after a Tidy, each moved card's saved spot shows as a
