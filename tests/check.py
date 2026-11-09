@@ -1694,6 +1694,13 @@ def check_portals():
     assert ws["cards"]["d"] == {"x": 70, "y": 84} and set(ws["portals"]) == {"e:out>f:in"}  # one message
     workspace.apply(ws, {"op": "tidy-portals", "on": True})
     assert profiles.snapshot(model, ws)["tidy_portals"] is True
+    # A portal made or undone is a change to save (owner: the launch profile replaced the board
+    # at the next start, and portals never offered a Save, so they came back as wires).
+    saved = profiles.snapshot(model, {**ws, "portals": {}})
+    made = profiles.snapshot(model, {**ws, "portals": {"d:out>e:in": "hand"}})
+    assert profiles.changes(saved, made) == ["Made 1 portal"], profiles.changes(saved, made)
+    assert profiles.changes(made, saved) == ["Turned 1 portal back into a wire"], profiles.changes(made, saved)
+    assert profiles.changes(made, made) == []
 
 
 def check_aligned():

@@ -181,6 +181,12 @@ def changes(saved: dict, now: dict) -> list[str]:
         moved += _moved(a, b)
     if moved:
         lines.append(f"Moved {moved} card{'s' if moved > 1 else ''}")
+    # Portals too (owner: never offered for saving, the launch profile turned them back into wires)
+    was, now_p = set(saved.get("portals", {})), set(now.get("portals", {}))
+    if n := len(now_p - was):
+        lines.append(f"Made {n} portal{'s' if n > 1 else ''}")
+    if n := len(was - now_p):
+        lines.append(f"Turned {n} portal{'s' if n > 1 else ''} back into {'wires' if n > 1 else 'a wire'}")
     before, after = saved.get("devices", {}), now.get("devices", {})
     lines += [f"Made {WHAT.get(after[k]['type'], 'the')} {after[k]['name']}" for k in after
               if k not in before]
