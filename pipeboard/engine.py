@@ -140,6 +140,7 @@ def read(dump: list[dict], choice: str | None = None) -> dict:
             "card": next((p["alsa.card"] for p in found if p.get("alsa.card") is not None), None),
             "title": iface["title"] if iface else None,
             "dev_rate": iface["rate"] if iface else None,  # (None while it is closed)
+            "clocks": bool(iface and iface["clocks"]),  # (its rate is then the graph's)
             "rates": rates(found, dump, ids),
             "fixed_rate": (rule or {}).get("rate"),
             "period": scale(max((int(p.get("api.alsa.period-size") or 0) for p in found),
@@ -312,13 +313,17 @@ def check(op: dict, allowed=BLOCKS, offered: list[int] | None = None) -> dict:
 def _rule(nodes: list[str], block: int, r: dict, scale: tuple[int, int]) -> str:
     """One interface's rule: its ALSA period is the block at its own rate (PipeWire scales the
     block by the card's rate over the default one: `scale`), its margin whole periods, and the
-    rate it is fixed at with the graph made to follow it (node.force-rate), if one was chosen."""
+    rate it is fixed at, if one was chosen. Only the card that clocks the graph (`r["clocks"]`)
+    makes the graph follow it (node.force-rate): any forced node pulls its whole driver group
+    to its rate (context.c), so another card's would have moved everyone's; that one runs at its
+    own rate, converted at its edge."""
     at, base = scale
     period = block * at // base if at and base else block
     matches = " ".join(f"{{ node.name = {json.dumps(n)} }}" for n in nodes)
     # On interrupts the buffer holds twice the block and margin (half of it is all PipeWire fills).
     buffer = "" if r.get("tsched") else f"api.alsa.period-num = {2 * (r['blocks'] + 1)} "
-    rate = f"audio.rate = {r['rate']} node.force-rate = {r['rate']} " if r.get("rate") else ""
+    force = f"node.force-rate = {r['rate']} " if r.get("clocks") else ""
+    rate = f"audio.rate = {r['rate']} {force}" if r.get("rate") else ""
     return (f"  {{\n    matches = [ {matches} ]\n"
             f"    actions = {{ update-props = {{ api.alsa.period-size = {period} "
             f"api.alsa.headroom = {period * r['blocks']} {buffer}{rate}"
@@ -337,7 +342,8 @@ def texts(v: dict, interface: list[str], others: list[dict] = (), base: int = 0,
           # its own section, not a context property: inside context.properties PipeWire ignored it
           # (module-rt's manual, CONFIG OVERRIDE), and 95 ran only until the next restart (owner)
           f"module.rt.args = {{ rt.prio = {v['prio']} nice.level = {v['nice']} }}\n")
-    mine = {"blocks": v["margin"] // v["block"], "tsched": v.get("tsched"), "rate": v.get("rate")}
+    mine = {"blocks": v["margin"] // v["block"], "tsched": v.get("tsched"), "rate": v.get("rate"),
+            "clocks": v.get("clocks", True)}
     rules = [_rule(interface, v["block"], mine, (v.get("rate") or at, base))] if interface else []
     rules += [_rule(r["nodes"], v["block"], r, (r.get("rate") or r.get("at") or 0, base))
               for r in others if r["nodes"] and not set(r["nodes"]) & set(interface)]

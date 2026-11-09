@@ -1828,17 +1828,20 @@ class Board:
         # The other interfaces keep their own rules; one on interrupts reopens for a new block.
         others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]
         for v in (values, was):
-            v.update(device=e.get("device"), irq_elsewhere=any(not r["tsched"] for r in others))
+            v.update(device=e.get("device"), irq_elsewhere=any(not r["tsched"] for r in others),
+                     clocks=e.get("clocks", True))
         return values, was, others
 
     async def write_engine(self, values: dict, others: list[dict]) -> None:
         """Both files for these values; the other interfaces' rules kept, each one's period at
         its own rate when it runs now."""
         e = self.engine
-        running = {n: c["rate"] for c in engine.interfaces(await self.source.snapshot())
-                   for n in c["nodes"]}
+        cards = engine.interfaces(await self.source.snapshot())
+        running = {n: c["rate"] for c in cards for n in c["nodes"]}
+        clocking = {n for c in cards if c["clocks"] for n in c["nodes"]}
         for r in others:
             r["at"] = next((running[n] for n in r["nodes"] if running.get(n)), 0)
+            r["clocks"] = bool(clocking & set(r["nodes"]))
         engine.write(engine.texts(values, e["interface"], others, e["rate"],
                                   e.get("dev_rate") or 0))
 

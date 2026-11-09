@@ -983,9 +983,12 @@ delay. A **sample rate** row shows only for an interface that lists its rates (b
 - **Sample rate** (offered only when the card lists its rates, owner: "ONLY if we have supported
   rates provided"): a USB card's `stream0` "Rates:" (both directions), an HDA codec's default
   PCM, else PipeWire's EnumFormat when it is a list, not a range. /proc first: once a rate is
-  fixed, PipeWire lists only that one. Auto, or a rate: the rule sets `audio.rate` and
-  `node.force-rate` (its part of the graph follows, past `allowed-rates`). A new rate reopens the
-  card, like a new margin.
+  fixed, PipeWire lists only that one. Auto, or a rate: the rule sets `audio.rate`, and on the
+  card that clocks the graph also `node.force-rate` (the graph follows, past `allowed-rates`; its
+  rate is then everyone's, plugins too, and the hint says so). Not on another card: any forced
+  node pulls its whole driver group to its rate (context.c), so it runs at its own rate,
+  converted at its edge. Who clocks is read at the Try; roles that swap later keep the rule
+  until the next one. A new rate reopens the card, like a new margin.
 
 - **Where it is kept** (`engine.py`): two files of PipeBoard's own, sorted after the user's
   so they win, never the user's own files: `~/.config/pipewire/pipewire.conf.d/99-pipeboard-engine.conf`

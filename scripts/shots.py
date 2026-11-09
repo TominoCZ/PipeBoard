@@ -342,6 +342,9 @@ SHOTS = {
                         "verdict: null, full: true, after: {s: 1260, drops: 0}}}) || PB.debug.engineOpen({}, true)"),
     "engine-away": ("machine", BIG, None, "PB.debug.engineAway()"),
     "engine-one-popover": ("machine", BIG, None, "PB.debug.onePopover()"),
+    # A card that does not clock the graph: its rate its own, converted (no force-rate on it).
+    "engine-iface-follower": ("pedal", BIG, None, "PB.debug.fakeHeadroom('ok', {rates: [44100, 48000, 96000, 192000], fixed_rate: 48000, clocks: false}) "
+                              "|| PB.debug.ifaceOpen() || PB.debug.fakeHeadroom('ok')"),
     "engine-iface-away": ("machine", BIG, None, "PB.debug.ifaceAway()"),
     "engine-iface-redraw": ("machine", BIG, None, "PB.debug.ifaceRedraw()"),
     "engine-margin": ("machine", BIG, None, "PB.debug.ifaceOpen(null, {blocks: 2})"),

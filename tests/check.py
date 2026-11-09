@@ -2372,6 +2372,11 @@ def check_engine_devices():
             "audio.rate = 48000 node.force-rate = 48000 api.alsa.disable-tsched = true") in wp, wp
     assert "api.alsa.period-size = 1024 api.alsa.headroom = 1024 api.alsa.disable-tsched = false" in wp, \
         "the other interface kept, its period the new block"
+    # Only the card clocking the graph forces its rate on the graph (any forced node pulls its whole
+    # group, context.c); another card runs at its own rate, converted (owner: "the rate IS global").
+    lone = engine.texts({**v, "clocks": False}, ["a"], [{**others[0], "rate": 44100, "clocks": True}], 192000, 48000)["wireplumber"]
+    assert "audio.rate = 48000 api.alsa.disable-tsched" in lone and "force-rate = 48000" not in lone, lone
+    assert "audio.rate = 44100 node.force-rate = 44100" in lone, "the clocking card's own rule forces it"
     assert [(r["nodes"], r["blocks"], r["tsched"], r["rate"]) for r in engine.own_rules(wp)] == [
         (chosen["interface"], 2, False, 48000), (["alsa_output.other"], 1, True, None)]
     assert "period-size = 1024" in engine.texts({**v, "rate": None}, ["a"], (), 192000, 0)["wireplumber"], \

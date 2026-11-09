@@ -2793,7 +2793,10 @@ const PB = (() => {
       // (no value beside it: the picked button says it, the head the rate it runs at; a UR44C's six
       // rates and Auto left no room, the value cut off at the panel's edge)
       e.rates?.length ? row("Sample rate", rateSeg(p, e), "") : null,
-      e.rates?.length ? h("p", { class: "hint", text: "Samples per second, from those this card supports. Changing it restarts the card." }) : null,
+      // (the card clocking the graph sets everyone's rate, plugins too; owner: "so the sample rate IS global")
+      e.rates?.length ? h("p", { class: "hint", text: e.clocks
+        ? "Samples per second, from those this card supports. This card clocks the graph: everything runs at this rate. Changing it restarts the card."
+        : "Samples per second, from those this card supports, converted to the graph's rate. Changing it restarts the card." }) : null,
       row("Scheduling", scheduling(p, e), ""),  // (the picked button says it)
       h("p", { class: "hint", text: "Interrupts: the card says when it needs sound. Timer: the computer keeps time itself, and block size changes don't restart the card." })),
       Object.keys(e.pcms || {}).length ? headroomBlock() : null),
