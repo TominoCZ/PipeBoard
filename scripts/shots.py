@@ -417,6 +417,7 @@ SHOTS = {
     "compressor-add": ("machine", BIG, equalized, "PB.debug.menu(700, 300, ['Add node', 'Effects'])"),
     "wire-moving-left": ("machine", BIG, left_only, f"PB.debug.moveWire('{UR}', 'in3', '{UR}', 'in4')"),
     "wire-selected": ("machine", BIG, None, "PB.debug.select('music_player:out>desktop_mix:in')"),
+    "wire-clicked": ("machine", BIG, None, "PB.debug.select('music_player:out>desktop_mix:in', {clientX: 255, clientY: 505})"),
     "wire-moving": ("machine", BIG, None, "PB.debug.moveWire('mic_mix', 'in', 'music_mix', 'in')"),
     "tip-then-menu": ("machine", BIG, None, "PB.debug.tipThenMenu('desktop_mix')"),
     "take-over": ("machine", BIG, None, "PB.debug.askTakeOver('virtual-devices.service', "

@@ -168,6 +168,7 @@ const PB = (() => {
     const dynKey = Object.keys(S.ws.devices || {}).find((k) => DYN.isOpen(k));
     if (dynKey) DYN.sync(dynKey, S.ws.devices[dynKey]);
     else if (S.dynOpen && !S.ws.devices?.[S.dynOpen]) DYN.close();
+    openNew();
   }
 
   // Devices a profile names that are not on the system: drawn from their saved shape, dimmed,
@@ -734,8 +735,26 @@ const PB = (() => {
   function makeDevice(fields, ctx = {}) {
     const at = S.menuAt || toWorld(innerWidth / 2, innerHeight / 2);
     const where = { x: cell(at.x), y: cell(at.y) };  // (cells)
+    // An effect with settings: they open once its card is on the board (owner). The server does
+    // not answer with the new key, so it is the first device of that type not here now; a stale
+    // wish (it was not made) lapses.
+    if (fields.type === "eq" || fields.type === "plugin" || DYN.KINDS[fields.type])
+      S.opening = { type: fields.type, known: new Set(Object.keys(S.ws.devices || {})), until: performance.now() + 20000 };
     if (ctx.insert) send({ op: "insert-device", wire: ctx.insert, ...fields, ...where });
     else send({ op: "create-device", ...fields, ...where, connect: ctx.connect });
+  }
+
+  function openNew() {
+    const p = S.opening;
+    if (!p) return;
+    if (performance.now() > p.until) { S.opening = null; return; }
+    const key = Object.keys(S.ws.devices || {}).find((k) => !p.known.has(k) && S.ws.devices[k].type === p.type);
+    const dev = S.ws.devices?.[key];
+    if (!dev || !S.els[key] || (p.type === "plugin" && !dev.params)) return;  // (a plugin: once started, so its window is known)
+    S.opening = null;
+    if (p.type === "eq") openEq(key);
+    else if (p.type !== "plugin") openDyn(key);
+    else if (dev.editor) send({ op: "plugin-editor", key, on: true });
   }
 
   function addGain(ctx) { makeDevice({ type: "gain", name: "Gain", channels: 2 }, ctx); }
@@ -1064,7 +1083,7 @@ const PB = (() => {
     end.append(s("circle", { class: "portal-disc", r: R }), s("circle", { class: "portal-ring", r: 8 }),
                s("circle", { class: "portal-ring deep", r: 5.5 }), s("path", { class: "portal-arrow", d: arrow }),
                Object.assign(s("text", { class: "portal-letter", "text-anchor": "middle", dy: "3.2" }), { textContent: letter }));
-    end.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id); });
+    end.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id, e); });
     end.addEventListener("mouseenter", () => hover(w.id));
     end.addEventListener("mouseleave", () => hover(null));
     end.dataset.tip = wireTip(w, by);
@@ -1105,7 +1124,7 @@ const PB = (() => {
         g.append(parts.stubs);
         $("portal-layer").append(...parts.ends);  // above every wire: none can cover a badge (owner)
       }
-      parts.hit.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id); });
+      parts.hit.addEventListener("mousedown", (e) => { e.stopPropagation(); select(w.id, e); });
       parts.hit.addEventListener("mouseenter", () => hover(w.id));
       parts.hit.addEventListener("mouseleave", () => hover(null));
       parts.hit.dataset.tip = wireTip(w, by);
@@ -1200,8 +1219,22 @@ const PB = (() => {
     }
   }
 
-  function select(id) {
+  const wireCurve = (we) => { const a = we && anchor(...we.w.from), b = we && anchor(...we.w.to); return a && b ? curve(a, b) : null; };
+
+  // e: the click that picked it; its toolbar then sits where that was along the wire (owner: not
+  // always at its middle), and stays on that spot of the wire as cards move or the view pans.
+  function select(id, e) {
     S.selected = id;
+    S.selT = 0.5;
+    const c = e && wireCurve(S.wireEls[id]);
+    if (c) {
+      const p = toWorld(e.clientX, e.clientY);
+      let best = Infinity;
+      for (let i = 0; i <= 200; i++) {
+        const q = at(c, i / 200), d = (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+        if (d < best) { best = d; S.selT = i / 200; }
+      }
+    }
     for (const { line, w } of Object.values(S.wireEls)) line.classList.toggle("selected", w.id === id);
     placeChip();
     hover(null);
@@ -1212,10 +1245,11 @@ const PB = (() => {
     const chip = $("unlink"), we = S.wireEls[S.selected];
     $("chip-insert").hidden = !!we?.w.ghost;
     if (!we) { chip.hidden = true; return; }
-    const a = anchor(...we.w.from), b = anchor(...we.w.to);
-    if (!a || !b) { chip.hidden = true; return; }
-    const m = toScreen(at(curve(a, b), 0.5));
+    const c = wireCurve(we);
+    if (!c) { chip.hidden = true; return; }
+    const m = toScreen(at(c, S.selT ?? 0.5));
     chip.hidden = false;
+    chip.classList.toggle("below", m.y < 110);  // (above the wire, unless the top bar is there)
     chip.style.left = `${m.x}px`; chip.style.top = `${m.y}px`;
   }
 

@@ -330,14 +330,25 @@ button { font: inherit; color: inherit; }
   padding: 2px 9px; font-size: 11px; cursor: pointer; }
 .panel button:hover { background: #444; }
 
-.chip { position: fixed; transform: translate(-50%, -50%); display: flex; padding: 2px; gap: 2px;
-  background: #1b1b1b; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 13px; z-index: 6;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5); }
+/* A selected wire's toolbar: styled as the menus, floating just above where the wire was clicked,
+   its point on that spot (below it when the top bar would be in the way). */
+.chip { position: fixed; transform: translate(-50%, calc(-100% - 11px)); display: flex; align-items: center;
+  padding: 3px; gap: 1px; background: #2a2a2a; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 9px;
+  z-index: 6; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); }
+.chip::after { content: ""; position: absolute; left: 50%; bottom: -5px; width: 8px; height: 8px; margin-left: -5px;
+  background: #2a2a2a; border: solid rgba(255, 255, 255, 0.1); border-width: 0 1px 1px 0; transform: rotate(45deg); }
+.chip.below { transform: translate(-50%, 11px); }
+.chip.below::after { top: -5px; bottom: auto; border-width: 1px 0 0 1px; }
 .chip[hidden] { display: none; }
-.chip button { padding: 2px 9px; font-size: 11px; color: var(--text); background: none; border: 0;
-  border-radius: 10px; cursor: pointer; }
-.chip button:hover, .chip button:focus-visible { outline: none; background: #333; }
-.chip #chip-disconnect:hover, .chip #chip-disconnect:focus-visible { background: #5a2a2a; }
+.chip button { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; font-size: 12px;
+  color: var(--text); background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.chip button svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.chip button + button::before { content: ""; position: relative; left: -9px; width: 1px; height: 14px;
+  margin-right: -7px; background: rgba(255, 255, 255, 0.1); }
+.chip button:hover, .chip button:focus-visible { outline: none; background: #3a3a3a; }
+.chip button:hover svg, .chip button:focus-visible svg { color: var(--text); }
+.chip #chip-disconnect:hover, .chip #chip-disconnect:focus-visible { background: rgba(239, 122, 114, 0.14); color: #ef7a72; }
+.chip #chip-disconnect:hover svg, .chip #chip-disconnect:focus-visible svg { color: #ef7a72; }
 .menu .forget { margin-left: 6px; background: none; border: 0; color: var(--faint); cursor: pointer;
   padding: 0 2px; font-size: 11px; }
 .menu .forget:hover { color: #e5534b; }
