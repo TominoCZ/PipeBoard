@@ -3237,6 +3237,15 @@ const PB = (() => {
     // Diagnostic cards fed made-up sound (no server in the shots); one opened large; one off.
     fakeDiag: (wide = 1, rich = false, gen = null) => { DIAG.fake(Object.keys(S.ws.devices || {}).filter((k) => DIAG.TYPES[S.ws.devices[k].type]), wide, rich, gen); },
     openDiag: (key) => { openDiag(key); if (!DIAG.isOpen(key)) S.errors.push("the diagnostic panel did not open"); },
+    // A quiet sound zoomed up reaches the picture's centre: a fixed level floor (−66 dBFS) once
+    // left a hole there that grew as the sound got quieter (owner: "the center circle cutout").
+    stereoCentre: () => setTimeout(() => {
+      const c = [...document.querySelectorAll(".diag-display.stereo canvas")].sort((a, b) => b.width - a.width)[0];
+      const dpr = devicePixelRatio || 1, sc = Math.min((c.width - 12 * dpr) / 200, (c.height - 6 * dpr) / 104), r = Math.round(6 * sc);
+      const px = c.getContext("2d").getImageData(Math.round(c.width / 2 - r), Math.round(c.height - 2 * dpr - 3 * sc - r), 2 * r, r).data;
+      if (!px.some((v, i) => i % 4 === 3 && v > 0)) S.errors.push("a quiet sound left the stereo picture's centre empty");
+      PB.audit();
+    }, 600),
     diagSet: (key, field, on) => setDiag(key, field, on),
     diagMono: (key) => {
       [...(S.els[key]?.querySelectorAll(".diag-mode button") || [])].find((b) => b.textContent === "Mono")?.click();

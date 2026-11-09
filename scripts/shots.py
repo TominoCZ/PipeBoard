@@ -433,6 +433,11 @@ SHOTS = {
     "diag-stereo-panel": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag() || PB.debug.openDiag('pb:dster01')"),
     "stereo-try-mono-bass": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => { const x = 0.5 * Math.sin(2 * Math.PI * 55 * s); return [x, x]; }) || PB.debug.openDiag('pb:dster01')"),
     "stereo-try-bass-offset": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => [0.5 * Math.sin(2 * Math.PI * 55 * s), 0.5 * Math.sin(2 * Math.PI * 55 * s - 0.35)]) || PB.debug.openDiag('pb:dster01')"),
+    # The owner's guitar inputs, quiet (peaks about -48 dBFS): bass notes, R a little louder and behind,
+    # each dying away, its ellipse shrinking into the centre.
+    "stereo-try-quiet-bass": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => { const e = 0.004 * Math.exp(-((s * 3) % 1) * 6); "
+                              "return [e * Math.sin(2 * Math.PI * 110 * s), 1.4 * e * Math.sin(2 * Math.PI * 110 * s - 0.5)]; }) "
+                              "|| PB.debug.openDiag('pb:dster01') || PB.debug.stereoCentre()"),
     "stereo-try-hiss": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => [0.01 * (Math.random() - 0.5), 0.01 * (Math.random() - 0.5)]) || PB.debug.openDiag('pb:dster01')"),
     "stereo-try-hum": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => { const x = 0.4 * Math.sin(2 * Math.PI * 220 * s), h = 0.02 * Math.sin(2 * Math.PI * 50 * s); return [x + h, x - h]; }) || PB.debug.openDiag('pb:dster01')"),
     "stereo-try-near-mono": ("machine", BIG, diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, false, (s) => { const x = 0.4 * Math.sin(2 * Math.PI * 220 * s); return [x + 0.01 * (Math.random() - 0.5), x + 0.01 * (Math.random() - 0.5)]; }) || PB.debug.openDiag('pb:dster01')"),

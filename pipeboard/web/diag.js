@@ -237,7 +237,6 @@ const DIAG = (() => {
       // distance: its level against the loudest of the last second (zoomed to fit, owner: a song
       // at −12 dB was a small blob; in dB the loud near-mono part sat at the rim, hollow under it)
       const lvl = Math.hypot(m, s) * Math.SQRT1_2, ang = Math.atan2(s, m);
-      if (lvl < 0.0005) { prev = null; continue; }
       const amp = Math.min(1, (lvl / v.zoom) * 0.95);
       // 0 full left, 1 mono, 2 full right; white only near mono itself (owner: vivid), the
       // side's colour from a little off the centre line
