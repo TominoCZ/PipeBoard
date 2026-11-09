@@ -330,6 +330,9 @@ button { font: inherit; color: inherit; }
   padding: 2px 9px; font-size: 11px; cursor: pointer; }
 .panel button:hover { background: #444; }
 
+/* The frame counter (owner: very faint, out of the way): bottom-left, where nothing docks. */
+.fps { position: fixed; left: 10px; bottom: 7px; font-size: 10px; color: rgba(232, 230, 227, 0.2);
+  font-variant-numeric: tabular-nums; pointer-events: none; z-index: 1; }
 /* A selected wire's toolbar: styled as the menus, floating just above where the wire was clicked,
    its point on that spot (below it when the top bar would be in the way). */
 .chip { position: fixed; transform: translate(-50%, calc(-100% - 11px)); display: flex; align-items: center;

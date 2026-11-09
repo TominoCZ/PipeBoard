@@ -3711,6 +3711,26 @@ const PB = (() => {
     fit: (keys, dy = 0, dx = 0) => { S.moved = true; fit(false, keys || undefined); S.view.y += dy; S.view.x += dx; applyView(false); },  // dy: room for a panel
   };
 
+  // Frames a second and the longest frame of that second (max, not the average: owner read it as
+  // the frame time), from the page's own frames; a hitch shows in max before fps moves. A hidden window draws no frames: its gap
+  // starts a fresh second rather than reading as one long frame.
+  function fpsMeter() {
+    const el = $("fps");
+    el.hidden = false;
+    let n = 0, worst = 0, last = 0, since = 0;
+    const tick = (t) => {
+      if (t - last > 1000) { since = t; n = 0; worst = 0; }
+      else { n++; worst = Math.max(worst, t - last); }
+      last = t;
+      if (t - since >= 1000) {
+        el.textContent = `${Math.round((n * 1000) / (t - since))} fps · max ${Math.round(worst)} ms`;
+        since = t; n = 0; worst = 0;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
   function start() {
     bind();
     const boot = window.PB_BOOT;
@@ -3720,7 +3740,7 @@ const PB = (() => {
       load(boot);
       try { if (boot.after) new Function("PB", boot.after)(PB); } catch (e) { S.errors.push(`after: ${e}`); }
       setTimeout(audit, 200);
-    } else connect();
+    } else { connect(); fpsMeter(); }  // (not in pictures: its numbers would differ every time)
   }
 
   const PB = { debug, audit };
