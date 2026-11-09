@@ -1672,31 +1672,38 @@ async def check_denoise(board, page, next_state):
 
 
 async def check_drops_at_once(tmp: Path):
-    """A dropout is counted the moment the interface's count moves (owner: the Counter and the
-    Dropouts problem waited for the next whole second), not once a second; nothing is counted
-    between the seconds while the count stands still."""
+    """A dropout reaches a Counter the moment the count moves (owner: it waited for the next whole
+    second): the real loop and tally, only the sound card's count made up; nothing counted while
+    it stands still."""
     from pipeboard import pipewire, server
 
-    class LiveLike(pipewire.Fixture):
-        mode = "live"
-
-    board = server.Board(LiveLike(scenarios.load("machine")), tmp)
-    total, counted = [0], []
-    board.audible = lambda: {"iface": total[0]}
-    board.count_second = lambda errors, settling: counted.append((time.monotonic(), errors["iface"])) or False
+    board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
+    await server.startup(board)
+    assert await board.op_create_device(None, {"type": "counter", "name": "Counter", "channels": 2, "x": 0, "y": 0,
+                                               "connect": {"from": ["desktop_mix", "out"]}}) is None
+    for _ in range(3):
+        await board.refresh()
+    key = next(k for k, d in board.ws["devices"].items() if d["type"] == "counter")
+    mix = next(c for c in board.model["cards"] if c["key"] == "desktop_mix")
+    total = [5]
+    board.audible = lambda: dict.fromkeys(mix["names"][:1], total[0])
+    board.settling = 0
+    board.source.mode = "live"  # (only the loop's check: nothing below touches PipeWire)
     real = server.engine.node_errors
     server.engine.node_errors = lambda: asyncio.sleep(0, {})
+    drops = lambda: board.ws["devices"][key].get("counts", {}).get("drops", 0)  # noqa: E731
     task = asyncio.create_task(board.watch_errors())
     try:
         await asyncio.sleep(0.35)
-        assert len(counted) <= 1, f"nothing new, counted once at most (the first look): {counted}"
-        before, t = len(counted), time.monotonic()
-        total[0] = 1
-        await asyncio.sleep(0.25)
-        new = counted[before:]
-        assert new and new[0][1] == 1 and new[0][0] - t < 0.2, new
+        assert drops() == 0, "the first look: none yet"
+        t, total[0] = time.monotonic(), 8
+        while drops() == 0 and time.monotonic() - t < 2:
+            await asyncio.sleep(0.01)
+        assert drops() == 3 and time.monotonic() - t < 0.25, (drops(), time.monotonic() - t)
+        assert not task.done(), "the loop runs on"
     finally:
         task.cancel()
+        board.source.mode = "fixture"
         server.engine.node_errors = real
 
 
