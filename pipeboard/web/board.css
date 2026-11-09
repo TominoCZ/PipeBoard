@@ -457,24 +457,30 @@ button { font: inherit; color: inherit; }
    −12 above and 12 below keep the card on the 14 px grid. */
 .card-foot { display: flex; align-items: center; gap: 6px; height: 28px; margin: -12px 12px 12px; }
 .card-foot > .bypass { margin-right: auto; }
+.card-foot.centred { justify-content: center; }
 .card-foot > .smooth { flex: 1; }  /* between power and the gear, filling the row (owner: it sat oddly) */
 .card-btn { height: 20px; padding: 0 9px; font: 11px var(--font); color: var(--text); cursor: pointer;
   background: #303030; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 5px; }
 .card-btn:hover { border-color: rgba(255, 255, 255, 0.22); }
-/* Icon buttons (Bypass, the gear): square (owner), the icon centred; their name is in the tooltip.
+/* Icon buttons (Bypass, the gear): bare, no box or outline (owner), a 28 px target with the icon
+   centred; a faint backing only under the pointer; their name is in the tooltip.
    (Not .icon: that is the card header's own 14 px icon, and its rule shrank these.) */
 .card-btn.glyph { width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
-  vertical-align: middle; }
-/* 20 in the 26 px inside the border: 3 px each side, whole pixels (an odd margin, 15 in 20, put the
+  vertical-align: middle; background: none; border-color: transparent; color: var(--muted); }
+.card-btn.glyph:hover, .card-btn.glyph:focus-visible { background: rgba(255, 255, 255, 0.07); border-color: transparent;
+  color: var(--text); outline: none; }
+/* 18 in the 26 px inside the border: 4 px each side, whole pixels (an odd margin, 15 in 20, put the
    icon half a pixel right and down: owner saw it). */
-.card-btn.glyph svg { width: 20px; height: 20px; flex: none; }
-/* Bypass as a power switch: green while the effect works (owner), dim (plain button) while bypassed. */
-.card-btn.glyph.bypass { color: var(--on); }
-.card-btn.glyph.bypass[aria-pressed="true"] { color: var(--faint); background: #303030;
-  border-color: rgba(255, 255, 255, 0.1); }
-.card-btn[aria-pressed="true"] { border-color: color-mix(in srgb, var(--c) 60%, transparent);
+.card-btn.glyph svg { width: 18px; height: 18px; flex: none; }
+/* Bypass as a power switch: green while the effect works (owner), dim while bypassed. */
+.card-btn.glyph.bypass, .card-btn.glyph.bypass:hover { color: var(--on); }
+.card-btn.glyph.bypass[aria-pressed="true"] { color: var(--faint); }
+.card-btn.glyph.bypass[aria-pressed="true"]:hover { color: var(--muted); }
+/* The gear while its panel is open: in the card's colour. */
+.card-btn.glyph[aria-pressed="true"]:not(.bypass) { color: var(--c); }
+.card-btn[aria-pressed="true"]:not(.glyph) { border-color: color-mix(in srgb, var(--c) 60%, transparent);
   background: color-mix(in srgb, var(--c) 18%, #303030); }
-.card-btn.bypass[aria-pressed="true"] { color: var(--hardware);
+.card-btn.bypass[aria-pressed="true"]:not(.glyph) { color: var(--hardware);
   border-color: color-mix(in srgb, var(--hardware) 60%, transparent);
   background: color-mix(in srgb, var(--hardware) 16%, #303030); }
 .card-note { font-size: 11px; color: var(--faint); }
@@ -736,9 +742,6 @@ button { font: inherit; color: inherit; }
 .eng .segmented.margins small { font-size: 10.5px; color: var(--faint); }
 .eng .segmented.margins button[aria-checked="true"] small { color: var(--muted); }
 @media (max-width: 860px) { .iface-cols { grid-template-columns: 1fr; } .iface-cols .headroom { margin: 12px 16px 0 124px; } }
-/* The gear on an interface's card, in its header (the card has no foot to put it in). */
-.card header .head-gear { width: 22px; height: 22px; margin: 0 -6px 0 2px; border-color: transparent; background: none; }
-.card header .head-gear svg { width: 15px; height: 15px; }
 /* A short window: the panel scrolls rather than run off (its pointer is clipped then). */
 @media (max-height: 760px) { .eng { max-height: calc(100vh - 70px); overflow-y: auto; } }
 .eng .segmented button { padding: 4px 0; min-width: 43px; position: relative; font-variant-numeric: tabular-nums; font-size: 12px; cursor: pointer; }

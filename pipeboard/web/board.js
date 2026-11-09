@@ -373,13 +373,12 @@ const PB = (() => {
     const dev = S.ws.devices?.[c.key];
     const iface = c.kind === "hardware" && !c.missing && ifaceOf(c.key);  // (a sound card: its own settings)
     const editing = EQ.isOpen(c.key) || DYN.isOpen(c.key) || DIAG.isOpen(c.key) || (iface && S.iface === iface.key);  // its panel is open: the card glows
-    if (iface) {
-      const gear = gearBtn(editing, "its settings", () => (editing ? closeEngine() : openIface(iface.key)));
-      gear.classList.add("head-gear");
-      gear.addEventListener("mousedown", (e) => e.stopPropagation());  // never drags the card
-      head.append(gear);
-    }
-    const el = h("div", { class: `card k-${c.kind}${c.missing ? " missing" : ""}${editing ? " editing" : ""}`, "data-key": c.key }, head, body,
+    // A sound card's gear: in a row of its own at the bottom, centred (owner: as the effects' gear,
+    // inside the card; it has no power to sit beside).
+    const ifaceFoot = iface ? h("div", { class: "card-foot centred" },
+      gearBtn(editing, "its settings", () => (editing ? closeEngine() : openIface(iface.key)))) : null;
+    ifaceFoot?.addEventListener("mousedown", (e) => e.stopPropagation());  // never drags the card
+    const el = h("div", { class: `card k-${c.kind}${c.missing ? " missing" : ""}${editing ? " editing" : ""}`, "data-key": c.key }, head, body, ifaceFoot,
                  dev?.type === "gain" && !c.missing ? gainRow(c.key, dev) : null,
                  DYN.KINDS[dev?.type] && !c.missing ? dynRow(c.key, dev) : null,
                  dev?.type === "plugin" && !c.missing ? pluginFoot(c.key, dev) : null,
