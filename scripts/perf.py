@@ -3,7 +3,7 @@ sound for a few seconds, measured through the DevTools protocol.
 
     ./run.sh perf                  every scene, on the GPU
     ./run.sh perf wires scopes     only these
-    ./run.sh perf --cpu            software rendering (SwiftShader, as the shots draw)
+    ./run.sh perf --cpu            software rendering (SwiftShader)
     ./run.sh perf --json out.json  also write the numbers
     ./run.sh perf --uncapped       frames as fast as they come (no vsync): the fps it could reach
                                    (owner's screen: 240 Hz, a frame every 4.2 ms)
@@ -53,7 +53,7 @@ SCENES = {
 }
 GPU = ["--use-gl=angle", "--use-angle=gl", "--enable-gpu", "--ignore-gpu-blocklist"]
 UNCAPPED = ["--disable-gpu-vsync", "--disable-frame-rate-limit"]
-CPU = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]  # (as the shots draw)
+CPU = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
 PROBE = """(() => { const g = document.createElement('canvas').getContext('webgl2'), x = g && g.getExtension('WEBGL_debug_renderer_info');
   return g ? (x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : 'webgl2') : 'none'; })()"""
 FRAMES = "window.__ft = []; (function f(t) { __ft.push(t); requestAnimationFrame(f); })(performance.now())"

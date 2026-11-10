@@ -6,11 +6,12 @@
     ./run.sh shots --list          what there is
     ./run.sh shots icon            the app and tray icons at every size -> .dev/shots/icon.png
 
-Six Chromes stay open for the run (Playwright, fetched by `uv run --with playwright`), two
-shots at a time in each, a fresh context per shot. No server and no PipeWire: each page is
-index.html with the scenario's model injected as window.PB_BOOT, plus a line of JS ("after")
-that puts the UI in a state (a menu open, a wire being dragged...). The page audits itself (cards overlapping, text clipped, things off screen,
-console errors) and the faults are printed; the exit code is the number of faulty shots.
+Six Chromes on the real GPU stay open for the run (Playwright, fetched by `uv run --with
+playwright`), four shots at a time in each, a fresh context per shot. No server and no PipeWire:
+each page is index.html with the scenario's model injected as window.PB_BOOT, plus a line of JS
+("after") that puts the UI in a state (a menu open, a wire being dragged...). The page audits
+itself (cards overlapping, text clipped, things off screen, console errors) and the faults are
+printed; the exit code is the number of faulty shots.
 Look at the PNGs after every visual change.
 """
 
@@ -617,19 +618,21 @@ def _chrome() -> str:
     sys.exit("shots: needs google-chrome or chromium")
 
 
-# (WebGL through SwiftShader as the whole GPU, the page's canvases with it: with --disable-gpu
-# each copy into a canvas was read back, and a scope's panel took 9 s, not 3)
-FLAGS = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--hide-scrollbars"]
+# The real GPU (owner: "can't we use GPU to render the shots at all?"), through ANGLE on OpenGL as
+# scripts/perf.py draws: 210 shots in ~32 s, not ~64 on SwiftShader (which draws WebGL on the
+# CPU, and the run was CPU-bound on it).
+FLAGS = ["--use-gl=angle", "--use-angle=gl", "--enable-gpu", "--ignore-gpu-blocklist", "--hide-scrollbars"]
 # Chromes kept open for the whole run, each shot a fresh context in one (its own storage, as a
 # profile of its own was), its picture and its audit from the same load: a Chrome per picture and
 # another per audit, ~1.2 s each to start and load, were most of a run's 4 minutes. Several
-# Chromes, not one: one Chrome's GPU process draws every page's WebGL, and 16 pages in one
-# starved the scopes. Measured on the owner's 16 cores (210 shots): 1 Chrome × 8 pages 96 s,
-# 4 × 2 76 s, 6 × 2 62 s, 8 × 2 57 s with a stereo shot faulting (the run is CPU-bound by then:
-# SwiftShader draws on the CPU, and a scope starved of frames draws too little).
+# Chromes, not one: a Chrome's GPU process draws all its pages' WebGL (one Chrome, 16 pages: slower
+# than 8 × 2). Measured on the owner's 16 cores and RTX 3080 Ti (210 shots): 6 × 2 47 s, 4 × 6 34,
+# 6 × 4 32.5, 8 × 4 31; past 32 pages at once Chrome began refusing WebGL contexts ("no WebGL2"):
+# 6 × 4 leaves room for the owner's own PipeBoard window on the same GPU. From there most of a run
+# is each shot's settle.
 # Real time, not --virtual-time-budget: through Playwright a page whose virtual time ran out
 # never painted again. SETTLE_MS: as long as the budget was; 1 000 faulted the stereo shots.
-BROWSERS, PER_BROWSER, SETTLE_MS = 6, 2, 1500
+BROWSERS, PER_BROWSER, SETTLE_MS = 6, 4, 1500
 
 
 async def _open(browser, size: tuple, page: Path):
@@ -664,8 +667,8 @@ async def _shoot_all(pages: dict) -> list[tuple[str, list[str]]]:
         gates = [asyncio.Semaphore(PER_BROWSER) for _ in browsers]
 
         async def one(i: int, name: str) -> tuple[str, list[str]]:
-            # (once more if it hangs: under a heavy load SwiftShader now and then never finished a
-            # page; twice, it is a fault, not the end of the run)
+            # (once more if it fails or hangs: under a heavy load a page now and then never
+            # finished; twice, it is a fault, not the end of the run)
             async with gates[i % BROWSERS]:
                 for attempt in (1, 2):
                     try:

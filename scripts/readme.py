@@ -183,7 +183,7 @@ def main() -> None:
 
     def run(chunk: list) -> None:
         with sync_playwright() as p:  # (one per thread: Playwright's sync API keeps to its own)
-            browser = p.chromium.launch(executable_path=shots._chrome(), args=["--allow-file-access-from-files"])
+            browser = p.chromium.launch(executable_path=shots._chrome(), args=["--allow-file-access-from-files", *shots.FLAGS])  # (the real GPU, as the shots)
             for name in chunk:
                 take(browser, name, pages[name], SHOTS[name][3])
             browser.close()

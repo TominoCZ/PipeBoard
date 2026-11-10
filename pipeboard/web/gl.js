@@ -5,7 +5,7 @@
 // comes into it; plain canvases in the page, so the layering with cards, menus and panels is what
 // it was. (Measured on the owner's GPU, 2026-11-09: nine surfaces at 60 fps cost 15 ms/s of the
 // page's time this way; a bitmap handed to each instead cost 430, the context resized for each.)
-// WebGL2 only (owner): the app runs in its own Chrome window; the shots draw through SwiftShader.
+// WebGL2 only (owner): the app runs in its own Chrome window; the shots draw on the GPU too.
 "use strict";
 
 const GL = (() => {
