@@ -1859,7 +1859,15 @@ void main() {
         }
         gl.bindVertexArray(null);
       });
-    } catch (e) { S.errors.push(`wires: ${e.message || e}`); }
+    } catch (e) {
+      S.errors.push(`wires: ${e.message || e}`);
+      // (said once, in words: a browser with WebGL turned off drew no wires and said nothing; a
+      // friend's PipeBoard opened in LibreWolf, which turns it off)
+      if (!wireGL.told && /WebGL2|float textures/.test(e.message || "")) {
+        wireGL.told = true;
+        toast("This browser cannot draw the wires: PipeBoard needs WebGL2 (turned off in LibreWolf, for one). Open it in Chrome or Chromium, or turn WebGL on.");
+      }
+    }
     wireGL.moving = moving;
     return moving;
   }
