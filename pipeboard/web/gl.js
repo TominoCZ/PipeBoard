@@ -104,13 +104,18 @@ const GL = (() => {
 
   // One triangle over the whole viewport: for shaders that draw every pixel (gl.drawArrays(gl.TRIANGLES, 0, 3)).
   const FULL_VS = `void main() { gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0); }`;
-  // CSS colour → [r, g, b] in 0…1.
+  // CSS colour → [r, g, b] in 0…1: from the colour's own text (a browser against fingerprinting
+  // puts noise in what a canvas reads back: a friend's wires came out green and blue).
   const rgbs = {};
   function rgb(css) {
     if (!rgbs[css]) {
-      const c = document.createElement("canvas").getContext("2d");
-      c.fillStyle = css; c.fillRect(0, 0, 1, 1);
-      rgbs[css] = [...c.getImageData(0, 0, 1, 1).data.slice(0, 3)].map((v) => v / 255);
+      let text = css.trim();
+      if (!/^#[0-9a-f]{6}$/i.test(text)) {  // (any other form: the page's own reading of it, rgb(…))
+        const el = document.createElement("i");
+        el.style.color = text; document.body.append(el); text = getComputedStyle(el).color; el.remove();
+      }
+      rgbs[css] = text.startsWith("#") ? [1, 3, 5].map((i) => parseInt(text.slice(i, i + 2), 16) / 255)
+        : (text.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map((v) => +v / 255);
     }
     return rgbs[css];
   }
@@ -124,25 +129,36 @@ const GL = (() => {
     return [pw, ph];
   }
 
-  // Draws one surface: paint(gl, w, h) into a cleared w × h corner of this context's canvas
-  // (premultiplied alpha, blending on), then that corner copied onto the surface. False when there
-  // is no context to draw with (lost, coming back).
+  // Draws one surface: paint(gl, w, h, tile) into a cleared w × h corner of this context's canvas
+  // (premultiplied alpha, blending on), then that corner copied onto the surface. A surface bigger
+  // than this GPU's drawing buffer may be (Firefox and LibreWolf against fingerprinting: 2 048 px,
+  // a friend's wires drew nothing) is drawn in tiles, each its own viewport (one past the drawing
+  // buffer drew nothing there). tile: [x, y, w, h] of this one in device px from the surface's
+  // bottom left; a shader that places things in the surface maps them into the tile, one that
+  // reads gl_FragCoord adds x, y. Only the wires get that big; the scopes are one tile.
+  // False when there is no context to draw with (lost, coming back).
   function draw(surface, paint) {
     const g = context();
     if (!g) return false;
-    const w = surface.width, h = surface.height;
-    if (canvas.width < w || canvas.height < h) {  // (grown only: a resize empties it and costs)
-      canvas.width = Math.max(canvas.width, w); canvas.height = Math.max(canvas.height, h);
+    const w = surface.width, h = surface.height, lim = make("limit", () => g.getParameter(g.MAX_RENDERBUFFER_SIZE));
+    const cw = Math.min(lim, w), ch = Math.min(lim, h);
+    if (canvas.width < cw || canvas.height < ch) {  // (grown only: a resize empties it and costs)
+      canvas.width = Math.max(canvas.width, cw); canvas.height = Math.max(canvas.height, ch);
     }
-    g.bindFramebuffer(g.FRAMEBUFFER, null);
-    g.viewport(0, 0, w, h);
-    g.enable(g.SCISSOR_TEST); g.scissor(0, 0, w, h);
-    g.clearColor(0, 0, 0, 0); g.clear(g.COLOR_BUFFER_BIT);
-    g.enable(g.BLEND); g.blendFunc(g.ONE, g.ONE_MINUS_SRC_ALPHA);
-    paint(g, w, h);
     const out = surface.getContext("2d");
     out.clearRect(0, 0, w, h);
-    out.drawImage(canvas, 0, canvas.height - h, w, h, 0, 0, w, h);  // (GL's rows start at the bottom)
+    for (let y0 = 0; y0 < h; y0 += ch) {
+      for (let x0 = 0; x0 < w; x0 += cw) {
+        const tw = Math.min(cw, w - x0), th = Math.min(ch, h - y0);
+        g.bindFramebuffer(g.FRAMEBUFFER, null);
+        g.viewport(0, 0, tw, th);
+        g.enable(g.SCISSOR_TEST); g.scissor(0, 0, tw, th);
+        g.clearColor(0, 0, 0, 0); g.clear(g.COLOR_BUFFER_BIT);
+        g.enable(g.BLEND); g.blendFunc(g.ONE, g.ONE_MINUS_SRC_ALPHA);
+        paint(g, w, h, [x0, y0, tw, th]);
+        out.drawImage(canvas, 0, canvas.height - th, tw, th, x0, h - y0 - th, tw, th);  // (GL's rows start at the bottom)
+      }
+    }
     return true;
   }
 

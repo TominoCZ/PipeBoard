@@ -1572,7 +1572,7 @@ const PB = (() => {
   // and its classes (hot, off-path, focus, selected…) say how each wire looks; any change to them
   // repaints (an observer), as does the view.
   const wireCanvas = $("wire-canvas");
-  const ROW = 20, SEG_STILL = 512, SEG_LIVE = 2048, STILL_PX = 4;  // (texels a piece; stretches a piece at most: a wave's every WAVE_PX up to 3 000 px, a still wire's every STILL_PX)
+  const ROW = 20, SEG_STILL = 512, SEG_LIVE = 2047, STILL_PX = 4;  // (texels a piece; stretches a piece at most: a wave's every WAVE_PX up to ~2 000 px, a still wire's every STILL_PX; its points' texture SEG_LIVE + 1 wide, within the 2 048 a browser against fingerprinting allows)
   const DASHES = { tap: [2, 6], ghost: [3, 6], failed: [2, 5], partial: [6, 5] };  // (the CSS's dasharrays, in its order of precedence)
   const wireGL = { rows: new Float32Array(0), alpha: new Map(), ringRows: 0, ringCap: 0, gen: -1, raf: 0, last: 0, view: "" };
   // Pass 1 (POINTS_FS, a fragment per point): each piece's points every so far along it, moved
@@ -1646,7 +1646,7 @@ void main() {
 }`;
   const WIRE_VS = `${PIECE_GLSL}
 uniform sampler2D uPoints;
-uniform vec3 uView; uniform vec2 uSize; uniform float uPx; uniform int uSeg;
+uniform vec3 uView; uniform vec2 uSize; uniform vec4 uTile; uniform float uPx; uniform int uSeg;
 layout(location = 0) in float aRow;
 flat out int vRow, vSeg, vShadow;
 void main() {
@@ -1663,11 +1663,13 @@ void main() {
   dir = L > 1e-5 ? dir / L : vec2(1.0, 0.0);
   bool atB = c == 1 || c == 4 || c == 5; float side = c == 2 || c == 3 || c == 5 ? 1.0 : -1.0;
   vec2 s = ((atB ? b.xy + dir * R : a.xy - dir * R) + vec2(-dir.y, dir.x) * side * R) * uView.z + uView.xy;
-  gl_Position = vec4(s.x / uSize.x * 2.0 - 1.0, 1.0 - s.y / uSize.y * 2.0, 0.0, 1.0);
+  float dpr = uPx / uView.z;  // (into this tile of the surface, in device px from its bottom left)
+  vec2 g = vec2(s.x, uSize.y - s.y) * dpr - uTile.xy;
+  gl_Position = vec4(g / uTile.zw * 2.0 - 1.0, 0.0, 1.0);
 }`;
   const WIRE_FS = `${PIECE_GLSL}
 uniform sampler2D uPoints;
-uniform vec3 uView; uniform vec2 uSize; uniform float uPx, uTime;
+uniform vec3 uView; uniform vec2 uSize; uniform vec4 uTile; uniform float uPx, uTime;
 flat in int vRow, vSeg, vShadow;
 out vec4 o;
 vec4 P(int i) { return texelFetch(uPoints, ivec2(i, vRow), 0); }
@@ -1677,7 +1679,8 @@ void main() {
   // The pixel on the board: from the pixel itself, the same in every quad (interpolated, each
   // quad's differed by a rounding, and two that met at a joint each gave the pixel to the other).
   float dpr = uPx / uView.z;
-  vec2 vWorld = (vec2(gl_FragCoord.x, uSize.y * dpr - gl_FragCoord.y) / dpr - uView.xy) / uView.z;
+  vec2 at = gl_FragCoord.xy + uTile.xy;  // (on the surface: GL.draw may draw it in tiles)
+  vec2 vWorld = (vec2(at.x, uSize.y * dpr - at.y) / dpr - uView.xy) / uView.z;
   // Drawn by the nearest stretch only (ties: the first): the same sums in every quad, so exactly
   // one. Those near enough to reach this pixel too: as many either side as the line's reach
   // covers (a dense wave folds back, its flanks a wavelength apart), 8 at most.
@@ -1838,7 +1841,7 @@ void main() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
       // Pass 2: their shadows and lines.
-      GL.draw(wireCanvas, () => {
+      GL.draw(wireCanvas, (_g, _w, _h, tile) => {
         const { prog, vao, inst } = res, u = prog.u;
         gl.useProgram(prog.p);
         gl.bindVertexArray(vao);
@@ -1850,7 +1853,7 @@ void main() {
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, res.points);
         gl.uniform1i(u.uWires, 0); gl.uniform1i(u.uPoints, 1);
         gl.uniform3f(u.uView, x, y, z); gl.uniform2f(u.uSize, W, H); gl.uniform1f(u.uPx, z * (devicePixelRatio || 1));
-        gl.uniform1f(u.uTime, now / 1000);
+        gl.uniform1f(u.uTime, now / 1000); gl.uniform4f(u.uTile, ...tile);
         for (const [from, count, seg] of [[0, nStill, SEG_STILL], [nStill, pieces.length - nStill, SEG_LIVE]]) {
           if (!count) continue;
           gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, from * 4);
