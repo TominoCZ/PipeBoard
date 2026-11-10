@@ -1820,6 +1820,7 @@ void main() {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, SLOTS, r.row, 1, 1, gl.RGBA, gl.FLOAT, r.tex, SLOTS * 4);
       }
       const still = pieces.findIndex((p) => p.ring), nStill = still < 0 ? pieces.length : still;
+      wireGL.pieces = pieces;  // (PB.debug.rings)
       // Pass 1: every piece's points, moved by its sound.
       const base = Math.floor(slot);
       if (pieces.length) {
@@ -4614,6 +4615,7 @@ void main() {
       head.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...at }));
     },
     errors: () => [...S.errors],  // (scripts/perf.py)
+    rings: () => ({ rings, clock, rows: wireGL.ringRows, cap: wireGL.ringCap, pieces: wireGL.pieces }),  // (the live state, to compare the GPU with what it was given)
     // The GPU lost and back (a driver reset): the wires and scopes drawn again as they were.
     // Waits for them to have drawn, before and after, not a set time (real time: on a busy machine
     // a scope's first frame comes late); scripts/shots.py waits for PB_WAIT.
@@ -4687,7 +4689,7 @@ void main() {
     // Live wires with sound like the owner's music (owner: real sound looked rough where the made-up
     // tones were clean): broadband, its loudness and brightness changing every 20 ms frame, as the
     // capture sends it; seeded, the same every time.
-    fakeMusic: (n = 99) => {
+    fakeMusic: (n = 99, start = 0) => {  // (start: ms into the session, to try a page left running for hours)
       let seed = 3;
       const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
       [...new Set(visibleWires().map((w) => w.from.join("|")))].slice(0, n).forEach((k, s) => {
@@ -4698,10 +4700,10 @@ void main() {
             const m = Math.abs(x), v = m < 0.002 ? 0 : Math.round((20 * Math.log10(m) + 54) / 54 * 126);
             return x < 0 ? -v : v;
           });
-          feed(k, f * 20, vals, Math.round(60 + 110 * rnd()));
+          feed(k, start + f * 20, vals, Math.round(60 + 110 * rnd()));
         }
       });
-      clock.newest = clock.head = 7999;
+      clock.newest = clock.head = start + 7999;
       drawLive();
     },
     // The live wires at a given moment of the fake sound (frames of the README's animation).

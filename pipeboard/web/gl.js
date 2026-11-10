@@ -39,7 +39,10 @@ const GL = (() => {
     return make(vs + fs, () => {
       const one = (kind, src) => {
         const sh = gl.createShader(kind);
-        gl.shaderSource(sh, `#version 300 es\nprecision highp float;\nprecision highp int;\n${src}`);
+        // (samplers too: GLSL's default for them is lowp, and the owner's NVIDIA read float textures
+        // at 16 bits then: slot numbers past 2048 lost their odd ones and the live waves went wrong
+        // half a minute in; positions past 2048 px kinked. SwiftShader, as the shots draw, had hidden it.)
+        gl.shaderSource(sh, `#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n${src}`);
         gl.compileShader(sh);
         if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS) && !gl.isContextLost()) throw new Error(`shader: ${gl.getShaderInfoLog(sh)}`);
         return sh;
