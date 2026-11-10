@@ -381,6 +381,13 @@ async def check_engine_trial(tmp):
     board = server.Board(pipewire.Fixture(scenarios.load("machine")), tmp)
     await server.startup(board)
     assert await board.op_engine_try(None, {"block": 9, "margin": 0, "prio": 88, "nice": -11})
+    # RTKit gives PipeWire its real time (runs 20, the file asks 88): a rate or block change
+    # leaves the priority alone; only one the user changed is set (a friend's toast).
+    board.engine.update(prio=88, prio_now=20, nice=-11, nice_now=-11)
+    _, was, _ = board.engine_request({"block": 256, "margin": 256, "prio": 88, "nice": -11})
+    assert was["prio"] == 88 and was["nice"] == -11, was
+    _, was, _ = board.engine_request({"block": 256, "margin": 256, "prio": 90, "nice": -11})
+    assert was["prio"] == 20, was
     assert await board.op_engine_try(None, {"block": 256, "margin": 256, "prio": 88, "nice": -11}) is None
     trial = board.trial_state()
     assert trial["values"]["block"] == 256 and trial["was"]["block"] == 1024 and 55 <= trial["left"] <= 60, trial

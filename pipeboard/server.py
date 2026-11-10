@@ -1858,8 +1858,12 @@ class Board:
         # the margin asked for, in blocks (on the timer PipeWire reports a padded one); the rate
         # PipeBoard fixed the interface at (None: it follows the graph)
         was["margin"] = e.get("margin_blocks", 1) * (was["block"] or 1)
-        # what runs, not the file's: a Try sets the asked priority on the running PipeWire
-        was["prio"], was["nice"] = e.get("prio_now") or e["prio"], e.get("nice_now", e["nice"])
+        # A priority or nice the user changed (the request's differs from the file's, which the
+        # panel shows) is set on the running PipeWire, so `was` is what runs; one left alone is not
+        # touched (a friend changed only the rate: with RTKit giving PipeWire its real time, what
+        # runs never equals the file's, so every change tried chrt and the account may not).
+        was["prio"] = (e.get("prio_now") or e["prio"]) if values["prio"] != e["prio"] else values["prio"]
+        was["nice"] = e.get("nice_now", e["nice"]) if values["nice"] != e["nice"] else values["nice"]
         was["rate"] = e.get("fixed_rate")
         # The other interfaces keep their own rules; one on interrupts reopens for a new block.
         others = [r for r in engine.own_rules() if not set(r["nodes"]) & set(e["interface"])]
