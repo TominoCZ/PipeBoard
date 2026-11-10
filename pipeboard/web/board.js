@@ -1571,7 +1571,21 @@ const PB = (() => {
   // the GPU it costs nothing). The SVG holds what is clicked or read (hit paths, tags, badges)
   // and its classes (hot, off-path, focus, selected…) say how each wire looks; any change to them
   // repaints (an observer), as does the view.
-  const wireCanvas = $("wire-canvas");
+  const wireCanvas = $("wire-canvas"), WGL = GL.direct(wireCanvas);  // (its own context, shown as it is: no copy, gl.js)
+  // Pixels lit in a picture: the wires' painted now and read straight back (a WebGL canvas keeps
+  // its picture only until it is shown), a scope's from its 2D canvas. For the audits.
+  function litPixels(c) {
+    if (c !== wireCanvas) {
+      const d = c.width ? c.getContext("2d").getImageData(0, 0, c.width, c.height).data : [];
+      let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n;
+    }
+    paintWires(performance.now());
+    const g = WGL.context();
+    if (!g) return 0;
+    const d = new Uint8Array(c.width * c.height * 4);
+    g.readPixels(0, 0, c.width, c.height, g.RGBA, g.UNSIGNED_BYTE, d);
+    let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n;
+  }
   const ROW = 20, SEG_STILL = 512, SEG_LIVE = 2047, STILL_PX = 4;  // (texels a piece; stretches a piece at most: a wave's every WAVE_PX up to ~2 000 px, a still wire's every STILL_PX; its points' texture SEG_LIVE + 1 wide, within the 2 048 a browser against fingerprinting allows)
   const DASHES = { tap: [2, 6], ghost: [3, 6], failed: [2, 5], partial: [6, 5] };  // (the CSS's dasharrays, in its order of precedence)
   const wireGL = { rows: new Float32Array(0), alpha: new Map(), ringRows: 0, ringCap: 0, gen: -1, raf: 0, last: 0, view: "" };
@@ -1679,7 +1693,7 @@ void main() {
   // The pixel on the board: from the pixel itself, the same in every quad (interpolated, each
   // quad's differed by a rounding, and two that met at a joint each gave the pixel to the other).
   float dpr = uPx / uView.z;
-  vec2 at = gl_FragCoord.xy + uTile.xy;  // (on the surface: GL.draw may draw it in tiles)
+  vec2 at = gl_FragCoord.xy + uTile.xy;
   vec2 vWorld = (vec2(at.x, uSize.y * dpr - at.y) / dpr - uView.xy) / uView.z;
   // Drawn by the nearest stretch only (ties: the first): the same sums in every quad, so exactly
   // one. Those near enough to reach this pixel too: as many either side as the line's reach
@@ -1733,7 +1747,7 @@ void main() {
   function paintWires(now) {
     let moving = false;
     try {
-      const g = GL.context();
+      const g = WGL.context();
       if (!g) return false;
       const W = board.clientWidth, H = board.clientHeight, { z } = S.view, x = Math.round(S.view.x), y = Math.round(S.view.y);
       const view = `${W} ${H} ${x} ${y} ${z}`;
@@ -1741,7 +1755,11 @@ void main() {
         wireGL.view = view;
         Object.assign(wireCanvas.style, { width: `${W}px`, height: `${H}px`, transform: `translate(${-x / z}px, ${-y / z}px) scale(${1 / z})` });
       }
-      GL.fit(wireCanvas, W, H);
+      // (as sharp as the screen, within the browser's limit: 2 048 px against fingerprinting, the
+      // picture then a little soft; dpr: the canvas's own pixels per CSS px)
+      const k = Math.min(1, WGL.limit() / (W * (devicePixelRatio || 1)), WGL.limit() / (H * (devicePixelRatio || 1)));
+      GL.fit(wireCanvas, W * k, H * k);
+      const dpr = wireCanvas.width / W;
       const preview = S.mode === "preview", dt = Math.min(0.1, (now - (wireGL.last || now)) / 1000), slot = clock.head / SLOT_MS;
       wireGL.last = now;
       const focus = board.classList.contains("focus"), pieces = [], used = new Set();
@@ -1777,8 +1795,8 @@ void main() {
       for (const p of pieces) if (p.ring) { used.add(p.ring); moving = true; }
       if (wireGL.alpha.size > 4 * pieces.length + 64) wireGL.alpha.clear();  // (rebuilt wires: the old ones' forgotten)
 
-      const gl = g, fresh = wireGL.gen !== GL.gen;
-      if (fresh) { wireGL.gen = GL.gen; wireGL.rowCap = 0; wireGL.ringCap = 0; }
+      const gl = g, fresh = wireGL.gen !== WGL.gen;
+      if (fresh) { wireGL.gen = WGL.gen; wireGL.rowCap = 0; wireGL.ringCap = 0; }
       // The pieces' rows: still ones first, then those with a wave (drawn with more points).
       pieces.sort((a, b) => !!a.ring - !!b.ring);
       const rows = wireGL.rows.length >= pieces.length * ROW * 4 ? wireGL.rows : (wireGL.rows = new Float32Array(Math.max(64, pieces.length * 2) * ROW * 4));
@@ -1791,13 +1809,13 @@ void main() {
         rows.set(p.arc.ds, o + 28);
         order[i] = i;
       });
-      const res = GL.make("wires", () => ({ prog: GL.program(WIRE_VS, WIRE_FS), fill: GL.program(GL.FULL_VS, POINTS_FS),
+      const res = WGL.make("wires", () => ({ prog: WGL.program(WIRE_VS, WIRE_FS), fill: WGL.program(GL.FULL_VS, POINTS_FS),
                                              vao: gl.createVertexArray(), inst: gl.createBuffer(), fb: gl.createFramebuffer() }));
       if ((wireGL.rowCap || 0) < pieces.length) {
         wireGL.rowCap = rows.length / (ROW * 4);
         for (const t of [res.wires, res.points]) if (t) gl.deleteTexture(t);
-        res.wires = GL.texture(ROW, wireGL.rowCap);
-        res.points = GL.texture(SEG_LIVE + 1, wireGL.rowCap);
+        res.wires = WGL.texture(ROW, wireGL.rowCap);
+        res.points = WGL.texture(SEG_LIVE + 1, wireGL.rowCap);
       }
       gl.bindTexture(gl.TEXTURE_2D, res.wires);
       if (pieces.length) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ROW, pieces.length, gl.RGBA, gl.FLOAT, rows, 0);
@@ -1806,7 +1824,7 @@ void main() {
       if (wireGL.ringCap < need) {
         wireGL.ringCap = Math.max(8, need * 2);
         if (res.rings) gl.deleteTexture(res.rings);
-        res.rings = GL.texture(SLOTS + 1, wireGL.ringCap);
+        res.rings = WGL.texture(SLOTS + 1, wireGL.ringCap);
         for (const r of Object.values(rings)) r.dirty = [0, SLOTS - 1];
       }
       gl.bindTexture(gl.TEXTURE_2D, res.rings);
@@ -1841,7 +1859,7 @@ void main() {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       }
       // Pass 2: their shadows and lines.
-      GL.draw(wireCanvas, (_g, _w, _h, tile) => {
+      WGL.paint((_g, _w, _h, tile) => {
         const { prog, vao, inst } = res, u = prog.u;
         gl.useProgram(prog.p);
         gl.bindVertexArray(vao);
@@ -1852,7 +1870,7 @@ void main() {
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, res.wires);
         gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, res.points);
         gl.uniform1i(u.uWires, 0); gl.uniform1i(u.uPoints, 1);
-        gl.uniform3f(u.uView, x, y, z); gl.uniform2f(u.uSize, W, H); gl.uniform1f(u.uPx, z * (devicePixelRatio || 1));
+        gl.uniform3f(u.uView, x, y, z); gl.uniform2f(u.uSize, W, H); gl.uniform1f(u.uPx, z * dpr);
         gl.uniform1f(u.uTime, now / 1000); gl.uniform4f(u.uTile, ...tile);
         for (const [from, count, seg] of [[0, nStill, SEG_STILL], [nStill, pieces.length - nStill, SEG_LIVE]]) {
           if (!count) continue;
@@ -3819,7 +3837,7 @@ void main() {
   // every other check), and each diagnostic display that is on and has heard sound. The shots wait
   // for none (PB.drawn: a busy machine's first frame came up to 3 s late), the audit reports them.
   function undrawn() {
-    const lit = (c) => c.width && c.getContext("2d").getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 0);
+    const lit = (c) => litPixels(c) > 0;
     const out = [];
     if (Object.values(S.wireEls).some((we) => we.c && we.g.style.display !== "none" && !we.ends) && !lit(wireCanvas)) out.push("the wires drew nothing");
     for (const c of document.querySelectorAll(".diag-display:not(.off) canvas")) {
@@ -4631,20 +4649,19 @@ void main() {
     // Waits for them to have drawn, before and after, not a set time (real time: on a busy machine
     // a scope's first frame comes late); scripts/shots.py waits for PB_WAIT.
     glRestore: () => {
-      const lit = (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; };
-      const all = () => [wireCanvas, ...document.querySelectorAll(".diag-display:not(.off) canvas")].map(lit);
+      const all = () => [wireCanvas, ...document.querySelectorAll(".diag-display:not(.off) canvas")].map(litPixels);
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const until = async (ok) => { for (let t = 0; !ok() && t < 3000; t += 50) await sleep(50); };
       window.PB_WAIT = (async () => {
         await until(() => all().every((n) => n));
-        const before = all(), x = GL.context().getExtension("WEBGL_lose_context");
-        x.loseContext();
+        const before = all(), xs = [GL, WGL].map((r) => r.context().getExtension("WEBGL_lose_context"));  // (both: the scopes' and the wires')
+        xs.forEach((x) => x.loseContext());
         await sleep(100);
-        x.restoreContext();
-        await until(() => GL.gen >= 1 && all().every((n, i) => n || !before[i]));
+        xs.forEach((x) => x.restoreContext());
+        await until(() => GL.gen >= 1 && WGL.gen >= 1 && all().every((n, i) => n || !before[i]));
         const after = all();
         before.forEach((n, i) => { if (!n) S.errors.push(`before the GPU was lost, picture ${i} drew nothing`); else if (!after[i]) S.errors.push(`after the GPU came back, picture ${i} drew nothing (before: ${n} pixels lit)`); });
-        if (GL.gen < 1) S.errors.push("the GPU context never came back");
+        if (GL.gen < 1 || WGL.gen < 1) S.errors.push("a GPU context never came back");
         PB.audit();
       })();
     },

@@ -417,7 +417,10 @@ contexts never comes into it. Measured on the owner's RTX 3080 Ti: nine surfaces
 WebGL2 only (owner): no second drawing path. A lost context (driver reset) comes back empty and
 everything is made again from the page's state (the `gl-restore` shot checks it).
 
-- **The wires** (`board.js` paintWires): one canvas the size of the board inside `#world`, the
+- **The wires** (`board.js` paintWires): one canvas the size of the board inside `#world`, a
+  WebGL canvas of its own (`GL.direct`), shown as it is, not copied (Firefox's 2D canvases are drawn
+  by the CPU: the copy was the GPU's picture read back, 3 fps in a friend's LibreWolf), its pixels
+  within the browser's limit (2 048 against fingerprinting: a little soft there), the
   view undone by its own transform, so it is sharp at any zoom and a pan or zoom only redraws. It
   is painted with the view change itself (owner: zooming was choppy while it came a frame later),
   once a frame. Each piece (a wire, or a portal's stub) is a row of a float texture: its curve,
