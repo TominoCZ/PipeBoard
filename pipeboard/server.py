@@ -2195,6 +2195,8 @@ async def startup(board: Board) -> None:
     """Read the system, then load the profile chosen to load at launch, if there is one; an audio
     engine trial still running (PipeBoard was quit during it) keeps counting, or goes back."""
     board.autostart = await autostart.enabled()
+    if board.autostart and board.source.mode == "live":
+        await autostart.refresh()
     await board.refresh()
     board.first_profile()
     board.undo_around()

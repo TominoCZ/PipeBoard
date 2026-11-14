@@ -2946,7 +2946,30 @@ def main():
     asyncio.run(check_own_devices())
     asyncio.run(check_settings_revert())
     asyncio.run(check_route_around())
+    with tempfile.TemporaryDirectory() as tmp:
+        asyncio.run(check_unit_killmode(Path(tmp)))
     print(f"ok: {len(cards)} cards, {len(model['wires'])} wires; pedal, problems, workspace, server")
+
+
+async def check_unit_killmode(tmp: Path) -> None:
+    """Logout: systemd's stop must reach PipeBoard alone, or its effects end first and are logged
+    "stopped unexpectedly". New units say KillMode=mixed; an old one gets the line, keeping its
+    own ExecStart; a second launch changes nothing."""
+    import os
+    from unittest import mock
+
+    from pipeboard import autostart
+    assert "KillMode=mixed" in autostart.text()
+    with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(tmp)}), \
+            mock.patch.object(autostart, "_systemctl", mock.AsyncMock(return_value=(0, ""))) as ctl:
+        unit = autostart.path()
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Unit]\n\n[Service]\nExecStart=/old/python -m pipeboard\n")
+        await autostart.refresh()
+        assert unit.read_text() == ("[Unit]\n\n[Service]\nKillMode=mixed\n"
+                                    "ExecStart=/old/python -m pipeboard\n"), unit.read_text()
+        await autostart.refresh()
+        assert ctl.await_count == 1 and unit.read_text().count("KillMode") == 1
 
 
 if __name__ == "__main__":
