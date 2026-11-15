@@ -2277,6 +2277,42 @@ async def revalidate(_request: web.Request, response: web.StreamResponse) -> Non
     response.headers.setdefault("Cache-Control", "no-cache")
 
 
+def _op(data: str) -> str | None:
+    """A message's action, or None."""
+    with contextlib.suppress(ValueError, AttributeError):
+        return json.loads(data).get("op")
+    return None
+
+
+async def take_actions(board: Board, page: web.WebSocketResponse) -> None:
+    """The page's actions one at a time, in order, until it closes; Keep goes at once. It waited
+    behind the Try's graph read, hung on PipeWire, and the trial went back by itself (owner:
+    "keep looked very clickable"). Keep only ends the trial: safe beside anything running."""
+    async def act(data: str) -> None:
+        try:
+            await board.act(page, json.loads(data))
+        except (ValueError, TypeError, KeyError) as e:
+            log.warning("bad message from the page: %s", e)
+
+    line: asyncio.Queue = asyncio.Queue()
+    at_once: set[asyncio.Task] = set()
+
+    async def work() -> None:
+        while (data := await line.get()) is not None:
+            await act(data)
+    worker = asyncio.create_task(work())
+    async for msg in page:
+        if msg.type != WSMsgType.TEXT:
+            continue
+        if _op(msg.data) == "engine-keep":
+            at_once.add(task := asyncio.create_task(act(msg.data)))
+            task.add_done_callback(at_once.discard)
+        else:
+            line.put_nowait(msg.data)
+    line.put_nowait(None)
+    await worker
+
+
 def app(board: Board, port: int) -> web.Application:
     allowed = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
 
@@ -2288,12 +2324,8 @@ def app(board: Board, port: int) -> web.Application:
         await page.prepare(request)
         board.pages.add(page)
         await page.send_str(board.state())
-        async for msg in page:
-            if msg.type == WSMsgType.TEXT:
-                try:
-                    await board.act(page, json.loads(msg.data))
-                except (ValueError, TypeError, KeyError) as e:
-                    log.warning("bad message from the page: %s", e)
+
+        await take_actions(board, page)
         await board.forget(page)
         return page
 

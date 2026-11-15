@@ -2283,6 +2283,33 @@ def check_create_errors():
         pipewire.run = real
 
 
+async def check_keep_at_once(board, page):
+    """Keep never waits behind an action still running (owner: Keep queued behind a graph read
+    hung on PipeWire, and the trial went back by itself); the rest stay in order."""
+    stuck, done = asyncio.Event(), []
+
+    async def slow(_page, op):
+        if op["n"] == 1:
+            await stuck.wait()
+        done.append(op["n"])
+    board.ops["slow"] = slow
+    board._set(engine_trial={"values": {}, "was": {}, "until": time.time() + 60})
+    await page.send_json({"op": "slow", "n": 1})
+    await page.send_json({"op": "slow", "n": 2})
+    await page.send_json({"op": "engine-keep"})
+    for _ in range(100):
+        if board.settings["engine_trial"] is None:
+            break
+        await asyncio.sleep(0.01)
+    assert board.settings["engine_trial"] is None and not done, "Keep went at once"
+    stuck.set()
+    for _ in range(100):
+        if len(done) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert done == [1, 2], done
+
+
 async def check_server():
     """The whole app on the fixture: connect, disconnect, rename, and the Origin guard."""
     from aiohttp.test_utils import TestClient, TestServer, unused_port
@@ -2362,6 +2389,7 @@ async def check_server():
         await check_compressor(board, page, next_state)
         await check_gate(board, page, next_state)
         await check_denoise(board, page, next_state)
+        await check_keep_at_once(board, page)
         await page.close()
         await client.close()
 
