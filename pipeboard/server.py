@@ -1897,6 +1897,19 @@ class Board:
         return None  # (the engine is read again after every action)
 
     async def engine_apply(self, values: dict, was: dict) -> str | None:
+        """engine_steps, and if one fails (PipeWire not answering: a pw-dump given up) the bar
+        ends: it, and Keep with it, waited for a step that never came (owner: stuck at
+        "Reopening it", no Keep)."""
+        try:
+            return await self.engine_steps(values, was)
+        except Exception as e:  # noqa: BLE001 - any failure: told, not a bar forever
+            log.exception("audio engine: could not finish")
+            self.closing, self.starting = False, None
+            await self.broadcast(self.state())
+            self.changed()
+            return f"Not all of it could be set: {e}"
+
+    async def engine_steps(self, values: dict, was: dict) -> str | None:
         """Apply engine values (engine.apply). When that restarts WirePlumber, the board's wires
         are made again: its start sets up every audio node's ports anew, which drops every link
         on them, not only the interface's (owner: Spotify reached Music Mix and went no further;

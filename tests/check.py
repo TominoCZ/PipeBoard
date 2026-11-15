@@ -368,6 +368,21 @@ async def check_engine_effects(tmp):
         calls.clear()
         await board.engine_apply({**was, "prio": 90}, was)
         assert calls == ["apply"], calls
+        # PipeWire not answering (owner: 30 hung pw-dumps, the bar at "Reopening it", no Keep):
+        # the tool is given up and killed, and a failed step ends the bar.
+        t = time.monotonic()
+        code, _, err = await pipewire.run("sleep", "30", wait=0.2)
+        assert code == -1 and "no answer" in err and time.monotonic() - t < 2, (code, err)
+
+        async def hangs():
+            raise RuntimeError("pw-dump failed: pw-dump got no answer from PipeWire within 5 s")
+        real_snap, board.source.snapshot = board.source.snapshot, hangs
+        try:
+            said = await board.engine_apply({**was, "block": 256, "margin": 256}, was)
+        finally:
+            board.source.snapshot = real_snap
+        assert said and "no answer" in said, said
+        assert board.starting is None and not board.closing, "the bar ends; Keep is free"
     finally:
         engine.apply, engine.sound_back = real, real_sound
 
@@ -1927,7 +1942,7 @@ def check_delete_races():
     said = {"err": ""}
     async def fake_run(*cmd):
         return 0, "", said["err"]
-    real, pipewire._run = pipewire._run, fake_run
+    real, pipewire.run = pipewire.run, fake_run
     try:
         live = pipewire.Live.__new__(pipewire.Live)
         said["err"] = "remote 0: error id:435 seq:868 res:-2 (No such file or directory): no global 358"
@@ -1935,7 +1950,7 @@ def check_delete_races():
         said["err"] = "remote 0: error id:3 res:-1 (Operation not permitted): permission denied"
         assert "permission" in aio.run(live.destroy([427])), "a real error still is"
     finally:
-        pipewire._run = real
+        pipewire.run = real
     board = server.Board.__new__(server.Board)
     board.gone = {"pb:dabc": __import__("time").monotonic() + 5}
     node = lambda nid, pid: {"id": nid, "type": "PipeWire:Interface:Node",  # noqa: E731
@@ -2252,20 +2267,20 @@ def check_create_errors():
     from pipeboard import pipewire
 
     dev = {"type": "gain", "name": "G", "node": "g", "id": "d1", "channels": 2}
-    real = pipewire._run
+    real = pipewire.run
     try:
         async def churn(*_cmd):
             return 0, "", ("remote 0: error id:88 seq:174 res:-116 (Stale file handle): no global 87 any more\n"
                            "remote 0: error id:0 seq:276 res:-2 (No such file or directory): unknown resource 88")
-        pipewire._run = churn
+        pipewire.run = churn
         assert asyncio.run(pipewire.Live().create(dev)) is None
 
         async def bad(*_cmd):
             return 0, "", 'Error: "create-node" failed: Invalid argument'
-        pipewire._run = bad
+        pipewire.run = bad
         assert "Invalid argument" in asyncio.run(pipewire.Live().create(dev))
     finally:
-        pipewire._run = real
+        pipewire.run = real
 
 
 async def check_server():

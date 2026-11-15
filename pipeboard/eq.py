@@ -27,7 +27,7 @@ from array import array
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from pipeboard import devices
+from pipeboard import devices, pipewire
 from pipeboard.scope import _die_with_parent
 
 log = logging.getLogger(__name__)
@@ -605,10 +605,7 @@ class Spectrum:
         try:
             for pid, ch in self.ports:  # two into one input: PipeWire sums them
                 for _ in range(20):
-                    link = await asyncio.create_subprocess_exec(
-                        "pw-link", str(pid), f"{self.name}:input_{ch}",
-                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                    if await link.wait() == 0:
+                    if (await pipewire.run("pw-link", str(pid), f"{self.name}:input_{ch}"))[0] == 0:
                         break
                     await asyncio.sleep(0.05)
             while chunk := await self.proc.stdout.read(65536):

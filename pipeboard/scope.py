@@ -27,6 +27,8 @@ import struct
 from array import array
 from collections import deque
 
+from pipeboard.pipewire import run
+
 log = logging.getLogger(__name__)
 # graph.py keeps every pipeboard_scope* node off the board. Each capture gets a name of its own
 # (pid and a counter): a restart must never link to the previous capture while it is going away.
@@ -241,9 +243,7 @@ class Scope:
         return [self.name, f"{self.name}_peaks"]
 
     async def _pw_link(self, *args: str) -> bool:
-        proc = await asyncio.create_subprocess_exec(
-            "pw-link", *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        return await proc.wait() == 0
+        return (await run("pw-link", *args))[0] == 0
 
     @property
     def alive(self) -> bool:

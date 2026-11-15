@@ -15,6 +15,7 @@ import shutil
 import time
 from array import array
 
+from pipeboard.pipewire import run
 from pipeboard.scope import _die_with_parent
 
 log = logging.getLogger(__name__)
@@ -80,10 +81,7 @@ class Taps:
 
     async def _link(self, port: int, channel: int) -> None:
         for _ in range(20):  # (its ports appear a moment after it starts)
-            link = await asyncio.create_subprocess_exec(
-                "pw-link", str(port), f"{self.name}:input_AUX{channel}",
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            if await link.wait() == 0:
+            if (await run("pw-link", str(port), f"{self.name}:input_AUX{channel}"))[0] == 0:
                 return
             await asyncio.sleep(0.05)
 

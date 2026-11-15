@@ -35,10 +35,27 @@ def matters(text: str, kinds: dict[str, str]) -> bool:
     return hit
 
 
-async def _run(*cmd: str) -> tuple[int, str, str]:
+ANSWER_S = 5.0  # a PipeWire tool answers in ~0.03 s; one that has not by then never will
+
+
+async def run(*cmd: str, wait: float = ANSWER_S) -> tuple[int, str, str]:
+    """Run a tool to its end: its exit code, output and complaint. One that does not end within
+    `wait` (or whose caller gives up) is killed, its code -1. PipeWire's tools wait for every
+    client's answer, so one client that stopped answering made every pw-dump and pw-link hang
+    for good (owner: a tried setting stuck at "Reopening it", no Keep, no sound, no Quit; 30
+    hung pw-dumps under PipeBoard)."""
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    out, err = await proc.communicate()
+    try:
+        async with asyncio.timeout(wait):
+            out, err = await proc.communicate()
+    except TimeoutError:
+        log.warning("%s: no answer within %g s; given up", " ".join(cmd[:2]), wait)
+        return -1, "", f"{cmd[0]} got no answer from PipeWire within {wait:g} s"
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
     return proc.returncode, out.decode(), err.decode().strip()
 
 
@@ -48,7 +65,7 @@ class Live:
     mode = "live"
 
     async def snapshot(self) -> list[dict]:
-        code, out, err = await _run("pw-dump")
+        code, out, err = await run("pw-dump")
         if code:
             raise RuntimeError(f"pw-dump failed: {err}")
         return json.loads(out)
@@ -82,17 +99,17 @@ class Live:
 
     async def link(self, out_port: int, in_port: int) -> str | None:
         """Make a link; return PipeWire's complaint, or None."""
-        code, _, err = await _run("pw-link", str(out_port), str(in_port))
+        code, _, err = await run("pw-link", str(out_port), str(in_port))
         return (err or "pw-link failed") if code else None
 
     async def unlink(self, link_id: int) -> str | None:
-        code, _, err = await _run("pw-link", "-d", str(link_id))
+        code, _, err = await run("pw-link", "-d", str(link_id))
         return (err or "pw-link -d failed") if code else None
 
 
     async def create(self, dev: dict) -> str | None:
         """Make one of PipeBoard's virtual devices: a lingering node inside PipeWire."""
-        code, _, err = await _run("pw-cli", "create-node", "adapter", devices.props(dev))
+        code, _, err = await run("pw-cli", "create-node", "adapter", devices.props(dev))
         # pw-cli also reports objects that vanished while it ran ("Stale file handle", "no global",
         # "unknown resource": a busy graph at login): not this node's failure. Treating them as
         # one stopped the profile load at login, though every device had been made.
@@ -107,7 +124,7 @@ class Live:
     async def destroy(self, node_ids: list[int]) -> str | None:
         """Remove nodes. Only ever called for PipeBoard's own devices (server.py checks)."""
         for nid in node_ids:
-            code, _, err = await _run("pw-cli", "destroy", str(nid))
+            code, _, err = await run("pw-cli", "destroy", str(nid))
             # pw-cli can report failure on stderr alone; but it also prints "no global N" when an
             # object it was looking at went away meanwhile (another one, or this one already
             # gone): taken as a failure, the device stayed on the board while its node was gone,
@@ -122,7 +139,7 @@ class Live:
 async def stop_service(unit: str) -> str | None:
     """Stop and disable a systemd user service (its processes end with it); a complaint or None."""
     for verb in ("stop", "disable"):
-        code, out, err = await _run("systemctl", "--user", verb, unit)
+        code, out, err = await run("systemctl", "--user", verb, unit, wait=30)
         if code:
             return f"systemctl {verb} {unit}: {err or out}"
     return None

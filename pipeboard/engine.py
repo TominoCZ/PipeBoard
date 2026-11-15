@@ -22,7 +22,7 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
-from pipeboard import gpu, graph, headroom
+from pipeboard import gpu, graph, headroom, pipewire
 
 BLOCKS = (64, 128, 256, 512, 1024, 2048)
 # An interface with implicit feedback (its playback follows its capture's packets, the UR44C)
@@ -372,12 +372,11 @@ async def _run(*cmd: str) -> str | None:
     """Run a tool; its complaint, or None. pw-cli exits 0 even when the command failed, and only
     prints the error (a Suspend without its argument passed every test that way), so its output
     is read too (but not its usual noise about object types it does not know)."""
-    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.STDOUT)
-    out = (await proc.communicate())[0].decode()
+    code, out, err = await pipewire.run(*cmd, wait=30)  # (systemctl restart waits for the start)
+    out = f"{err}\n{out}".strip()
     said = [line for line in out.splitlines() if re.match(r'(Error: "|remote \d+: error)', line)
             and "unsupported type" not in line]
-    if proc.returncode or said:
+    if code or said:
         return f"{cmd[0]}: {(said or [out.strip() or 'failed'])[0]}"
     return None
 
@@ -690,16 +689,17 @@ def pw_top_errors(out: str) -> dict[str, int]:
 
 async def _back(names: set[str], wait: float = 15.0) -> bool:
     """Wait for the interface's nodes to be in the graph again."""
-    for _ in range(int(wait * 4)):
-        await asyncio.sleep(0.25)
-        proc = await asyncio.create_subprocess_exec(
-            "pw-dump", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        try:
-            dump = json.loads((await proc.communicate())[0])
-        except ValueError:
-            continue
-        if names <= {((o.get("info") or {}).get("props") or {}).get("node.name") for o in dump}:
-            return True
+    with contextlib.suppress(TimeoutError):
+        async with asyncio.timeout(wait):  # (a pw-dump that hangs is given up with it)
+            while True:
+                await asyncio.sleep(0.25)
+                try:
+                    dump = json.loads((await pipewire.run("pw-dump"))[1])
+                except ValueError:
+                    continue
+                if names <= {((o.get("info") or {}).get("props") or {}).get("node.name")
+                             for o in dump}:
+                    return True
     return False
 
 
