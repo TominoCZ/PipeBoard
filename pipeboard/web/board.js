@@ -2002,12 +2002,21 @@ void main() {
     const z = Math.min(maxZ, Math.max(0.35, Math.min((W - 2 * pad) / (b.x1 - b.x0), (H - top - pad) / (b.y1 - b.y0))));
     const to = { z, x: (W - (b.x1 - b.x0) * z) / 2 - b.x0 * z, y: top + (H - top - pad - (b.y1 - b.y0) * z) / 2 - b.y0 * z };
     if (!animate || S.mode === "preview") { S.view = to; applyView(); return; }
+    glide(to);
+  }
+  // The cards one scaled GPU layer while the camera moves, as in zoomAt (owner: Fit and Tidy "a
+  // bit choppy": every step redrew every card at the new zoom, 110 fps at best, 30 ms frames);
+  // drawn sharp at the end.
+  function glide(to) {
     const from = { ...S.view }, t0 = performance.now();
+    board.classList.add("zooming");
+    clearTimeout(S.zoomTimer);
     const step = (t) => {
       const k = Math.min(1, (t - t0) / 260), e = 1 - (1 - k) ** 3;
       S.view = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, z: from.z + (to.z - from.z) * e };
       applyView(k === 1);
       if (k < 1) requestAnimationFrame(step);
+      else S.zoomTimer = setTimeout(() => board.classList.remove("zooming"), 60);
     };
     requestAnimationFrame(step);
   }
@@ -4774,6 +4783,7 @@ void main() {
     },
     portals: (ids) => setPortals(Object.fromEntries(ids.map((id) => [id, "hand"]))),
     zoom: (z) => { S.moved = true; zoomAt(innerWidth / 2, innerHeight / 2, z); },
+    glide: (z) => { S.moved = true; glide({ x: S.view.x + 200 * (z - S.view.z), y: S.view.y, z }); },  // (Fit's camera move; perf)
     fit: (keys, dy = 0, dx = 0) => { S.moved = true; fit(false, keys || undefined); S.view.y += dy; S.view.x += dx; applyView(false); },  // dy: room for a panel
   };
 

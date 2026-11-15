@@ -46,6 +46,9 @@ SCENES = {
     # Zooming in and out all the time over the live board (owner: zooming felt choppy).
     "zoom-live": ("machine", shots.BIG, shots.studio, "PB.debug.tidy() || PB.debug.liveLoop(99) || "
                   "(function f(t) { PB.debug.zoom(1.1 + 0.6 * Math.sin(t / 500)); requestAnimationFrame(f); })(0)"),
+    # Fit and Tidy's camera move, one after another (owner: "a bit choppy").
+    "fit-glide": ("machine", shots.BIG, shots.studio, "PB.debug.tidy() || PB.debug.liveLoop(99) || "
+                  "(() => { let i = 0; setInterval(() => PB.debug.glide(++i % 2 ? 0.7 : 1.1), 300); })()"),
     "scopes": ("machine", shots.BIG, shots.diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, true)"),
     "scope-panel": ("machine", shots.BIG, shots.diagnosed, "PB.debug.tidy() || PB.debug.fakeDiag(1, true) || PB.debug.openDiag('pb:dster01')"),
     "eq-panel": ("machine", shots.BIG, shots.equalized, f"PB.debug.eqOpen('pb:deq01', 2) || {EQ_FEED}"),
